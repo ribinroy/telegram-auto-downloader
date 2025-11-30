@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import {
   Square,
   Trash2,
@@ -14,6 +15,7 @@ import {
 import ReactTimeAgo from 'react-time-ago';
 import type { Download } from '../types';
 import { formatBytes, formatTime, formatSpeed } from '../utils/format';
+import { ConfirmDialog } from './ConfirmDialog';
 
 interface DownloadItemProps {
   download: Download;
@@ -162,12 +164,19 @@ function getStatusColor(status: Download['status']) {
 }
 
 export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadItemProps) {
+  const [confirmAction, setConfirmAction] = useState<'stop' | 'delete' | null>(null);
   const progressPercent = download.progress || 0;
 
-  const handleStop = () => {
-    if (confirm('Are you sure you want to stop this download?')) {
-      if (download.message_id) onStop(download.message_id);
-    }
+  const isTelegram = download.downloaded_from === 'telegram';
+
+  const handleStopConfirm = () => {
+    if (download.message_id) onStop(download.message_id);
+    setConfirmAction(null);
+  };
+
+  const handleDeleteConfirm = () => {
+    if (download.message_id) onDelete(download.message_id);
+    setConfirmAction(null);
   };
 
   return (
@@ -233,7 +242,7 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
             {/* Action buttons */}
             <div className="flex gap-2">
               {/* For non-telegram: show play button when stopped/failed to resume */}
-              {download.downloaded_from !== 'telegram' && (download.status === 'failed' || download.status === 'stopped') && (
+              {!isTelegram && (download.status === 'failed' || download.status === 'stopped') && (
                 <button
                   onClick={() => onRetry(download.id)}
                   className="p-2 bg-green-500/20 hover:bg-green-500/30 text-green-400 rounded-lg transition-colors"
@@ -243,7 +252,7 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
                 </button>
               )}
               {/* For telegram: show retry button when failed */}
-              {download.downloaded_from === 'telegram' && download.status === 'failed' && (
+              {isTelegram && download.status === 'failed' && (
                 <button
                   onClick={() => onRetry(download.id)}
                   className="p-2 bg-green-500/20 hover:bg-green-500/30 text-green-400 rounded-lg transition-colors"
@@ -253,9 +262,9 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
                 </button>
               )}
               {/* For non-telegram: show pause button when downloading */}
-              {download.downloaded_from !== 'telegram' && download.status === 'downloading' && (
+              {!isTelegram && download.status === 'downloading' && (
                 <button
-                  onClick={handleStop}
+                  onClick={() => setConfirmAction('stop')}
                   className="p-2 bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-400 rounded-lg transition-colors"
                   title="Pause"
                 >
@@ -263,9 +272,9 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
                 </button>
               )}
               {/* For telegram: show stop button when downloading */}
-              {download.downloaded_from === 'telegram' && download.status === 'downloading' && (
+              {isTelegram && download.status === 'downloading' && (
                 <button
-                  onClick={handleStop}
+                  onClick={() => setConfirmAction('stop')}
                   className="p-2 bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-400 rounded-lg transition-colors"
                   title="Stop"
                 >
@@ -273,11 +282,7 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
                 </button>
               )}
               <button
-                onClick={() => {
-                  if (confirm('Are you sure you want to delete this download?')) {
-                    if (download.message_id) onDelete(download.message_id);
-                  }
-                }}
+                onClick={() => setConfirmAction('delete')}
                 className="p-2 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg transition-colors"
                 title="Delete"
               >
@@ -304,6 +309,31 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
           </div>
         </div>
       </div>
+
+      {/* Stop/Pause Confirmation Dialog */}
+      <ConfirmDialog
+        isOpen={confirmAction === 'stop'}
+        title={isTelegram ? 'Stop Download?' : 'Pause Download?'}
+        message={isTelegram
+          ? 'This will stop the download. You can retry later.'
+          : 'This will pause the download. You can resume later.'
+        }
+        confirmText={isTelegram ? 'Stop' : 'Pause'}
+        variant="warning"
+        onConfirm={handleStopConfirm}
+        onCancel={() => setConfirmAction(null)}
+      />
+
+      {/* Delete Confirmation Dialog */}
+      <ConfirmDialog
+        isOpen={confirmAction === 'delete'}
+        title="Delete Download?"
+        message="This will remove the download from the list. This action cannot be undone."
+        confirmText="Delete"
+        variant="danger"
+        onConfirm={handleDeleteConfirm}
+        onCancel={() => setConfirmAction(null)}
+      />
     </div>
   );
 }
