@@ -18,32 +18,28 @@ def setup_logging():
     )
 
 
-def validate_credentials_from_db():
-    """Validate credentials from database settings"""
-    from backend.database import get_db
-    db = get_db()
-    settings = db.get_all_settings()
+def validate_credentials():
+    """Validate credentials from .env file"""
+    from backend.config import API_ID, API_HASH, CHAT_ID
 
     errors = []
 
-    api_id = settings.get('api_id')
-    api_hash = settings.get('api_hash')
-    chat_id = settings.get('chat_id')
+    # Check API_ID from .env
+    if not API_ID or API_ID == 0:
+        errors.append("API_ID is not set in .env file")
 
-    if not api_id or api_id == '0':
-        errors.append("API_ID is not set in database settings")
+    # Check API_HASH from .env
+    if not API_HASH or API_HASH == 'your_api_hash_here':
+        errors.append("API_HASH is not set in .env file")
 
-    if not api_hash or api_hash == 'your_api_hash_here':
-        errors.append("API_HASH is not set in database settings")
-
-    if not chat_id or chat_id == '0':
-        errors.append("CHAT_ID is not set in database settings")
+    # Check CHAT_ID from .env
+    if not CHAT_ID or CHAT_ID == 0:
+        errors.append("CHAT_ID is not set in .env file")
 
     if errors:
-        print("❌ Configuration Error (from database):")
+        print("❌ Configuration Error:")
         for error in errors:
             print(f"   - {error}")
-        print("\n📝 Please configure settings via the web interface at http://localhost:4444")
         return False
 
     return True
@@ -58,8 +54,8 @@ def main():
     print("📊 Initializing database...")
     init_database(DATABASE_URL)
 
-    # Validate credentials from database
-    if not validate_credentials_from_db():
+    # Validate credentials
+    if not validate_credentials():
         return
 
     # Shared download state

@@ -1,11 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { Search, Download, Wifi, WifiOff, Loader2, Settings, HardDrive, Clock, Zap } from 'lucide-react';
+import { Search, Download, Wifi, WifiOff, Loader2, HardDrive, Clock, Zap } from 'lucide-react';
 import { formatBytes, formatSpeed } from './utils/format';
 import { fetchDownloads, fetchStats, retryDownload, stopDownload, deleteDownload, type SortBy, type SortOrder } from './api';
 import { connectSocket, disconnectSocket } from './api/socket';
 import { DownloadItem } from './components/DownloadItem';
-import { SettingsDialog } from './components/SettingsDialog';
 import type { Download as DownloadType, Stats, DownloadsResponse } from './types';
 
 type TabType = 'active' | 'all';
@@ -27,7 +26,6 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<TabType>('active');
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [sortBy, setSortBy] = useState<SortBy>('created_at');
   const [sortOrder, setSortOrder] = useState<SortOrder>('asc');
 
@@ -172,13 +170,6 @@ function App() {
               {connected ? <Wifi className="w-4 h-4" /> : <WifiOff className="w-4 h-4" />}
               <span className="text-sm">{connected ? 'Live' : 'Offline'}</span>
             </div>
-            <button
-              onClick={() => setSettingsOpen(true)}
-              className="p-2 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-lg transition-colors"
-              title="Settings"
-            >
-              <Settings className="w-5 h-5" />
-            </button>
           </div>
         </div>
 
@@ -309,7 +300,6 @@ function App() {
           </div>
         )}
 
-        <SettingsDialog isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
       </div>
     </div>
   );
