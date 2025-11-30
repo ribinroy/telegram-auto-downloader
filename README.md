@@ -21,18 +21,24 @@ A Python application that automatically downloads files from a Telegram chat and
 ## 🧩 Project Structure
 
 ```
-telegram_downloader/
-├── src/
-│   ├── config/             # Configuration and environment management
-│   ├── database/           # PostgreSQL database models and manager
-│   ├── telegram_handler/   # Telegram client and downloader logic
-│   ├── web_app/            # Flask web application
-│   └── utils/              # Helper utilities
-├── downloads/              # Auto-created download directory
-├── logs/                   # Log files
-├── main.py                 # Main entry point
-├── requirements.txt        # Dependencies
-└── README.md               # This file
+telegram-auto-downloader/
+├── backend/                    # Python backend
+│   ├── config/                 # Configuration and environment management
+│   ├── database/               # PostgreSQL database models and manager
+│   ├── telegram_handler/       # Telegram client and downloader logic
+│   ├── web_app/                # Flask web application
+│   ├── utils/                  # Helper utilities
+│   └── main.py                 # Backend entry point
+├── frontend/                   # React frontend (Vite + TypeScript)
+│   ├── src/                    # React source code
+│   ├── public/                 # Static assets
+│   ├── package.json            # Frontend dependencies
+│   └── vite.config.ts          # Vite configuration
+├── main.py                     # Root entry point
+├── .env                        # Environment configuration
+├── .env.example                # Example environment file
+├── requirements.txt            # Python dependencies
+└── README.md                   # This file
 ```
 
 ---
@@ -250,10 +256,14 @@ Description=Telegram Downloader Service
 After=network.target
 
 [Service]
+Type=simple
 User=hs
-WorkingDirectory=/home/hs/telegram_downloader
-ExecStart=/home/hs/telegram_downloader/venv/bin/python main.py
+Group=hs
+WorkingDirectory=/home/hs/telegram-auto-downloader
+Environment="PATH=/home/hs/telegram-auto-downloader/venv/bin"
+ExecStart=/home/hs/telegram-auto-downloader/venv/bin/python /home/hs/telegram-auto-downloader/main.py
 Restart=always
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
@@ -317,19 +327,40 @@ tail -f logs/telegram_downloader.log
 
 ## 🧑‍🔬 Development
 
-### Modules
+### Backend Modules
 
-- `src/telegram_handler/`: Telethon client, reactions, retries
-- `src/web_app/`: Flask API, HTML template
-- `src/database/`: PostgreSQL models and database manager
-- `src/utils/`: Size/time formatters
-- `src/config/`: Environment + constants
+- `backend/telegram_handler/`: Telethon client, reactions, retries
+- `backend/web_app/`: Flask API, HTML template
+- `backend/database/`: PostgreSQL models and database manager
+- `backend/utils/`: Size/time formatters
+- `backend/config/`: Environment + constants
+
+### Running Both Backend and Frontend
+
+From the project root, you can run both services with a single command:
+
+```bash
+npm run install:all   # Install all dependencies (root + frontend)
+npm run dev           # Start both backend and frontend concurrently
+```
+
+### Frontend Only
+
+The frontend is a React application built with Vite and TypeScript.
+
+```bash
+cd frontend
+npm install        # Install dependencies
+npm run dev        # Start development server (http://localhost:5173)
+npm run build      # Build for production
+npm run preview    # Preview production build
+```
 
 ### To Add Features
 
-1. Add new file handler in `telegram_handler/`
-2. Update dashboard HTML for new buttons
-3. Add REST endpoint in `web_app/`
+1. **Backend**: Add new file handler in `backend/telegram_handler/`
+2. **Backend**: Add REST endpoint in `backend/web_app/`
+3. **Frontend**: Add React components in `frontend/src/`
 
 ---
 
@@ -362,6 +393,13 @@ Licensed under the [MIT License](LICENSE).
 ---
 
 ## 🧾 Changelog
+
+### **v2.0.0**
+
+- Refactored project structure with separate `backend/` and `frontend/` folders
+- Added React frontend with Vite and TypeScript
+- Configuration files remain in project root
+- Backend Python code moved to `backend/` directory
 
 ### **v1.1.0**
 
