@@ -39,17 +39,30 @@ function App() {
 
   // Handle progress updates - only update the specific download
   const handleProgress = useCallback((data: ProgressUpdate) => {
-    setDownloads(prev => prev.map(d =>
-      d.message_id === data.message_id
-        ? { ...d, ...data }
-        : d
-    ));
-    // Update stats for speed
-    setStats(prev => ({
-      ...prev,
-      total_speed: data.speed,
-      pending_bytes: prev.total_size - prev.total_downloaded
-    }));
+    setDownloads(prev => {
+      const updated = prev.map(d =>
+        d.message_id === data.message_id
+          ? { ...d, ...data }
+          : d
+      );
+      // Calculate total speed from all downloading items
+      const totalSpeed = updated
+        .filter(d => d.status === 'downloading')
+        .reduce((sum, d) => sum + (d.speed || 0), 0);
+
+      // Calculate total downloaded and pending bytes
+      const totalDownloaded = updated.reduce((sum, d) => sum + (d.downloaded_bytes || 0), 0);
+      const totalSize = updated.reduce((sum, d) => sum + (d.total_bytes || 0), 0);
+
+      setStats(prev => ({
+        ...prev,
+        total_speed: totalSpeed,
+        total_downloaded: totalDownloaded,
+        pending_bytes: totalSize - totalDownloaded
+      }));
+
+      return updated;
+    });
   }, []);
 
   // Handle status changes

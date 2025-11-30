@@ -193,13 +193,14 @@ class WebApp:
             message_id = data.get("message_id")
             db = get_db()
 
-            # Cancel task if running
+            # Cancel task if running and mark as stopped
             task = self.download_tasks.get(message_id)
             if task and not task.done():
                 task.cancel()
+                db.update_download_by_message_id(message_id, status='stopped', speed=0)
             self.download_tasks.pop(message_id, None)
 
-            # Delete from database
+            # Soft delete from database
             db.delete_download_by_message_id(message_id)
             self.emit_deleted(message_id)
             return jsonify({"status": "deleted"})
