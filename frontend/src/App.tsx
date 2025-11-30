@@ -35,14 +35,19 @@ function App() {
   const handleUpdate = useCallback((data: DownloadsResponse) => {
     // Filter by search if needed
     const query = search.toLowerCase();
-    const filtered = query
+    let filtered = query
       ? data.downloads.filter(d => d.file.toLowerCase().includes(query))
       : data.downloads;
+
+    // Filter by active tab
+    if (activeTab === 'active') {
+      filtered = filtered.filter(d => d.status !== 'done');
+    }
 
     setDownloads(filtered);
     setStats(data.stats);
     setError(null);
-  }, [search]);
+  }, [search, activeTab]);
 
   // Fetch downloads via REST API
   const loadDownloads = useCallback(async () => {
@@ -112,6 +117,12 @@ function App() {
 
   // Virtual scroll setup
   const parentRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  // Focus search on mount
+  useEffect(() => {
+    searchRef.current?.focus();
+  }, []);
   const rowVirtualizer = useVirtualizer({
     count: filteredDownloads.length,
     getScrollElement: () => parentRef.current,
@@ -201,6 +212,7 @@ function App() {
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
             <input
+              ref={searchRef}
               type="text"
               placeholder="Search..."
               value={search}

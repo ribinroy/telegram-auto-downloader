@@ -1,8 +1,10 @@
 """
 Flask REST API with WebSocket support for Telegram Downloader
 """
+import os
 from datetime import datetime
-from flask import Flask, jsonify, request
+from pathlib import Path
+from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 from backend.config import WEB_PORT, WEB_HOST
@@ -10,6 +12,9 @@ from backend.database import get_db
 
 # Global socketio instance for broadcasting from other modules
 socketio = None
+
+# Frontend dist directory
+FRONTEND_DIST = Path(__file__).parent.parent.parent / "frontend" / "dist"
 
 
 def get_socketio():
@@ -21,7 +26,7 @@ class WebApp:
     def __init__(self, download_tasks):
         global socketio
         self.download_tasks = download_tasks
-        self.app = Flask(__name__)
+        self.app = Flask(__name__, static_folder=str(FRONTEND_DIST), static_url_path='')
         CORS(self.app, resources={r"/*": {"origins": "*"}})
         socketio = SocketIO(self.app, cors_allowed_origins="*", async_mode='threading')
         self.socketio = socketio
@@ -213,6 +218,16 @@ class WebApp:
 
             db.set_multiple_settings(settings_to_save)
             return jsonify({"status": "ok"})
+
+        # Serve frontend
+        @self.app.route('/')
+        def serve_index():
+            return send_from_directory(self.app.static_folder, 'index.html')
+
+        @self.app.errorhandler(404)
+        def not_found(e):
+            # For SPA routing, serve index.html for non-API routes
+            return send_from_directory(self.app.static_folder, 'index.html')
 
     def run(self):
         """Run the Flask application with WebSocket support"""

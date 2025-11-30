@@ -1,7 +1,7 @@
 import { io, Socket } from 'socket.io-client';
 import type { DownloadsResponse } from '../types';
 
-const API_BASE = 'http://192.168.0.135:4447';
+const API_BASE = window.location.origin;
 
 let socket: Socket | null = null;
 

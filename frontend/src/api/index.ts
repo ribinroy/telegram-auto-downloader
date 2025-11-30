@@ -1,6 +1,6 @@
 import type { DownloadsResponse, Stats } from '../types';
 
-const API_BASE = 'http://192.168.0.135:4447';
+const API_BASE = '';
 
 export type SortBy = 'created_at' | 'file' | 'status' | 'progress';
 export type SortOrder = 'asc' | 'desc';
