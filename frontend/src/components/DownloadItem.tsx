@@ -68,16 +68,10 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
         </div>
 
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1">
+          <div className="mb-1">
             <h3 className="text-white font-medium truncate" title={download.file}>
               {download.file}
             </h3>
-            <div className="flex items-center gap-1">
-              {getStatusIcon(download.status)}
-              <span className={`text-sm capitalize ${getStatusColor(download.status)}`}>
-                {download.status}
-              </span>
-            </div>
           </div>
 
           {download.status === 'downloading' && (
@@ -113,32 +107,43 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
           </div>
         </div>
 
-        <div className="flex gap-2">
-          {(download.status === 'failed' || download.status === 'stopped') && (
+        <div className="flex items-center gap-3">
+          {/* Status indicator */}
+          <div className="flex items-center gap-1.5 px-2 py-1 bg-slate-700/30 rounded-lg">
+            {getStatusIcon(download.status)}
+            <span className={`text-sm capitalize ${getStatusColor(download.status)}`}>
+              {download.status}
+            </span>
+          </div>
+
+          {/* Action buttons */}
+          <div className="flex gap-2">
+            {(download.status === 'failed' || download.status === 'stopped') && (
+              <button
+                onClick={() => onRetry(download.id)}
+                className="p-2 bg-green-500/20 hover:bg-green-500/30 text-green-400 rounded-lg transition-colors"
+                title="Retry"
+              >
+                <RefreshCw className="w-4 h-4" />
+              </button>
+            )}
+            {download.status === 'downloading' && (
+              <button
+                onClick={() => onStop(download.file)}
+                className="p-2 bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-400 rounded-lg transition-colors"
+                title="Stop"
+              >
+                <Square className="w-4 h-4" />
+              </button>
+            )}
             <button
-              onClick={() => onRetry(download.id)}
-              className="p-2 bg-green-500/20 hover:bg-green-500/30 text-green-400 rounded-lg transition-colors"
-              title="Retry"
+              onClick={() => onDelete(download.file)}
+              className="p-2 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg transition-colors"
+              title="Delete"
             >
-              <RefreshCw className="w-4 h-4" />
+              <Trash2 className="w-4 h-4" />
             </button>
-          )}
-          {download.status === 'downloading' && (
-            <button
-              onClick={() => onStop(download.file)}
-              className="p-2 bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-400 rounded-lg transition-colors"
-              title="Stop"
-            >
-              <Square className="w-4 h-4" />
-            </button>
-          )}
-          <button
-            onClick={() => onDelete(download.file)}
-            className="p-2 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg transition-colors"
-            title="Delete"
-          >
-            <Trash2 className="w-4 h-4" />
-          </button>
+          </div>
         </div>
       </div>
     </div>

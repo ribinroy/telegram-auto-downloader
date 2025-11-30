@@ -8,13 +8,48 @@ from telethon import TelegramClient, events
 from backend.config import API_ID, API_HASH, CHAT_ID, DOWNLOAD_DIR, MAX_RETRIES, SESSION_FILE
 from backend.database import get_db
 from backend.utils import human_readable_size, get_media_folder
+from backend.web_app import get_socketio
 
 
 class TelegramDownloader:
     def __init__(self, download_tasks):
         self.download_tasks = download_tasks
         self.client = TelegramClient(str(SESSION_FILE), API_ID, API_HASH)
+        self.last_broadcast = 0
         self.setup_event_handlers()
+
+    def broadcast_update(self):
+        """Broadcast update via WebSocket (throttled)"""
+        now = datetime.now().timestamp()
+        # Throttle broadcasts to once per second
+        if now - self.last_broadcast >= 1:
+            self.last_broadcast = now
+            socketio = get_socketio()
+            if socketio:
+                from backend.database import get_db
+                db = get_db()
+                all_downloads = db.get_all_downloads()
+                sorted_list = sorted(all_downloads, key=lambda x: 0 if x["status"] == "downloading" else 1)
+
+                total_downloaded = sum(d.get("downloaded_bytes", 0) or 0 for d in sorted_list)
+                total_size = sum(d.get("total_bytes", 0) or 0 for d in sorted_list)
+                pending_bytes = total_size - total_downloaded
+                total_speed = sum(d.get("speed", 0) or 0 for d in sorted_list)
+                downloaded_count = sum(1 for d in sorted_list if d.get("status") == "done")
+                total_count = len(sorted_list)
+
+                data = {
+                    "downloads": sorted_list,
+                    "stats": {
+                        "total_downloaded": total_downloaded,
+                        "total_size": total_size,
+                        "pending_bytes": pending_bytes,
+                        "total_speed": total_speed,
+                        "downloaded_count": downloaded_count,
+                        "total_count": total_count
+                    }
+                }
+                socketio.emit('downloads_update', data)
 
     def setup_event_handlers(self):
         """Setup Telegram event handlers"""
@@ -89,6 +124,9 @@ class TelegramDownloader:
                         pending_time=pending_time
                     )
 
+                    # Broadcast update via WebSocket
+                    self.broadcast_update()
+
                     # Throttle edits: 1 per 20 seconds
                     timestamp = now.timestamp()
                     if entry.get("_status_msg_id") and timestamp - last_update >= 20:
@@ -105,12 +143,14 @@ class TelegramDownloader:
                     speed=0,
                     pending_time=0
                 )
+                self.broadcast_update()
                 if entry.get("_status_msg_id"):
                     await self.edit_status_message(event, entry, "Downloaded")
                 return
 
             except asyncio.CancelledError:
                 db.update_download(filename, status='stopped', speed=0)
+                self.broadcast_update()
                 if entry.get("_status_msg_id"):
                     await self.edit_status_message(event, entry, "Stopped")
                 return
@@ -121,6 +161,7 @@ class TelegramDownloader:
                 await asyncio.sleep(5)
 
         db.update_download(filename, status='failed', speed=0, pending_time=None)
+        self.broadcast_update()
         if entry.get("_status_msg_id"):
             await self.edit_status_message(event, entry, "Failed")
 
@@ -150,6 +191,9 @@ class TelegramDownloader:
             total_bytes=0,
             pending_time=None
         )
+
+        # Broadcast new download
+        self.broadcast_update()
 
         # Create entry dict for status message tracking
         entry = {

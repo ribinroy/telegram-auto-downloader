@@ -1,52 +1,96 @@
 """
-Flask REST API for Telegram Downloader
+Flask REST API with WebSocket support for Telegram Downloader
 """
 from datetime import datetime
 from flask import Flask, jsonify, request
 from flask_cors import CORS
+from flask_socketio import SocketIO, emit
 from backend.config import WEB_PORT, WEB_HOST
 from backend.database import get_db
-from backend.utils import human_readable_size, format_time
+
+# Global socketio instance for broadcasting from other modules
+socketio = None
+
+
+def get_socketio():
+    """Get the global socketio instance"""
+    return socketio
 
 
 class WebApp:
     def __init__(self, download_tasks):
+        global socketio
         self.download_tasks = download_tasks
         self.app = Flask(__name__)
-        CORS(self.app)  # Enable CORS for React frontend
+        CORS(self.app, resources={r"/*": {"origins": "*"}})
+        socketio = SocketIO(self.app, cors_allowed_origins="*", async_mode='threading')
+        self.socketio = socketio
         self.setup_routes()
+        self.setup_socketio()
+
+    def setup_socketio(self):
+        """Setup WebSocket event handlers"""
+
+        @self.socketio.on('connect')
+        def handle_connect():
+            print("Client connected")
+            # Send initial data on connect
+            self.emit_downloads()
+
+        @self.socketio.on('disconnect')
+        def handle_disconnect():
+            print("Client disconnected")
+
+        @self.socketio.on('get_downloads')
+        def handle_get_downloads(data=None):
+            search = data.get('search', '') if data else ''
+            self.emit_downloads(search)
+
+    def get_downloads_data(self, search=''):
+        """Get downloads data with stats"""
+        db = get_db()
+        all_downloads = db.get_all_downloads()
+
+        query = search.lower()
+        sorted_list = sorted(all_downloads, key=lambda x: 0 if x["status"] == "downloading" else 1)
+        filtered_list = [d for d in sorted_list if query in d.get("file", "").lower()] if query else sorted_list
+
+        total_downloaded = sum(d.get("downloaded_bytes", 0) or 0 for d in filtered_list)
+        total_size = sum(d.get("total_bytes", 0) or 0 for d in filtered_list)
+        pending_bytes = total_size - total_downloaded
+        total_speed = sum(d.get("speed", 0) or 0 for d in filtered_list)
+        downloaded_count = sum(1 for d in filtered_list if d.get("status") == "done")
+        total_count = len(filtered_list)
+
+        return {
+            "downloads": filtered_list,
+            "stats": {
+                "total_downloaded": total_downloaded,
+                "total_size": total_size,
+                "pending_bytes": pending_bytes,
+                "total_speed": total_speed,
+                "downloaded_count": downloaded_count,
+                "total_count": total_count
+            }
+        }
+
+    def emit_downloads(self, search=''):
+        """Emit downloads data to all connected clients"""
+        data = self.get_downloads_data(search)
+        self.socketio.emit('downloads_update', data)
+
+    def broadcast_update(self):
+        """Broadcast download update to all clients"""
+        data = self.get_downloads_data()
+        self.socketio.emit('downloads_update', data)
 
     def setup_routes(self):
         """Setup Flask API routes"""
 
         @self.app.route("/api/downloads", methods=["GET"])
         def get_downloads():
-            db = get_db()
-            all_downloads = db.get_all_downloads()
-
-            query = request.args.get("search", "").lower()
-            # Sort: downloading first, then others
-            sorted_list = sorted(all_downloads, key=lambda x: 0 if x["status"] == "downloading" else 1)
-            filtered_list = [d for d in sorted_list if query in d.get("file", "").lower()] if query else sorted_list
-
-            total_downloaded = sum(d.get("downloaded_bytes", 0) or 0 for d in filtered_list)
-            total_size = sum(d.get("total_bytes", 0) or 0 for d in filtered_list)
-            pending_bytes = total_size - total_downloaded
-            total_speed = sum(d.get("speed", 0) or 0 for d in filtered_list)
-            downloaded_count = sum(1 for d in filtered_list if d.get("status") == "done")
-            total_count = len(filtered_list)
-
-            return jsonify({
-                "downloads": filtered_list,
-                "stats": {
-                    "total_downloaded": total_downloaded,
-                    "total_size": total_size,
-                    "pending_bytes": pending_bytes,
-                    "total_speed": total_speed,
-                    "downloaded_count": downloaded_count,
-                    "total_count": total_count
-                }
-            })
+            search = request.args.get("search", "")
+            return jsonify(self.get_downloads_data(search))
 
         @self.app.route("/api/retry", methods=["POST"])
         def api_retry():
@@ -62,8 +106,9 @@ class WebApp:
                         progress=0,
                         speed=0,
                         error=None,
-                        timestamp=datetime.utcnow()
+                        updated_at=datetime.utcnow()
                     )
+                    self.broadcast_update()
             return jsonify({"status": "ok"})
 
         @self.app.route("/api/stop", methods=["POST"])
@@ -73,6 +118,7 @@ class WebApp:
             task = self.download_tasks.get(file)
             if task and not task.done():
                 task.cancel()
+            self.broadcast_update()
             return jsonify({"status": "stopped"})
 
         @self.app.route("/api/delete", methods=["POST"])
@@ -89,8 +135,9 @@ class WebApp:
 
             # Delete from database
             db.delete_download(file)
+            self.broadcast_update()
             return jsonify({"status": "deleted"})
 
     def run(self):
-        """Run the Flask application"""
-        self.app.run(host=WEB_HOST, port=WEB_PORT, debug=False, use_reloader=False)
+        """Run the Flask application with WebSocket support"""
+        self.socketio.run(self.app, host=WEB_HOST, port=WEB_PORT, debug=False, use_reloader=False, allow_unsafe_werkzeug=True)

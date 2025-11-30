@@ -5,7 +5,8 @@ export interface Download {
   progress: number;
   speed: number;
   error: string | null;
-  timestamp: string;
+  updated_at: string;
+  created_at: string;
   downloaded_bytes: number;
   total_bytes: number;
   pending_time: number | null;
