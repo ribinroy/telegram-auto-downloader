@@ -128,10 +128,13 @@ class WebApp:
             "active_count": active_count
         }
 
-    def broadcast_update(self):
-        """Broadcast download update to all clients"""
-        data = self.get_downloads_data()
-        self.socketio.emit('downloads_update', data)
+    def emit_status(self, message_id: int, status: str):
+        """Emit status change for a specific download"""
+        self.socketio.emit('download:status', {'message_id': message_id, 'status': status})
+
+    def emit_deleted(self, message_id: int):
+        """Emit download deleted event"""
+        self.socketio.emit('download:deleted', {'message_id': message_id})
 
     def setup_routes(self):
         """Setup Flask API routes"""
@@ -164,41 +167,42 @@ class WebApp:
                         error=None,
                         updated_at=datetime.utcnow()
                     )
-                    self.broadcast_update()
+                    if download.get("message_id"):
+                        self.emit_status(download["message_id"], 'downloading')
             return jsonify({"status": "ok"})
 
         @self.app.route("/api/stop", methods=["POST"])
         def api_stop():
             data = request.json
-            file = data.get("file")
+            message_id = data.get("message_id")
             db = get_db()
 
-            # Cancel the running task
-            task = self.download_tasks.get(file)
+            # Cancel the running task by message_id
+            task = self.download_tasks.get(message_id)
             if task and not task.done():
                 task.cancel()
 
             # Update database status to stopped
-            db.update_download(file, status='stopped', speed=0)
-
-            self.broadcast_update()
+            db.update_download_by_message_id(message_id, status='stopped', speed=0)
+            self.emit_status(message_id, 'stopped')
             return jsonify({"status": "stopped"})
 
         @self.app.route("/api/delete", methods=["POST"])
         def api_delete():
             data = request.json
-            file = data.get("file")
+            message_id = data.get("message_id")
             db = get_db()
 
-            # Cancel task if running
-            task = self.download_tasks.get(file)
+            # Cancel task if running and mark as stopped
+            task = self.download_tasks.get(message_id)
             if task and not task.done():
                 task.cancel()
-            self.download_tasks.pop(file, None)
+                db.update_download_by_message_id(message_id, status='stopped', speed=0)
+            self.download_tasks.pop(message_id, None)
 
-            # Delete from database
-            db.delete_download(file)
-            self.broadcast_update()
+            # Soft delete from database
+            db.delete_download_by_message_id(message_id)
+            self.emit_deleted(message_id)
             return jsonify({"status": "deleted"})
 
         # Serve frontend

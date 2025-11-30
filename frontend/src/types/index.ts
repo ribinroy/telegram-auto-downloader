@@ -1,5 +1,6 @@
 export interface Download {
   id: number;
+  message_id: number | null;
   file: string;
   status: 'downloading' | 'done' | 'failed' | 'stopped';
   progress: number;
