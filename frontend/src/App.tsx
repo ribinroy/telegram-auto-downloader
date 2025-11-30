@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Search, Download, Wifi, WifiOff, Loader2, HardDrive, Clock, Zap, LogOut } from 'lucide-react';
+import { Search, Download, Wifi, WifiOff, Loader2, HardDrive, Clock, Zap, LogOut, Settings } from 'lucide-react';
 import { formatBytes, formatSpeed } from './utils/format';
 import { fetchDownloads, fetchStats, retryDownload, stopDownload, deleteDownload, verifyToken, clearToken, getToken, type SortBy, type SortOrder } from './api';
 import { connectSocket, disconnectSocket, type ProgressUpdate, type StatusUpdate, type DeletedUpdate } from './api/socket';
 import { DownloadItem } from './components/DownloadItem';
 import { LoginPage } from './components/LoginPage';
+import { SettingsDialog } from './components/SettingsDialog';
 import type { Download as DownloadType, Stats } from './types';
 
 type TabType = 'active' | 'all';
@@ -54,6 +55,7 @@ function App() {
 
 function MainApp({ onLogout }: { onLogout: () => void }) {
   const [downloads, setDownloads] = useState<DownloadType[]>([]);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [stats, setStats] = useState<Stats>({
     total_downloaded: 0,
     total_size: 0,
@@ -258,6 +260,14 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
               {connected ? <Wifi className="w-4 h-4" /> : <WifiOff className="w-4 h-4" />}
               <span className="text-sm">{connected ? 'Live' : 'Offline'}</span>
             </div>
+            {/* Settings button */}
+            <button
+              onClick={() => setSettingsOpen(true)}
+              className="p-2 bg-slate-700/50 hover:bg-slate-600/50 text-slate-400 hover:text-white rounded-lg transition-colors"
+              title="Settings"
+            >
+              <Settings className="w-4 h-4" />
+            </button>
             {/* Logout button */}
             <button
               onClick={onLogout}
@@ -369,6 +379,9 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
         )}
 
       </div>
+
+      {/* Settings Dialog */}
+      <SettingsDialog isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>
   );
 }
