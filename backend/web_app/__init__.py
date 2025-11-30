@@ -19,6 +19,9 @@ JWT_EXPIRY_DAYS = 30  # Keep signed in for 30 days
 # Global socketio instance for broadcasting from other modules
 socketio = None
 
+# Track yt-dlp downloads that should be stopped
+ytdlp_stop_flags = {}
+
 # Frontend dist directory
 FRONTEND_DIST = Path(__file__).parent.parent.parent / "frontend" / "dist"
 
@@ -262,10 +265,13 @@ class WebApp:
             message_id = data.get("message_id")
             db = get_db()
 
-            # Cancel the running task by message_id
+            # Cancel the running task by message_id (for Telegram downloads)
             task = self.download_tasks.get(message_id)
             if task and not task.done():
                 task.cancel()
+
+            # Set stop flag for yt-dlp downloads
+            ytdlp_stop_flags[message_id] = True
 
             # Update database status to stopped
             db.update_download_by_message_id(message_id, status='stopped', speed=0)
@@ -279,12 +285,15 @@ class WebApp:
             message_id = data.get("message_id")
             db = get_db()
 
-            # Cancel task if running and mark as stopped
+            # Cancel task if running and mark as stopped (for Telegram downloads)
             task = self.download_tasks.get(message_id)
             if task and not task.done():
                 task.cancel()
                 db.update_download_by_message_id(message_id, status='stopped', speed=0)
             self.download_tasks.pop(message_id, None)
+
+            # Set stop flag for yt-dlp downloads
+            ytdlp_stop_flags[message_id] = True
 
             # Soft delete from database
             db.delete_download_by_message_id(message_id)
@@ -349,10 +358,15 @@ class WebApp:
                 from backend.config import DOWNLOAD_DIR
                 try:
                     def progress_hook(d):
+                        # Check if download was stopped
+                        if ytdlp_stop_flags.get(message_id):
+                            raise Exception("Download stopped by user")
+
                         if d['status'] == 'downloading':
                             total = d.get('total_bytes') or d.get('total_bytes_estimate') or 0
                             downloaded = d.get('downloaded_bytes', 0)
-                            speed = d.get('speed', 0) or 0
+                            speed_bps = d.get('speed', 0) or 0
+                            speed = round(speed_bps / 1024, 1)  # Convert to KB/s to match Telegram handler
                             progress = (downloaded / total * 100) if total > 0 else 0
                             eta = d.get('eta', 0) or 0
 
@@ -375,6 +389,8 @@ class WebApp:
                                     'pending_time': eta
                                 })
                         elif d['status'] == 'finished':
+                            # Clean up stop flag
+                            ytdlp_stop_flags.pop(message_id, None)
                             db.update_download_by_message_id(
                                 message_id,
                                 status='done',
@@ -397,6 +413,13 @@ class WebApp:
                         ydl.download([url])
 
                 except Exception as e:
+                    # Clean up stop flag
+                    ytdlp_stop_flags.pop(message_id, None)
+
+                    # If stopped by user, don't update status (already set by stop/delete endpoint)
+                    if "stopped by user" in str(e).lower():
+                        return
+
                     db.update_download_by_message_id(
                         message_id,
                         status='failed',
