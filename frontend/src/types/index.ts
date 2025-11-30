@@ -1,6 +1,6 @@
 export interface Download {
   id: number;
-  message_id: string | null;  // String to avoid JS precision loss with large Telegram IDs
+  message_id: string | null;  // UUID for yt-dlp or Telegram message ID as string
   file: string;
   status: 'downloading' | 'done' | 'failed' | 'stopped';
   progress: number;
@@ -11,6 +11,18 @@ export interface Download {
   downloaded_bytes: number;
   total_bytes: number;
   pending_time: number | null;
+  downloaded_from: string;  // 'telegram' or domain name
+  url: string | null;  // Source URL for yt-dlp downloads
+}
+
+export interface UrlCheckResult {
+  supported: boolean;
+  error?: string;
+  title?: string;
+  duration?: number;
+  filesize?: number;
+  ext?: string;
+  uploader?: string;
 }
 
 export interface Stats {
