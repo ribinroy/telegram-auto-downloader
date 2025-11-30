@@ -1,8 +1,9 @@
 """
-Flask web application for Telegram Downloader dashboard
+Flask REST API for Telegram Downloader
 """
 from datetime import datetime
-from flask import Flask, jsonify, render_template_string, request
+from flask import Flask, jsonify, request
+from flask_cors import CORS
 from backend.config import WEB_PORT, WEB_HOST
 from backend.database import get_db
 from backend.utils import human_readable_size, format_time
@@ -12,13 +13,14 @@ class WebApp:
     def __init__(self, download_tasks):
         self.download_tasks = download_tasks
         self.app = Flask(__name__)
+        CORS(self.app)  # Enable CORS for React frontend
         self.setup_routes()
 
     def setup_routes(self):
-        """Setup Flask routes"""
+        """Setup Flask API routes"""
 
-        @self.app.route("/")
-        def dashboard():
+        @self.app.route("/api/downloads", methods=["GET"])
+        def get_downloads():
             db = get_db()
             all_downloads = db.get_all_downloads()
 
@@ -34,18 +36,17 @@ class WebApp:
             downloaded_count = sum(1 for d in filtered_list if d.get("status") == "done")
             total_count = len(filtered_list)
 
-            return render_template_string(
-                self.get_html_template(),
-                downloads=filtered_list,
-                human_readable_size=human_readable_size,
-                format_time=format_time,
-                total_downloaded=total_downloaded,
-                total_size=total_size,
-                pending_bytes=pending_bytes,
-                total_speed=total_speed,
-                downloaded_count=downloaded_count,
-                total_count=total_count
-            )
+            return jsonify({
+                "downloads": filtered_list,
+                "stats": {
+                    "total_downloaded": total_downloaded,
+                    "total_size": total_size,
+                    "pending_bytes": pending_bytes,
+                    "total_speed": total_speed,
+                    "downloaded_count": downloaded_count,
+                    "total_count": total_count
+                }
+            })
 
         @self.app.route("/api/retry", methods=["POST"])
         def api_retry():
@@ -89,78 +90,6 @@ class WebApp:
             # Delete from database
             db.delete_download(file)
             return jsonify({"status": "deleted"})
-
-    def get_html_template(self):
-        """Return the HTML template for the dashboard"""
-        return """
-<!DOCTYPE html>
-<html>
-<head>
-<title>Telegram Downloader</title>
-<meta http-equiv="refresh" content="2">
-<style>
-body { font-family: Arial; background: #111; color: #ddd; padding: 20px; }
-table { width: 100%; border-collapse: collapse; }
-th, td { padding: 8px; border-bottom: 1px solid #333; text-align: left; }
-.status-downloading { color: #00d9ff; }
-.status-done { color: #00ff88; }
-.status-failed { color: #ff5555; }
-.status-stopped { color: #ffaa00; }
-button { padding: 4px 8px; margin-left: 4px; }
-</style>
-<script>
-function retryDownload(id){
-    fetch("/api/retry",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:id})})
-    .then(()=>{location.reload();});
-}
-function stopDownload(file){
-    fetch("/api/stop",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({file:file})})
-    .then(()=>{location.reload();});
-}
-function deleteEntry(file){
-    if(!confirm("Are you sure?")) return;
-    fetch("/api/delete",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({file:file})})
-    .then(()=>{location.reload();});
-}
-</script>
-</head>
-<body>
-<h2>📥 Telegram Downloader Status</h2>
-<h3>
-Items: {{ downloaded_count }}/{{ total_count }} |
-Total Downloaded: {{ human_readable_size(total_downloaded) }} / {{ human_readable_size(total_size) }} [{{ human_readable_size(pending_bytes) }}] |
-Total Speed: {{ human_readable_size(total_speed*1024) }}/s
-</h3>
-<table>
-<tr><th>#</th><th>File</th><th>Status</th><th>Progress</th><th>Speed(KB/s)</th>
-<th>Downloaded</th><th>Pending</th><th>ETA</th><th>Error</th><th>Action</th><th>Remove</th></tr>
-{% for d in downloads %}
-<tr>
-<td>{{ loop.index }}</td>
-<td>{{ d.get('file','') }}</td>
-<td class="status-{{ d.get('status','') }}">{{ d.get('status','') }}</td>
-<td>{{ d.get('progress',0) }}%</td>
-<td>{{ d.get('speed',0) }}</td>
-<td>{{ human_readable_size(d.get('downloaded_bytes',0) or 0) }}/{{ human_readable_size(d.get('total_bytes',0) or 0) }}</td>
-<td>{{ human_readable_size((d.get('total_bytes',0) or 0)-(d.get('downloaded_bytes',0) or 0)) }}</td>
-<td>{{ format_time(d.get('pending_time')) }}</td>
-<td>{{ d.get('error','') or '' }}</td>
-<td>
-{% if d.get('status') == 'failed' or d.get('status') == 'stopped' %}
-<button onclick="retryDownload({{ d.get('id') }})">Retry</button>
-{% elif d.get('status') == 'downloading' %}
-<button onclick="stopDownload('{{ d.get('file','') }}')">Stop</button>
-{% endif %}
-</td>
-<td>
-<button onclick="deleteEntry('{{ d.get('file','') }}')">Delete</button>
-</td>
-</tr>
-{% endfor %}
-</table>
-</body>
-</html>
-"""
 
     def run(self):
         """Run the Flask application"""
