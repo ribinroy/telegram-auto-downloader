@@ -240,6 +240,7 @@ function App() {
                     <div className="pb-3">
                       <DownloadItem
                         download={download}
+                        index={virtualRow.index + 1}
                         onRetry={handleRetry}
                         onStop={handleStop}
                         onDelete={handleDelete}

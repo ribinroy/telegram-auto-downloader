@@ -8,16 +8,62 @@ import {
   StopCircle,
   FileText,
   Image,
-  Video
+  Video,
+  Calendar,
+  Clock
 } from 'lucide-react';
 import type { Download } from '../types';
 import { formatBytes, formatTime, formatSpeed } from '../utils/format';
 
 interface DownloadItemProps {
   download: Download;
+  index: number;
   onRetry: (id: number) => void;
   onStop: (file: string) => void;
   onDelete: (file: string) => void;
+}
+
+function formatRelativeDate(dateString: string | null): { relative: string; full: string } {
+  if (!dateString) return { relative: '-', full: '-' };
+
+  const date = new Date(dateString);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffSecs = Math.floor(diffMs / 1000);
+  const diffMins = Math.floor(diffSecs / 60);
+  const diffHours = Math.floor(diffMins / 60);
+  const diffDays = Math.floor(diffHours / 24);
+  const diffWeeks = Math.floor(diffDays / 7);
+  const diffMonths = Math.floor(diffDays / 30);
+  const diffYears = Math.floor(diffDays / 365);
+
+  let relative: string;
+  if (diffSecs < 60) {
+    relative = 'just now';
+  } else if (diffMins < 60) {
+    relative = `${diffMins}m ago`;
+  } else if (diffHours < 24) {
+    relative = `${diffHours}h ago`;
+  } else if (diffDays < 7) {
+    relative = `${diffDays}d ago`;
+  } else if (diffWeeks < 4) {
+    relative = `${diffWeeks}w ago`;
+  } else if (diffMonths < 12) {
+    relative = `${diffMonths}mo ago`;
+  } else {
+    relative = `${diffYears}y ago`;
+  }
+
+  const full = date.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  });
+
+  return { relative, full };
 }
 
 function getFileIcon(filename: string) {
@@ -57,12 +103,17 @@ function getStatusColor(status: Download['status']) {
   }
 }
 
-export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadItemProps) {
+export function DownloadItem({ download, index, onRetry, onStop, onDelete }: DownloadItemProps) {
   const progressPercent = download.progress || 0;
 
   return (
     <div className="bg-slate-800/30 rounded-xl p-4 border border-slate-700/50 hover:border-slate-600 transition-all">
       <div className="flex items-start gap-4">
+        {/* Index number */}
+        <div className="flex items-center justify-center w-8 h-8 bg-slate-700/50 rounded-lg text-slate-400 text-sm font-medium">
+          {index}
+        </div>
+
         <div className="p-2 bg-slate-700/50 rounded-lg">
           {getFileIcon(download.file)}
         </div>
@@ -107,42 +158,62 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
-          {/* Status indicator */}
-          <div className="flex items-center gap-1.5 px-2 py-1 bg-slate-700/30 rounded-lg">
-            {getStatusIcon(download.status)}
-            <span className={`text-sm capitalize ${getStatusColor(download.status)}`}>
-              {download.status}
-            </span>
+        <div className="flex flex-col items-end gap-2">
+          <div className="flex items-center gap-3">
+            {/* Status indicator */}
+            <div className="flex items-center gap-1.5 px-2 py-1 bg-slate-700/30 rounded-lg">
+              {getStatusIcon(download.status)}
+              <span className={`text-sm capitalize ${getStatusColor(download.status)}`}>
+                {download.status}
+              </span>
+            </div>
+
+            {/* Action buttons */}
+            <div className="flex gap-2">
+              {(download.status === 'failed' || download.status === 'stopped') && (
+                <button
+                  onClick={() => onRetry(download.id)}
+                  className="p-2 bg-green-500/20 hover:bg-green-500/30 text-green-400 rounded-lg transition-colors"
+                  title="Retry"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                </button>
+              )}
+              {download.status === 'downloading' && (
+                <button
+                  onClick={() => onStop(download.file)}
+                  className="p-2 bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-400 rounded-lg transition-colors"
+                  title="Stop"
+                >
+                  <Square className="w-4 h-4" />
+                </button>
+              )}
+              <button
+                onClick={() => onDelete(download.file)}
+                className="p-2 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg transition-colors"
+                title="Delete"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </div>
           </div>
 
-          {/* Action buttons */}
-          <div className="flex gap-2">
-            {(download.status === 'failed' || download.status === 'stopped') && (
-              <button
-                onClick={() => onRetry(download.id)}
-                className="p-2 bg-green-500/20 hover:bg-green-500/30 text-green-400 rounded-lg transition-colors"
-                title="Retry"
-              >
-                <RefreshCw className="w-4 h-4" />
-              </button>
-            )}
-            {download.status === 'downloading' && (
-              <button
-                onClick={() => onStop(download.file)}
-                className="p-2 bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-400 rounded-lg transition-colors"
-                title="Stop"
-              >
-                <Square className="w-4 h-4" />
-              </button>
-            )}
-            <button
-              onClick={() => onDelete(download.file)}
-              className="p-2 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg transition-colors"
-              title="Delete"
+          {/* Dates */}
+          <div className="flex gap-4 text-xs text-slate-500">
+            <div
+              className="flex items-center gap-1 cursor-default"
+              title={`Created: ${formatRelativeDate(download.created_at).full}`}
             >
-              <Trash2 className="w-4 h-4" />
-            </button>
+              <Calendar className="w-3 h-3" />
+              <span>{formatRelativeDate(download.created_at).relative}</span>
+            </div>
+            <div
+              className="flex items-center gap-1 cursor-default"
+              title={`Updated: ${formatRelativeDate(download.updated_at).full}`}
+            >
+              <Clock className="w-3 h-3" />
+              <span>{formatRelativeDate(download.updated_at).relative}</span>
+            </div>
           </div>
         </div>
       </div>
