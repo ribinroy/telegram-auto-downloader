@@ -1,18 +1,17 @@
 """
 Telegram client and download handler
 """
-import os
 import asyncio
 import logging
 from datetime import datetime
-from telethon import TelegramClient, events, errors
+from telethon import TelegramClient, events
 from src.config import API_ID, API_HASH, CHAT_ID, DOWNLOAD_DIR, MAX_RETRIES, SESSION_FILE
-from src.utils import save_state, human_readable_size
+from src.database import get_db
+from src.utils import human_readable_size, get_media_folder
 
 
 class TelegramDownloader:
-    def __init__(self, downloads, download_tasks):
-        self.downloads = downloads
+    def __init__(self, download_tasks):
         self.download_tasks = download_tasks
         self.client = TelegramClient(str(SESSION_FILE), API_ID, API_HASH)
         self.setup_event_handlers()
@@ -44,6 +43,8 @@ class TelegramDownloader:
         last_bytes = 0
         start_time = datetime.now()
         last_update = 0  # timestamp of last message edit
+        db = get_db()
+        filename = entry["file"]
 
         # Send initial "Downloading" message
         try:
@@ -59,22 +60,36 @@ class TelegramDownloader:
                     nonlocal last_bytes, start_time, last_update
                     now = datetime.now()
                     delta = (now - start_time).total_seconds()
+                    speed = 0
                     if delta > 0:
-                        entry["speed"] = round((current - last_bytes) / 1024 / delta, 1)
+                        speed = round((current - last_bytes) / 1024 / delta, 1)
                     last_bytes = current
                     start_time = now
 
-                    entry["progress"] = round(current / total * 100, 1)
+                    progress = round(current / total * 100, 1)
+                    pending_time = None
+                    if speed > 0:
+                        remaining_bytes = total - current
+                        pending_time = remaining_bytes / (speed * 1024)
+
+                    # Update entry dict for status message
+                    entry["progress"] = progress
                     entry["downloaded_bytes"] = current
                     entry["total_bytes"] = total
-                    if entry["speed"] > 0:
-                        remaining_bytes = total - current
-                        entry["pending_time"] = remaining_bytes / (entry["speed"] * 1024)
-                    else:
-                        entry["pending_time"] = None
-                    save_state(self.downloads, DOWNLOAD_DIR.parent / "downloads.json")
+                    entry["speed"] = speed
+                    entry["pending_time"] = pending_time
 
-                    # Throttle edits: 1 per second
+                    # Save to database
+                    db.update_download(
+                        filename,
+                        progress=progress,
+                        downloaded_bytes=current,
+                        total_bytes=total,
+                        speed=speed,
+                        pending_time=pending_time
+                    )
+
+                    # Throttle edits: 1 per 20 seconds
                     timestamp = now.timestamp()
                     if entry.get("_status_msg_id") and timestamp - last_update >= 20:
                         last_update = timestamp
@@ -83,31 +98,29 @@ class TelegramDownloader:
                 await event.download_media(file=path, progress_callback=progress_callback)
 
                 # Final update
-                entry["status"] = "done"
-                entry["progress"] = 100
-                entry["speed"] = 0
-                entry["pending_time"] = 0
-                save_state(self.downloads, DOWNLOAD_DIR.parent / "downloads.json")
+                db.update_download(
+                    filename,
+                    status='done',
+                    progress=100,
+                    speed=0,
+                    pending_time=0
+                )
                 if entry.get("_status_msg_id"):
                     await self.edit_status_message(event, entry, "Downloaded")
                 return
 
             except asyncio.CancelledError:
-                entry["status"] = "stopped"
-                entry["speed"] = 0
-                save_state(self.downloads, DOWNLOAD_DIR.parent / "downloads.json")
+                db.update_download(filename, status='stopped', speed=0)
                 if entry.get("_status_msg_id"):
                     await self.edit_status_message(event, entry, "Stopped")
                 return
             except Exception as e:
-                entry["error"] = f"Attempt {attempt}/{MAX_RETRIES} failed: {str(e)}"
-                logging.error(entry["error"])
+                error_msg = f"Attempt {attempt}/{MAX_RETRIES} failed: {str(e)}"
+                db.update_download(filename, error=error_msg)
+                logging.error(error_msg)
                 await asyncio.sleep(5)
 
-        entry["status"] = "failed"
-        entry["speed"] = 0
-        entry["pending_time"] = None
-        save_state(self.downloads, DOWNLOAD_DIR.parent / "downloads.json")
+        db.update_download(filename, status='failed', speed=0, pending_time=None)
         if entry.get("_status_msg_id"):
             await self.edit_status_message(event, entry, "Failed")
 
@@ -115,30 +128,34 @@ class TelegramDownloader:
         """Handle new file messages from Telegram"""
         if not event.file:
             return
-        
-        from src.utils import get_media_folder
+
         kind = get_media_folder(event.file.mime_type)
-        
+
         folder = DOWNLOAD_DIR / kind
         folder.mkdir(exist_ok=True)
 
         filename = event.file.name or f"{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         path = folder / filename
 
+        db = get_db()
+
+        # Add to database
+        entry_dict = db.add_download(
+            file=filename,
+            status='downloading',
+            progress=0,
+            speed=0,
+            error=None,
+            downloaded_bytes=0,
+            total_bytes=0,
+            pending_time=None
+        )
+
+        # Create entry dict for status message tracking
         entry = {
             "file": filename,
-            "status": "downloading",
-            "progress": 0,
-            "speed": 0,
-            "error": None,
-            "timestamp": datetime.now().isoformat(),
-            "downloaded_bytes": 0,
-            "total_bytes": 0,
-            "pending_time": None,
             "_status_msg_id": None
         }
-        self.downloads.insert(0, entry)
-        save_state(self.downloads, DOWNLOAD_DIR.parent / "downloads.json")
 
         # Start the download task
         task = asyncio.create_task(self.safe_download(event, str(path), entry))

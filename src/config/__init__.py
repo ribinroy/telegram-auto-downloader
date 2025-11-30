@@ -55,6 +55,9 @@ WEB_HOST = os.getenv('WEB_HOST', '0.0.0.0')
 
 # Download Configuration
 MAX_RETRIES = int(os.getenv('MAX_RETRIES', '6'))
+
+# Database Configuration
+DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://postgres:password@localhost:5432/telegram_downloader')
 SESSION_FILE = BASE_DIR / "downloader_session"
 DOWNLOADS_JSON = BASE_DIR / "downloads.json"
 LOG_FILE = LOGS_DIR / "telegram_downloader.log"
