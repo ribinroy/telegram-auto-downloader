@@ -40,23 +40,39 @@ class WebApp:
         def handle_disconnect():
             print("Client disconnected")
 
-    def get_downloads_data(self, search='', filter_type='all'):
+    def get_downloads_data(self, search='', filter_type='all', sort_by='created_at', sort_order='desc'):
         """Get downloads data with stats
 
         Args:
             search: Search query to filter by filename
             filter_type: 'all' for all downloads, 'active' for non-done downloads
+            sort_by: Field to sort by ('created_at', 'file', 'status', 'progress')
+            sort_order: 'asc' or 'desc'
         """
         db = get_db()
         all_downloads = db.get_all_downloads()
 
         query = search.lower()
-        sorted_list = sorted(all_downloads, key=lambda x: 0 if x["status"] == "downloading" else 1)
-        filtered_list = [d for d in sorted_list if query in d.get("file", "").lower()] if query else sorted_list
+        filtered_list = [d for d in all_downloads if query in d.get("file", "").lower()] if query else all_downloads
 
         # Apply filter_type
         if filter_type == 'active':
             filtered_list = [d for d in filtered_list if d.get("status") != "done"]
+
+        # Apply sorting
+        reverse = sort_order == 'desc'
+        if sort_by == 'created_at':
+            sorted_list = sorted(filtered_list, key=lambda x: x.get("created_at") or "", reverse=reverse)
+        elif sort_by == 'file':
+            sorted_list = sorted(filtered_list, key=lambda x: x.get("file", "").lower(), reverse=reverse)
+        elif sort_by == 'status':
+            sorted_list = sorted(filtered_list, key=lambda x: x.get("status", ""), reverse=reverse)
+        elif sort_by == 'progress':
+            sorted_list = sorted(filtered_list, key=lambda x: x.get("progress", 0), reverse=reverse)
+        else:
+            sorted_list = filtered_list
+
+        filtered_list = sorted_list
 
         total_downloaded = sum(d.get("downloaded_bytes", 0) or 0 for d in filtered_list)
         total_size = sum(d.get("total_bytes", 0) or 0 for d in filtered_list)
@@ -119,7 +135,9 @@ class WebApp:
         def get_downloads():
             search = request.args.get("search", "")
             filter_type = request.args.get("filter", "all")  # 'all' or 'active'
-            return jsonify(self.get_downloads_data(search, filter_type))
+            sort_by = request.args.get("sort_by", "created_at")  # 'created_at', 'file', 'status', 'progress'
+            sort_order = request.args.get("sort_order", "desc")  # 'asc' or 'desc'
+            return jsonify(self.get_downloads_data(search, filter_type, sort_by, sort_order))
 
         @self.app.route("/api/stats", methods=["GET"])
         def get_stats():
