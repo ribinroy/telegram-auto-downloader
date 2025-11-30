@@ -19,6 +19,8 @@ export interface Stats {
   total_speed: number;
   downloaded_count: number;
   total_count: number;
+  all_count: number;
+  active_count: number;
 }
 
 export interface DownloadsResponse {

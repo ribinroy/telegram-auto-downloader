@@ -34,20 +34,19 @@ class WebApp:
         @self.socketio.on('connect')
         def handle_connect():
             print("Client connected")
-            # Send initial data on connect
-            self.emit_downloads()
+            # Don't send initial data - client will fetch via REST API
 
         @self.socketio.on('disconnect')
         def handle_disconnect():
             print("Client disconnected")
 
-        @self.socketio.on('get_downloads')
-        def handle_get_downloads(data=None):
-            search = data.get('search', '') if data else ''
-            self.emit_downloads(search)
+    def get_downloads_data(self, search='', filter_type='all'):
+        """Get downloads data with stats
 
-    def get_downloads_data(self, search=''):
-        """Get downloads data with stats"""
+        Args:
+            search: Search query to filter by filename
+            filter_type: 'all' for all downloads, 'active' for non-done downloads
+        """
         db = get_db()
         all_downloads = db.get_all_downloads()
 
@@ -55,12 +54,20 @@ class WebApp:
         sorted_list = sorted(all_downloads, key=lambda x: 0 if x["status"] == "downloading" else 1)
         filtered_list = [d for d in sorted_list if query in d.get("file", "").lower()] if query else sorted_list
 
+        # Apply filter_type
+        if filter_type == 'active':
+            filtered_list = [d for d in filtered_list if d.get("status") != "done"]
+
         total_downloaded = sum(d.get("downloaded_bytes", 0) or 0 for d in filtered_list)
         total_size = sum(d.get("total_bytes", 0) or 0 for d in filtered_list)
         pending_bytes = total_size - total_downloaded
         total_speed = sum(d.get("speed", 0) or 0 for d in filtered_list)
         downloaded_count = sum(1 for d in filtered_list if d.get("status") == "done")
         total_count = len(filtered_list)
+
+        # Calculate counts from unfiltered list for tab display
+        all_count = len(sorted_list)
+        active_count = sum(1 for d in sorted_list if d.get("status") != "done")
 
         return {
             "downloads": filtered_list,
@@ -70,14 +77,35 @@ class WebApp:
                 "pending_bytes": pending_bytes,
                 "total_speed": total_speed,
                 "downloaded_count": downloaded_count,
-                "total_count": total_count
+                "total_count": total_count,
+                "all_count": all_count,
+                "active_count": active_count
             }
         }
 
-    def emit_downloads(self, search=''):
-        """Emit downloads data to all connected clients"""
-        data = self.get_downloads_data(search)
-        self.socketio.emit('downloads_update', data)
+    def get_stats(self):
+        """Get stats only (without downloads list)"""
+        db = get_db()
+        all_downloads = db.get_all_downloads()
+
+        total_downloaded = sum(d.get("downloaded_bytes", 0) or 0 for d in all_downloads)
+        total_size = sum(d.get("total_bytes", 0) or 0 for d in all_downloads)
+        pending_bytes = total_size - total_downloaded
+        total_speed = sum(d.get("speed", 0) or 0 for d in all_downloads)
+        downloaded_count = sum(1 for d in all_downloads if d.get("status") == "done")
+        total_count = len(all_downloads)
+        active_count = sum(1 for d in all_downloads if d.get("status") != "done")
+
+        return {
+            "total_downloaded": total_downloaded,
+            "total_size": total_size,
+            "pending_bytes": pending_bytes,
+            "total_speed": total_speed,
+            "downloaded_count": downloaded_count,
+            "total_count": total_count,
+            "all_count": total_count,
+            "active_count": active_count
+        }
 
     def broadcast_update(self):
         """Broadcast download update to all clients"""
@@ -90,7 +118,12 @@ class WebApp:
         @self.app.route("/api/downloads", methods=["GET"])
         def get_downloads():
             search = request.args.get("search", "")
-            return jsonify(self.get_downloads_data(search))
+            filter_type = request.args.get("filter", "all")  # 'all' or 'active'
+            return jsonify(self.get_downloads_data(search, filter_type))
+
+        @self.app.route("/api/stats", methods=["GET"])
+        def get_stats():
+            return jsonify(self.get_stats())
 
         @self.app.route("/api/retry", methods=["POST"])
         def api_retry():
