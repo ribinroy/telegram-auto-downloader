@@ -74,6 +74,29 @@ class Settings(Base):
         }
 
 
+class DownloadTypeMap(Base):
+    """Download type mapping for folder organization and security"""
+    __tablename__ = 'download_type_maps'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    downloaded_from = Column(String(100), unique=True, nullable=False)
+    is_secured = Column(Boolean, default=False)
+    folder = Column(String(255), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        """Convert model to dictionary"""
+        return {
+            'id': self.id,
+            'downloaded_from': self.downloaded_from,
+            'is_secured': self.is_secured,
+            'folder': self.folder,
+            'created_at': f"{self.created_at.isoformat()}Z" if self.created_at else None,
+            'updated_at': f"{self.updated_at.isoformat()}Z" if self.updated_at else None
+        }
+
+
 class User(Base):
     """User model for authentication"""
     __tablename__ = 'users'
@@ -392,6 +415,81 @@ class DatabaseManager:
                 session.add(user)
                 session.commit()
                 print("Default user 'admin' created")
+        finally:
+            self.close_session()
+
+    # Download type map methods
+    def get_all_download_type_maps(self):
+        """Get all download type mappings"""
+        session = self.get_session()
+        try:
+            maps = session.query(DownloadTypeMap).order_by(DownloadTypeMap.downloaded_from).all()
+            return [m.to_dict() for m in maps]
+        finally:
+            self.close_session()
+
+    def get_download_type_map(self, downloaded_from: str):
+        """Get a download type mapping by downloaded_from value"""
+        session = self.get_session()
+        try:
+            mapping = session.query(DownloadTypeMap).filter_by(downloaded_from=downloaded_from).first()
+            return mapping.to_dict() if mapping else None
+        finally:
+            self.close_session()
+
+    def get_secured_sources(self):
+        """Get list of downloaded_from values that are secured"""
+        session = self.get_session()
+        try:
+            maps = session.query(DownloadTypeMap).filter_by(is_secured=True).all()
+            return [m.downloaded_from for m in maps]
+        finally:
+            self.close_session()
+
+    def add_download_type_map(self, downloaded_from: str, is_secured: bool = False, folder: str = None):
+        """Add a new download type mapping"""
+        session = self.get_session()
+        try:
+            existing = session.query(DownloadTypeMap).filter_by(downloaded_from=downloaded_from).first()
+            if existing:
+                return {'error': 'Mapping already exists for this source'}
+            mapping = DownloadTypeMap(
+                downloaded_from=downloaded_from,
+                is_secured=is_secured,
+                folder=folder
+            )
+            session.add(mapping)
+            session.commit()
+            return mapping.to_dict()
+        finally:
+            self.close_session()
+
+    def update_download_type_map(self, map_id: int, **kwargs):
+        """Update a download type mapping"""
+        session = self.get_session()
+        try:
+            mapping = session.query(DownloadTypeMap).filter_by(id=map_id).first()
+            if not mapping:
+                return {'error': 'Mapping not found'}
+            for key, value in kwargs.items():
+                if hasattr(mapping, key) and key != 'id':
+                    setattr(mapping, key, value)
+            mapping.updated_at = datetime.utcnow()
+            session.commit()
+            return mapping.to_dict()
+        finally:
+            self.close_session()
+
+    def delete_download_type_map(self, map_id: int):
+        """Delete a download type mapping"""
+        session = self.get_session()
+        try:
+            mapping = session.query(DownloadTypeMap).filter_by(id=map_id).first()
+            if not mapping:
+                return False
+            session.delete(mapping)
+            session.commit()
+            return True
         finally:
             self.close_session()
 
