@@ -2,6 +2,7 @@
 Database module for Telegram Downloader
 """
 import os
+import hashlib
 from datetime import datetime
 from sqlalchemy import create_engine, Column, Integer, BigInteger, String, Float, DateTime, Text, Boolean
 from sqlalchemy.ext.declarative import declarative_base
@@ -62,6 +63,33 @@ class Settings(Base):
             'value': self.value,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None
         }
+
+
+class User(Base):
+    """User model for authentication"""
+    __tablename__ = 'users'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    username = Column(String(100), unique=True, nullable=False)
+    password_hash = Column(String(64), nullable=False)  # SHA-256 hash
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        """Convert model to dictionary (excludes password)"""
+        return {
+            'id': self.id,
+            'username': self.username,
+            'created_at': f"{self.created_at.isoformat()}Z" if self.created_at else None
+        }
+
+    @staticmethod
+    def hash_password(password: str) -> str:
+        """Hash a password using SHA-256"""
+        return hashlib.sha256(password.encode()).hexdigest()
+
+    def check_password(self, password: str) -> bool:
+        """Check if provided password matches"""
+        return self.password_hash == self.hash_password(password)
 
 
 class DatabaseManager:
@@ -281,6 +309,75 @@ class DatabaseManager:
         finally:
             self.close_session()
 
+    # User management methods
+    def get_user_by_username(self, username: str):
+        """Get a user by username"""
+        session = self.get_session()
+        try:
+            user = session.query(User).filter_by(username=username).first()
+            return user
+        finally:
+            self.close_session()
+
+    def authenticate_user(self, username: str, password: str):
+        """Authenticate a user by username and password"""
+        session = self.get_session()
+        try:
+            user = session.query(User).filter_by(username=username).first()
+            if user and user.check_password(password):
+                return user.to_dict()
+            return None
+        finally:
+            self.close_session()
+
+    def create_user(self, username: str, password: str):
+        """Create a new user"""
+        session = self.get_session()
+        try:
+            existing = session.query(User).filter_by(username=username).first()
+            if existing:
+                return None  # User already exists
+            user = User(
+                username=username,
+                password_hash=User.hash_password(password)
+            )
+            session.add(user)
+            session.commit()
+            return user.to_dict()
+        finally:
+            self.close_session()
+
+    def update_user_password(self, user_id: int, current_password: str, new_password: str):
+        """Update user password after verifying current password"""
+        session = self.get_session()
+        try:
+            user = session.query(User).filter_by(id=user_id).first()
+            if not user:
+                return {'error': 'User not found'}
+            if not user.check_password(current_password):
+                return {'error': 'Current password is incorrect'}
+            user.password_hash = User.hash_password(new_password)
+            session.commit()
+            return {'success': True}
+        finally:
+            self.close_session()
+
+    def seed_default_user(self):
+        """Create default user if no users exist"""
+        session = self.get_session()
+        try:
+            user_count = session.query(User).count()
+            if user_count == 0:
+                user = User(
+                    username='admin',
+                    password_hash=User.hash_password('admin')
+                )
+                session.add(user)
+                session.commit()
+                print("Default user 'admin' created")
+        finally:
+            self.close_session()
+
 
 # Global database manager instance (initialized in config)
 db_manager = None
@@ -290,6 +387,7 @@ def init_database(database_url):
     """Initialize the database manager"""
     global db_manager
     db_manager = DatabaseManager(database_url)
+    db_manager.seed_default_user()
     return db_manager
 
 

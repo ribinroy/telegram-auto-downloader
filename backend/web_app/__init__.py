@@ -2,13 +2,19 @@
 Flask REST API with WebSocket support for Telegram Downloader
 """
 import os
-from datetime import datetime
+import jwt
+from datetime import datetime, timedelta
 from pathlib import Path
+from functools import wraps
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 from backend.config import WEB_PORT, WEB_HOST
 from backend.database import get_db
+
+# JWT secret key
+JWT_SECRET = os.environ.get('JWT_SECRET', 'telegram-downloader-secret-key-change-in-prod')
+JWT_EXPIRY_DAYS = 30  # Keep signed in for 30 days
 
 # Global socketio instance for broadcasting from other modules
 socketio = None
@@ -20,6 +26,30 @@ FRONTEND_DIST = Path(__file__).parent.parent.parent / "frontend" / "dist"
 def get_socketio():
     """Get the global socketio instance"""
     return socketio
+
+
+def token_required(f):
+    """Decorator to require valid JWT token"""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = None
+        auth_header = request.headers.get('Authorization')
+        if auth_header and auth_header.startswith('Bearer '):
+            token = auth_header.split(' ')[1]
+
+        if not token:
+            return jsonify({'error': 'Token is missing'}), 401
+
+        try:
+            data = jwt.decode(token, JWT_SECRET, algorithms=['HS256'])
+            request.user = data
+        except jwt.ExpiredSignatureError:
+            return jsonify({'error': 'Token has expired'}), 401
+        except jwt.InvalidTokenError:
+            return jsonify({'error': 'Invalid token'}), 401
+
+        return f(*args, **kwargs)
+    return decorated
 
 
 class WebApp:
@@ -139,7 +169,59 @@ class WebApp:
     def setup_routes(self):
         """Setup Flask API routes"""
 
+        # Auth routes
+        @self.app.route("/api/auth/login", methods=["POST"])
+        def login():
+            data = request.json
+            username = data.get("username")
+            password = data.get("password")
+
+            if not username or not password:
+                return jsonify({"error": "Username and password required"}), 400
+
+            db = get_db()
+            user = db.authenticate_user(username, password)
+
+            if not user:
+                return jsonify({"error": "Invalid credentials"}), 401
+
+            # Generate JWT token
+            token = jwt.encode({
+                'user_id': user['id'],
+                'username': user['username'],
+                'exp': datetime.utcnow() + timedelta(days=JWT_EXPIRY_DAYS)
+            }, JWT_SECRET, algorithm='HS256')
+
+            return jsonify({
+                "token": token,
+                "user": user
+            })
+
+        @self.app.route("/api/auth/verify", methods=["GET"])
+        @token_required
+        def verify_token():
+            return jsonify({"user": request.user})
+
+        @self.app.route("/api/auth/password", methods=["POST"])
+        @token_required
+        def update_password():
+            data = request.json
+            current_password = data.get("current_password")
+            new_password = data.get("new_password")
+
+            if not current_password or not new_password:
+                return jsonify({"error": "Current and new password required"}), 400
+
+            db = get_db()
+            result = db.update_user_password(request.user['user_id'], current_password, new_password)
+
+            if 'error' in result:
+                return jsonify(result), 400
+
+            return jsonify({"success": True})
+
         @self.app.route("/api/downloads", methods=["GET"])
+        @token_required
         def get_downloads():
             search = request.args.get("search", "")
             filter_type = request.args.get("filter", "all")  # 'all' or 'active'
@@ -148,10 +230,12 @@ class WebApp:
             return jsonify(self.get_downloads_data(search, filter_type, sort_by, sort_order))
 
         @self.app.route("/api/stats", methods=["GET"])
+        @token_required
         def get_stats():
             return jsonify(self.get_stats())
 
         @self.app.route("/api/retry", methods=["POST"])
+        @token_required
         def api_retry():
             data = request.json
             download_id = data.get("id")
@@ -172,6 +256,7 @@ class WebApp:
             return jsonify({"status": "ok"})
 
         @self.app.route("/api/stop", methods=["POST"])
+        @token_required
         def api_stop():
             data = request.json
             message_id = data.get("message_id")
@@ -188,6 +273,7 @@ class WebApp:
             return jsonify({"status": "stopped"})
 
         @self.app.route("/api/delete", methods=["POST"])
+        @token_required
         def api_delete():
             data = request.json
             message_id = data.get("message_id")

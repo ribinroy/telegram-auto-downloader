@@ -1,15 +1,61 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Search, Download, Wifi, WifiOff, Loader2, HardDrive, Clock, Zap } from 'lucide-react';
+import { Search, Download, Wifi, WifiOff, Loader2, HardDrive, Clock, Zap, LogOut, Settings } from 'lucide-react';
 import { formatBytes, formatSpeed } from './utils/format';
-import { fetchDownloads, fetchStats, retryDownload, stopDownload, deleteDownload, type SortBy, type SortOrder } from './api';
+import { fetchDownloads, fetchStats, retryDownload, stopDownload, deleteDownload, verifyToken, clearToken, getToken, type SortBy, type SortOrder } from './api';
 import { connectSocket, disconnectSocket, type ProgressUpdate, type StatusUpdate, type DeletedUpdate } from './api/socket';
 import { DownloadItem } from './components/DownloadItem';
+import { LoginPage } from './components/LoginPage';
+import { SettingsDialog } from './components/SettingsDialog';
 import type { Download as DownloadType, Stats } from './types';
 
 type TabType = 'active' | 'all';
 
 function App() {
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
+
+  // Check auth on mount
+  useEffect(() => {
+    const checkAuth = async () => {
+      if (!getToken()) {
+        setIsAuthenticated(false);
+        return;
+      }
+      const valid = await verifyToken();
+      setIsAuthenticated(valid);
+      if (!valid) clearToken();
+    };
+    checkAuth();
+  }, []);
+
+  const handleLogin = () => {
+    setIsAuthenticated(true);
+  };
+
+  const handleLogout = () => {
+    clearToken();
+    setIsAuthenticated(false);
+  };
+
+  // Show loading while checking auth
+  if (isAuthenticated === null) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center">
+        <Loader2 className="w-8 h-8 text-cyan-500 animate-spin" />
+      </div>
+    );
+  }
+
+  // Show login page if not authenticated
+  if (!isAuthenticated) {
+    return <LoginPage onLogin={handleLogin} />;
+  }
+
+  return <MainApp onLogout={handleLogout} />;
+}
+
+function MainApp({ onLogout }: { onLogout: () => void }) {
   const [downloads, setDownloads] = useState<DownloadType[]>([]);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [stats, setStats] = useState<Stats>({
     total_downloaded: 0,
     total_size: 0,
@@ -214,6 +260,22 @@ function App() {
               {connected ? <Wifi className="w-4 h-4" /> : <WifiOff className="w-4 h-4" />}
               <span className="text-sm">{connected ? 'Live' : 'Offline'}</span>
             </div>
+            {/* Settings button */}
+            <button
+              onClick={() => setSettingsOpen(true)}
+              className="p-2 bg-slate-700/50 hover:bg-slate-600/50 text-slate-400 hover:text-white rounded-lg transition-colors"
+              title="Settings"
+            >
+              <Settings className="w-4 h-4" />
+            </button>
+            {/* Logout button */}
+            <button
+              onClick={onLogout}
+              className="p-2 bg-slate-700/50 hover:bg-slate-600/50 text-slate-400 hover:text-white rounded-lg transition-colors"
+              title="Sign out"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
           </div>
         </div>
 
@@ -317,6 +379,9 @@ function App() {
         )}
 
       </div>
+
+      {/* Settings Dialog */}
+      <SettingsDialog isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>
   );
 }
