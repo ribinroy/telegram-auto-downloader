@@ -1,11 +1,39 @@
 import { io, Socket } from 'socket.io-client';
-import type { DownloadsResponse } from '../types';
+import type { Download } from '../types';
 
 const API_BASE = window.location.origin;
 
 let socket: Socket | null = null;
 
-export function connectSocket(onUpdate: (data: DownloadsResponse) => void): Socket {
+export interface ProgressUpdate {
+  message_id: number;
+  progress: number;
+  downloaded_bytes: number;
+  total_bytes: number;
+  speed: number;
+  pending_time: number | null;
+}
+
+export interface StatusUpdate {
+  message_id: number;
+  status: Download['status'];
+  error?: string;
+}
+
+export interface DeletedUpdate {
+  message_id: number;
+}
+
+export interface SocketHandlers {
+  onProgress: (data: ProgressUpdate) => void;
+  onStatus: (data: StatusUpdate) => void;
+  onNew: (data: Download) => void;
+  onDeleted: (data: DeletedUpdate) => void;
+  onConnect: () => void;
+  onDisconnect: () => void;
+}
+
+export function connectSocket(handlers: SocketHandlers): Socket {
   if (socket?.connected) {
     return socket;
   }
@@ -19,16 +47,19 @@ export function connectSocket(onUpdate: (data: DownloadsResponse) => void): Sock
 
   socket.on('connect', () => {
     console.log('WebSocket connected');
+    handlers.onConnect();
   });
 
   socket.on('disconnect', () => {
     console.log('WebSocket disconnected');
+    handlers.onDisconnect();
   });
 
-  // Listen for real-time updates only
-  socket.on('downloads_update', (data: DownloadsResponse) => {
-    onUpdate(data);
-  });
+  // Listen for specific events
+  socket.on('download:progress', handlers.onProgress);
+  socket.on('download:status', handlers.onStatus);
+  socket.on('download:new', handlers.onNew);
+  socket.on('download:deleted', handlers.onDeleted);
 
   socket.on('connect_error', (error) => {
     console.error('WebSocket connection error:', error);

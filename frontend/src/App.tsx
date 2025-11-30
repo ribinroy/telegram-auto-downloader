@@ -1,11 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useVirtualizer } from '@tanstack/react-virtual';
 import { Search, Download, Wifi, WifiOff, Loader2, HardDrive, Clock, Zap } from 'lucide-react';
 import { formatBytes, formatSpeed } from './utils/format';
 import { fetchDownloads, fetchStats, retryDownload, stopDownload, deleteDownload, type SortBy, type SortOrder } from './api';
-import { connectSocket, disconnectSocket } from './api/socket';
+import { connectSocket, disconnectSocket, type ProgressUpdate, type StatusUpdate, type DeletedUpdate } from './api/socket';
 import { DownloadItem } from './components/DownloadItem';
-import type { Download as DownloadType, Stats, DownloadsResponse } from './types';
+import type { Download as DownloadType, Stats } from './types';
 
 type TabType = 'active' | 'all';
 
@@ -22,6 +21,7 @@ function App() {
     active_count: 0,
   });
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -29,29 +29,82 @@ function App() {
   const [sortBy, setSortBy] = useState<SortBy>('created_at');
   const [sortOrder, setSortOrder] = useState<SortOrder>('asc');
 
-  // Handle real-time updates from WebSocket
-  const handleUpdate = useCallback((data: DownloadsResponse) => {
-    // Filter by search if needed
-    const query = search.toLowerCase();
-    let filtered = query
-      ? data.downloads.filter(d => d.file.toLowerCase().includes(query))
-      : data.downloads;
+  // Debounce search input
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [search]);
 
-    // Filter by active tab
-    if (activeTab === 'active') {
-      filtered = filtered.filter(d => d.status !== 'done');
+  // Handle progress updates - only update the specific download
+  const handleProgress = useCallback((data: ProgressUpdate) => {
+    setDownloads(prev => {
+      const updated = prev.map(d =>
+        d.message_id === data.message_id
+          ? { ...d, ...data }
+          : d
+      );
+      // Calculate total speed from all downloading items
+      const totalSpeed = updated
+        .filter(d => d.status === 'downloading')
+        .reduce((sum, d) => sum + (d.speed || 0), 0);
+
+      // Calculate total downloaded and pending bytes
+      const totalDownloaded = updated.reduce((sum, d) => sum + (d.downloaded_bytes || 0), 0);
+      const totalSize = updated.reduce((sum, d) => sum + (d.total_bytes || 0), 0);
+
+      setStats(prev => ({
+        ...prev,
+        total_speed: totalSpeed,
+        total_downloaded: totalDownloaded,
+        pending_bytes: totalSize - totalDownloaded
+      }));
+
+      return updated;
+    });
+  }, []);
+
+  // Handle status changes
+  const handleStatus = useCallback((data: StatusUpdate) => {
+    setDownloads(prev => {
+      const updated = prev.map(d =>
+        d.message_id === data.message_id
+          ? { ...d, status: data.status, error: data.error || null, speed: 0 }
+          : d
+      );
+      // If on active tab and status changed to done, remove it
+      if (activeTab === 'active' && data.status === 'done') {
+        return updated.filter(d => d.message_id !== data.message_id);
+      }
+      return updated;
+    });
+    // Refresh stats when status changes
+    fetchStats().then(setStats).catch(() => {});
+  }, [activeTab]);
+
+  // Handle new downloads
+  const handleNewDownload = useCallback((data: DownloadType) => {
+    // Only add if matches current filter
+    if (activeTab === 'all' || data.status !== 'done') {
+      setDownloads(prev => [data, ...prev]);
     }
+    // Refresh stats
+    fetchStats().then(setStats).catch(() => {});
+  }, [activeTab]);
 
-    setDownloads(filtered);
-    setStats(data.stats);
-    setError(null);
-  }, [search, activeTab]);
+  // Handle deleted downloads
+  const handleDeleted = useCallback((data: DeletedUpdate) => {
+    setDownloads(prev => prev.filter(d => d.message_id !== data.message_id));
+    // Refresh stats
+    fetchStats().then(setStats).catch(() => {});
+  }, []);
 
   // Fetch downloads via REST API
   const loadDownloads = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await fetchDownloads(search, activeTab, sortBy, sortOrder);
+      const data = await fetchDownloads(debouncedSearch, activeTab, sortBy, sortOrder);
       setDownloads(data.downloads);
       setError(null);
     } catch (err) {
@@ -59,9 +112,9 @@ function App() {
     } finally {
       setLoading(false);
     }
-  }, [search, activeTab, sortBy, sortOrder]);
+  }, [debouncedSearch, activeTab, sortBy, sortOrder]);
 
-  // Fetch stats via REST API (separate endpoint, always overall stats)
+  // Fetch stats via REST API
   const loadStats = useCallback(async () => {
     try {
       const statsData = await fetchStats();
@@ -81,52 +134,43 @@ function App() {
     loadStats();
   }, [loadStats]);
 
-  // Setup WebSocket for real-time updates only
+  // Setup WebSocket for real-time updates
   useEffect(() => {
-    const socket = connectSocket(handleUpdate);
-
-    socket.on('connect', () => setConnected(true));
-    socket.on('disconnect', () => setConnected(false));
-    socket.on('connect_error', () => {
-      setConnected(false);
+    connectSocket({
+      onProgress: handleProgress,
+      onStatus: handleStatus,
+      onNew: handleNewDownload,
+      onDeleted: handleDeleted,
+      onConnect: () => setConnected(true),
+      onDisconnect: () => setConnected(false),
     });
 
     return () => {
       disconnectSocket();
     };
-  }, [handleUpdate]);
+  }, [handleProgress, handleStatus, handleNewDownload, handleDeleted]);
 
   const handleRetry = async (id: number) => {
     await retryDownload(id);
   };
 
-  const handleStop = async (file: string) => {
-    await stopDownload(file);
+  const handleStop = async (message_id: number) => {
+    await stopDownload(message_id);
   };
 
-  const handleDelete = async (file: string) => {
-    if (confirm('Are you sure you want to delete this download?')) {
-      await deleteDownload(file);
-    }
+  const handleDelete = async (message_id: number) => {
+    await deleteDownload(message_id);
   };
 
   // Downloads are already filtered by the backend based on activeTab
   const filteredDownloads = downloads;
 
-  // Virtual scroll setup
-  const parentRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
   // Focus search on mount
   useEffect(() => {
     searchRef.current?.focus();
   }, []);
-  const rowVirtualizer = useVirtualizer({
-    count: filteredDownloads.length,
-    getScrollElement: () => parentRef.current,
-    estimateSize: () => 88, // Estimated row height in pixels
-    overscan: 5,
-  });
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
@@ -144,29 +188,29 @@ function App() {
           </div>
           <div className="flex items-center gap-3">
             {/* Stats - icon only with tooltips */}
-            <div className="group relative flex items-center gap-2 px-3 py-1.5 bg-slate-700/50 rounded-lg cursor-default">
+            <div className="group relative flex items-center gap-2 px-3 py-1.5 bg-slate-700/50 rounded-lg cursor-default min-w-[100px]">
               <HardDrive className="w-4 h-4 text-green-400" />
-              <span className="text-sm text-green-400">{formatBytes(stats.total_downloaded)}</span>
+              <span className="text-sm text-green-400 tabular-nums">{formatBytes(stats.total_downloaded)}</span>
               <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">
                 Downloaded
               </div>
             </div>
-            <div className="group relative flex items-center gap-2 px-3 py-1.5 bg-slate-700/50 rounded-lg cursor-default">
+            <div className="group relative flex items-center gap-2 px-3 py-1.5 bg-slate-700/50 rounded-lg cursor-default min-w-[100px]">
               <Clock className="w-4 h-4 text-yellow-400" />
-              <span className="text-sm text-yellow-400">{formatBytes(stats.pending_bytes)}</span>
+              <span className="text-sm text-yellow-400 tabular-nums">{formatBytes(stats.pending_bytes)}</span>
               <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">
                 Pending
               </div>
             </div>
-            <div className="group relative flex items-center gap-2 px-3 py-1.5 bg-slate-700/50 rounded-lg cursor-default">
+            <div className="group relative flex items-center gap-2 px-3 py-1.5 bg-slate-700/50 rounded-lg cursor-default min-w-[110px]">
               <Zap className="w-4 h-4 text-purple-400" />
-              <span className="text-sm text-purple-400">{formatSpeed(stats.total_speed)}</span>
+              <span className="text-sm text-purple-400 tabular-nums">{formatSpeed(stats.total_speed)}</span>
               <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">
                 Speed
               </div>
             </div>
             {/* Connection status */}
-            <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg ${connected ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
+            <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg min-w-[80px] ${connected ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
               {connected ? <Wifi className="w-4 h-4" /> : <WifiOff className="w-4 h-4" />}
               <span className="text-sm">{connected ? 'Live' : 'Offline'}</span>
             </div>
@@ -259,44 +303,16 @@ function App() {
             </p>
           </div>
         ) : (
-          <div
-            ref={parentRef}
-            className="h-[600px] overflow-auto"
-          >
-            <div
-              style={{
-                height: `${rowVirtualizer.getTotalSize()}px`,
-                width: '100%',
-                position: 'relative',
-              }}
-            >
-              {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-                const download = filteredDownloads[virtualRow.index];
-                return (
-                  <div
-                    key={download.id}
-                    style={{
-                      position: 'absolute',
-                      top: 0,
-                      left: 0,
-                      width: '100%',
-                      height: `${virtualRow.size}px`,
-                      transform: `translateY(${virtualRow.start}px)`,
-                    }}
-                  >
-                    <div className="pb-3">
-                      <DownloadItem
-                        download={download}
-                        index={virtualRow.index + 1}
-                        onRetry={handleRetry}
-                        onStop={handleStop}
-                        onDelete={handleDelete}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+          <div className="max-h-[600px] overflow-auto space-y-3">
+            {filteredDownloads.map((download) => (
+              <DownloadItem
+                key={download.id}
+                download={download}
+                onRetry={handleRetry}
+                onStop={handleStop}
+                onDelete={handleDelete}
+              />
+            ))}
           </div>
         )}
 

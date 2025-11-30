@@ -15,6 +15,7 @@ class Download(Base):
     __tablename__ = 'downloads'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    message_id = Column(BigInteger, nullable=True)  # Telegram message ID
     file = Column(String(500), nullable=False)
     status = Column(String(50), default='downloading')
     progress = Column(Float, default=0)
@@ -31,13 +32,14 @@ class Download(Base):
         """Convert model to dictionary"""
         return {
             'id': self.id,
+            'message_id': self.message_id,
             'file': self.file,
             'status': self.status,
             'progress': self.progress,
             'speed': self.speed,
             'error': self.error,
-            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
-            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': f"{self.updated_at.isoformat()}Z" if self.updated_at else None,
+            'created_at': f"{self.created_at.isoformat()}Z" if self.created_at else None,
             'downloaded_bytes': self.downloaded_bytes,
             'total_bytes': self.total_bytes,
             'pending_time': self.pending_time
@@ -79,12 +81,13 @@ class DatabaseManager:
         self.Session.remove()
 
     def add_download(self, file, status='downloading', progress=0, speed=0,
-                     error=None, downloaded_bytes=0, total_bytes=0, pending_time=None):
+                     error=None, downloaded_bytes=0, total_bytes=0, pending_time=None, message_id=None):
         """Add a new download entry"""
         session = self.get_session()
         try:
             now = datetime.utcnow()
             download = Download(
+                message_id=message_id,
                 file=file,
                 status=status,
                 progress=progress,
@@ -122,6 +125,21 @@ class DatabaseManager:
         session = self.get_session()
         try:
             download = session.query(Download).filter_by(id=download_id).first()
+            if download:
+                for key, value in kwargs.items():
+                    if hasattr(download, key):
+                        setattr(download, key, value)
+                session.commit()
+                return download.to_dict()
+            return None
+        finally:
+            self.close_session()
+
+    def update_download_by_message_id(self, message_id, **kwargs):
+        """Update a download entry by Telegram message ID"""
+        session = self.get_session()
+        try:
+            download = session.query(Download).filter_by(message_id=message_id).first()
             if download:
                 for key, value in kwargs.items():
                     if hasattr(download, key):
@@ -186,6 +204,29 @@ class DatabaseManager:
                 session.commit()
                 return True
             return False
+        finally:
+            self.close_session()
+
+    def delete_download_by_message_id(self, message_id):
+        """Soft delete a download entry by Telegram message ID"""
+        session = self.get_session()
+        try:
+            download = session.query(Download).filter_by(message_id=message_id).first()
+            if download:
+                download.is_deleted = True
+                download.updated_at = datetime.utcnow()
+                session.commit()
+                return True
+            return False
+        finally:
+            self.close_session()
+
+    def get_download_by_message_id(self, message_id):
+        """Get a download entry by Telegram message ID"""
+        session = self.get_session()
+        try:
+            download = session.query(Download).filter_by(message_id=message_id).first()
+            return download.to_dict() if download else None
         finally:
             self.close_session()
 
