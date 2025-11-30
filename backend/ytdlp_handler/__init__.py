@@ -382,7 +382,7 @@ class YtdlpDownloader:
             self.processes.pop(message_id, None)
             self.download_tasks.pop(message_id, None)
 
-    def start_download(self, url: str, loop, format_id: str = None, title: str = None, ext: str = None, filesize: int = None) -> dict:
+    def start_download(self, url: str, loop, format_id: str = None, title: str = None, ext: str = None, filesize: int = None, resolution: str = None) -> dict:
         """Start a new download and return the download info"""
         db = get_db()
 
@@ -399,8 +399,11 @@ class YtdlpDownloader:
         message_id = generate_uuid()
         domain = self.get_domain(url)
 
-        # Create initial filename from title
-        filename = f"{title}.{ext or 'mp4'}"
+        # Create initial filename from title, append resolution if provided
+        if resolution and resolution != 'best':
+            filename = f"{title}-{resolution}.{ext or 'mp4'}"
+        else:
+            filename = f"{title}.{ext or 'mp4'}"
 
         # Add to database
         new_download = db.add_download(

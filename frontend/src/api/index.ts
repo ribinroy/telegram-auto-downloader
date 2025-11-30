@@ -138,6 +138,7 @@ export interface DownloadOptions {
   title?: string;
   ext?: string;
   filesize?: number;
+  resolution?: string;
 }
 
 export async function downloadUrl(options: DownloadOptions): Promise<Download | { error: string }> {
@@ -176,15 +177,27 @@ export async function fetchSecuredSources(): Promise<string[]> {
   return response.json();
 }
 
+export async function fetchMappingBySource(source: string): Promise<DownloadTypeMap | null> {
+  const response = await fetch(`${API_BASE}/api/mappings/source/${encodeURIComponent(source)}`, {
+    headers: getAuthHeaders(),
+  });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  return response.json();
+}
+
 export async function addMapping(
   downloaded_from: string,
   is_secured: boolean,
-  folder: string | null
+  folder: string | null,
+  quality: string | null = null
 ): Promise<DownloadTypeMap | { error: string }> {
   const response = await fetch(`${API_BASE}/api/mappings`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-    body: JSON.stringify({ downloaded_from, is_secured, folder }),
+    body: JSON.stringify({ downloaded_from, is_secured, folder, quality }),
   });
   if (response.status === 401) {
     clearToken();
@@ -195,7 +208,7 @@ export async function addMapping(
 
 export async function updateMapping(
   id: number,
-  data: Partial<{ downloaded_from: string; is_secured: boolean; folder: string | null }>
+  data: Partial<{ downloaded_from: string; is_secured: boolean; folder: string | null; quality: string | null }>
 ): Promise<DownloadTypeMap | { error: string }> {
   const response = await fetch(`${API_BASE}/api/mappings/${id}`, {
     method: 'PUT',

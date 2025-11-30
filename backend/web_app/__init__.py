@@ -375,6 +375,7 @@ class WebApp:
             title = data.get("title")
             ext = data.get("ext")
             filesize = data.get("filesize")
+            resolution = data.get("resolution")
 
             if not url:
                 return jsonify({"error": "URL is required"}), 400
@@ -390,7 +391,8 @@ class WebApp:
                 format_id=format_id,
                 title=title,
                 ext=ext,
-                filesize=filesize
+                filesize=filesize,
+                resolution=resolution
             )
 
             if 'error' in result:
@@ -413,6 +415,16 @@ class WebApp:
             db = get_db()
             return jsonify(db.get_secured_sources())
 
+        @self.app.route("/api/mappings/source/<source>", methods=["GET"])
+        @token_required
+        def get_mapping_by_source(source):
+            """Get mapping for a specific source"""
+            db = get_db()
+            mapping = db.get_download_type_map(source)
+            if mapping:
+                return jsonify(mapping)
+            return jsonify(None)
+
         @self.app.route("/api/mappings", methods=["POST"])
         @token_required
         def add_mapping():
@@ -421,12 +433,13 @@ class WebApp:
             downloaded_from = data.get("downloaded_from")
             is_secured = data.get("is_secured", False)
             folder = data.get("folder")
+            quality = data.get("quality")
 
             if not downloaded_from:
                 return jsonify({"error": "downloaded_from is required"}), 400
 
             db = get_db()
-            result = db.add_download_type_map(downloaded_from, is_secured, folder)
+            result = db.add_download_type_map(downloaded_from, is_secured, folder, quality)
 
             if 'error' in result:
                 return jsonify(result), 400
@@ -447,6 +460,8 @@ class WebApp:
                 update_data["is_secured"] = data["is_secured"]
             if "folder" in data:
                 update_data["folder"] = data["folder"]
+            if "quality" in data:
+                update_data["quality"] = data["quality"]
 
             result = db.update_download_type_map(map_id, **update_data)
 

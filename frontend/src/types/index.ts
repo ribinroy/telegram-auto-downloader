@@ -60,6 +60,7 @@ export interface DownloadTypeMap {
   downloaded_from: string;
   is_secured: boolean;
   folder: string | null;
+  quality: string | null;
   created_at: string;
   updated_at: string;
 }
