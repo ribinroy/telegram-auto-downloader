@@ -19,8 +19,11 @@ JWT_EXPIRY_DAYS = 30  # Keep signed in for 30 days
 # Global socketio instance for broadcasting from other modules
 socketio = None
 
-# Track yt-dlp downloads that should be stopped
-ytdlp_stop_flags = {}
+# Track yt-dlp download processes for cancellation
+import threading
+import subprocess
+import signal
+ytdlp_processes = {}  # message_id -> subprocess.Popen
 
 # Frontend dist directory
 FRONTEND_DIST = Path(__file__).parent.parent.parent / "frontend" / "dist"
@@ -270,8 +273,14 @@ class WebApp:
             if task and not task.done():
                 task.cancel()
 
-            # Set stop flag for yt-dlp downloads
-            ytdlp_stop_flags[message_id] = True
+            # Kill yt-dlp process if running
+            proc = ytdlp_processes.pop(message_id, None)
+            if proc and proc.poll() is None:
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=2)
+                except:
+                    proc.kill()
 
             # Update database status to stopped
             db.update_download_by_message_id(message_id, status='stopped', speed=0)
@@ -292,8 +301,14 @@ class WebApp:
                 db.update_download_by_message_id(message_id, status='stopped', speed=0)
             self.download_tasks.pop(message_id, None)
 
-            # Set stop flag for yt-dlp downloads
-            ytdlp_stop_flags[message_id] = True
+            # Kill yt-dlp process if running
+            proc = ytdlp_processes.pop(message_id, None)
+            if proc and proc.poll() is None:
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=2)
+                except:
+                    proc.kill()
 
             # Soft delete from database
             db.delete_download_by_message_id(message_id)
@@ -310,7 +325,6 @@ class WebApp:
                 return jsonify({"error": "URL is required"}), 400
 
             import uuid
-            import threading
             from urllib.parse import urlparse
 
             # Extract domain from URL
@@ -321,7 +335,9 @@ class WebApp:
                 domain = 'unknown'
 
             db = get_db()
-            message_id = uuid.uuid4().int >> 64  # Use UUID as unique identifier (64-bit int)
+            # Generate a unique message_id that fits within JavaScript's MAX_SAFE_INTEGER (2^53-1)
+            # UUID is 128 bits, shift right by 75 to get ~53 bits
+            message_id = uuid.uuid4().int >> 75
 
             # First check if yt-dlp supports this URL
             try:
@@ -353,73 +369,182 @@ class WebApp:
             if socketio:
                 socketio.emit('download:new', download)
 
-            # Start download in background thread
+            # Start download in background thread using subprocess
             def download_video():
+                import re
+                import json
                 from backend.config import DOWNLOAD_DIR
+
                 try:
-                    def progress_hook(d):
-                        # Check if download was stopped
-                        if ytdlp_stop_flags.get(message_id):
-                            raise Exception("Download stopped by user")
+                    # Run yt-dlp as subprocess with progress output
+                    # Use the venv's yt-dlp executable
+                    venv_ytdlp = Path(__file__).parent.parent.parent / 'venv' / 'bin' / 'yt-dlp'
+                    cmd = [
+                        str(venv_ytdlp),
+                        '--newline',
+                        '--progress',
+                        '--progress-template', '%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s|%(progress._downloaded_bytes_str)s|%(progress._total_bytes_str)s',
+                        '-o', str(DOWNLOAD_DIR / '%(title)s.%(ext)s'),
+                        url
+                    ]
 
-                        if d['status'] == 'downloading':
-                            total = d.get('total_bytes') or d.get('total_bytes_estimate') or 0
-                            downloaded = d.get('downloaded_bytes', 0)
-                            speed_bps = d.get('speed', 0) or 0
-                            speed = round(speed_bps / 1024, 1)  # Convert to KB/s to match Telegram handler
-                            progress = (downloaded / total * 100) if total > 0 else 0
-                            eta = d.get('eta', 0) or 0
+                    proc = subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        bufsize=1
+                    )
 
+                    # Store process for cancellation
+                    ytdlp_processes[message_id] = proc
+
+                    # Parse progress output
+                    for line in proc.stdout:
+                        line = line.strip()
+                        if not line:
+                            continue
+
+                        # Check if process was killed
+                        if proc.poll() is not None:
+                            break
+
+                        # Parse progress line: percent|speed|eta|downloaded|total
+                        if '|' in line and '%' in line:
+                            try:
+                                parts = line.split('|')
+                                if len(parts) >= 5:
+                                    percent_str = parts[0].strip().replace('%', '')
+                                    speed_str = parts[1].strip()
+                                    eta_str = parts[2].strip()
+                                    downloaded_str = parts[3].strip()
+                                    total_str = parts[4].strip()
+
+                                    # Parse percent
+                                    try:
+                                        progress = float(percent_str)
+                                    except:
+                                        progress = 0
+
+                                    # Parse speed (convert to KB/s)
+                                    speed = 0
+                                    if speed_str and speed_str != 'N/A':
+                                        try:
+                                            speed_match = re.search(r'([\d.]+)\s*(B|K|M|G)', speed_str, re.I)
+                                            if speed_match:
+                                                val = float(speed_match.group(1))
+                                                unit = speed_match.group(2).upper()
+                                                if unit == 'B':
+                                                    speed = val / 1024
+                                                elif unit == 'K':
+                                                    speed = val
+                                                elif unit == 'M':
+                                                    speed = val * 1024
+                                                elif unit == 'G':
+                                                    speed = val * 1024 * 1024
+                                        except:
+                                            pass
+
+                                    # Parse ETA (convert to seconds)
+                                    eta = 0
+                                    if eta_str and eta_str != 'N/A':
+                                        try:
+                                            # Format: HH:MM:SS or MM:SS or SS
+                                            time_parts = eta_str.split(':')
+                                            if len(time_parts) == 3:
+                                                eta = int(time_parts[0]) * 3600 + int(time_parts[1]) * 60 + int(time_parts[2])
+                                            elif len(time_parts) == 2:
+                                                eta = int(time_parts[0]) * 60 + int(time_parts[1])
+                                            else:
+                                                eta = int(time_parts[0])
+                                        except:
+                                            pass
+
+                                    # Parse bytes
+                                    def parse_bytes(s):
+                                        if not s or s == 'N/A':
+                                            return 0
+                                        try:
+                                            match = re.search(r'([\d.]+)\s*(B|K|M|G)', s, re.I)
+                                            if match:
+                                                val = float(match.group(1))
+                                                unit = match.group(2).upper()
+                                                if unit == 'B':
+                                                    return int(val)
+                                                elif unit == 'K':
+                                                    return int(val * 1024)
+                                                elif unit == 'M':
+                                                    return int(val * 1024 * 1024)
+                                                elif unit == 'G':
+                                                    return int(val * 1024 * 1024 * 1024)
+                                        except:
+                                            pass
+                                        return 0
+
+                                    downloaded = parse_bytes(downloaded_str)
+                                    total = parse_bytes(total_str)
+
+                                    db.update_download_by_message_id(
+                                        message_id,
+                                        progress=progress,
+                                        downloaded_bytes=downloaded,
+                                        total_bytes=total,
+                                        speed=round(speed, 1),
+                                        pending_time=eta
+                                    )
+
+                                    if socketio:
+                                        socketio.emit('download:progress', {
+                                            'message_id': message_id,
+                                            'progress': progress,
+                                            'downloaded_bytes': downloaded,
+                                            'total_bytes': total,
+                                            'speed': round(speed, 1),
+                                            'pending_time': eta
+                                        })
+                            except Exception as parse_err:
+                                pass  # Ignore parse errors, continue
+
+                    # Wait for process to finish
+                    return_code = proc.wait()
+
+                    # Clean up
+                    ytdlp_processes.pop(message_id, None)
+
+                    if return_code == 0:
+                        db.update_download_by_message_id(
+                            message_id,
+                            status='done',
+                            progress=100,
+                            speed=0
+                        )
+                        if socketio:
+                            socketio.emit('download:status', {
+                                'message_id': message_id,
+                                'status': 'done'
+                            })
+                    elif return_code == -signal.SIGTERM or return_code == -signal.SIGKILL:
+                        # Process was killed by stop/delete - status already updated
+                        pass
+                    else:
+                        # Check if it was stopped manually (status already set)
+                        current = db.get_download_by_message_id(message_id)
+                        if current and current.get('status') not in ('stopped', 'done'):
                             db.update_download_by_message_id(
                                 message_id,
-                                progress=progress,
-                                downloaded_bytes=downloaded,
-                                total_bytes=total,
-                                speed=speed,
-                                pending_time=eta
-                            )
-
-                            if socketio:
-                                socketio.emit('download:progress', {
-                                    'message_id': message_id,
-                                    'progress': progress,
-                                    'downloaded_bytes': downloaded,
-                                    'total_bytes': total,
-                                    'speed': speed,
-                                    'pending_time': eta
-                                })
-                        elif d['status'] == 'finished':
-                            # Clean up stop flag
-                            ytdlp_stop_flags.pop(message_id, None)
-                            db.update_download_by_message_id(
-                                message_id,
-                                status='done',
-                                progress=100,
+                                status='failed',
+                                error=f'Download failed with exit code {return_code}',
                                 speed=0
                             )
                             if socketio:
                                 socketio.emit('download:status', {
                                     'message_id': message_id,
-                                    'status': 'done'
+                                    'status': 'failed',
+                                    'error': f'Download failed with exit code {return_code}'
                                 })
 
-                    ydl_opts = {
-                        'outtmpl': str(DOWNLOAD_DIR / '%(title)s.%(ext)s'),
-                        'progress_hooks': [progress_hook],
-                        'quiet': True,
-                    }
-
-                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                        ydl.download([url])
-
                 except Exception as e:
-                    # Clean up stop flag
-                    ytdlp_stop_flags.pop(message_id, None)
-
-                    # If stopped by user, don't update status (already set by stop/delete endpoint)
-                    if "stopped by user" in str(e).lower():
-                        return
-
+                    ytdlp_processes.pop(message_id, None)
                     db.update_download_by_message_id(
                         message_id,
                         status='failed',
