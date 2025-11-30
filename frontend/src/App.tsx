@@ -458,11 +458,15 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
       </button>
 
       {/* Settings Dialog */}
-      <SettingsDialog isOpen={settingsOpen} onClose={() => {
-        setSettingsOpen(false);
-        // Reload secured sources in case mappings were changed
-        loadSecuredSources();
-      }} />
+      <SettingsDialog
+        isOpen={settingsOpen}
+        onClose={() => {
+          setSettingsOpen(false);
+          // Reload secured sources in case mappings were changed
+          loadSecuredSources();
+        }}
+        showMappings={showSecured}
+      />
 
       {/* Add URL Modal */}
       <AddUrlModal
