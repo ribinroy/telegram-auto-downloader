@@ -1,4 +1,4 @@
-import type { DownloadsResponse, Stats, UrlCheckResult, Download } from '../types';
+import type { DownloadsResponse, Stats, UrlCheckResult, Download, DownloadTypeMap } from '../types';
 
 const API_BASE = '';
 const TOKEN_KEY = 'auth_token';
@@ -132,15 +132,107 @@ export async function checkUrl(url: string): Promise<UrlCheckResult> {
   return response.json();
 }
 
-export async function downloadUrl(url: string): Promise<Download | { error: string }> {
+export interface DownloadOptions {
+  url: string;
+  format_id?: string;
+  title?: string;
+  ext?: string;
+  filesize?: number;
+  resolution?: string;
+}
+
+export async function downloadUrl(options: DownloadOptions): Promise<Download | { error: string }> {
   const response = await fetch(`${API_BASE}/api/url/download`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-    body: JSON.stringify({ url }),
+    body: JSON.stringify(options),
   });
   if (response.status === 401) {
     clearToken();
     window.location.reload();
   }
   return response.json();
+}
+
+// Download type mappings API
+export async function fetchMappings(): Promise<DownloadTypeMap[]> {
+  const response = await fetch(`${API_BASE}/api/mappings`, {
+    headers: getAuthHeaders(),
+  });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  return response.json();
+}
+
+export async function fetchSecuredSources(): Promise<string[]> {
+  const response = await fetch(`${API_BASE}/api/mappings/secured`, {
+    headers: getAuthHeaders(),
+  });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  return response.json();
+}
+
+export async function fetchMappingBySource(source: string): Promise<DownloadTypeMap | null> {
+  const response = await fetch(`${API_BASE}/api/mappings/source/${encodeURIComponent(source)}`, {
+    headers: getAuthHeaders(),
+  });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  return response.json();
+}
+
+export async function addMapping(
+  downloaded_from: string,
+  is_secured: boolean,
+  folder: string | null,
+  quality: string | null = null
+): Promise<DownloadTypeMap | { error: string }> {
+  const response = await fetch(`${API_BASE}/api/mappings`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ downloaded_from, is_secured, folder, quality }),
+  });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  return response.json();
+}
+
+export async function updateMapping(
+  id: number,
+  data: Partial<{ downloaded_from: string; is_secured: boolean; folder: string | null; quality: string | null }>
+): Promise<DownloadTypeMap | { error: string }> {
+  const response = await fetch(`${API_BASE}/api/mappings/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify(data),
+  });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  return response.json();
+}
+
+export async function deleteMapping(id: number): Promise<void> {
+  const response = await fetch(`${API_BASE}/api/mappings/${id}`, {
+    method: 'DELETE',
+    headers: getAuthHeaders(),
+  });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error || 'Failed to delete mapping');
+  }
 }
