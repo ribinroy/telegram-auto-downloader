@@ -6,15 +6,12 @@ import os
 import sys
 from pathlib import Path
 
-# Add src to path for testing
-sys.path.insert(0, str(Path(__file__).parent / "src"))
-
 def test_config():
     """Test configuration loading"""
     try:
         # Test without dotenv first
         print("Testing configuration loading...")
-        from config import API_ID, API_HASH, CHAT_ID, WEB_PORT, validate_config
+        from backend.config import API_ID, API_HASH, CHAT_ID, WEB_PORT, validate_config
         print(f"✅ Configuration loaded successfully!")
         print(f"   API_ID: {API_ID}")
         print(f"   API_HASH: {API_HASH[:10]}...")

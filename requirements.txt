@@ -1,5 +1,8 @@
 telethon>=1.28.0
 flask>=2.3.0
+flask-cors>=6.0.0
+flask-socketio>=5.5.0
+python-socketio>=5.15.0
 python-dotenv>=1.0.0
 asyncio
 pathlib
