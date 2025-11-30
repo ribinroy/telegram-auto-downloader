@@ -1,9 +1,12 @@
-import { useState, useEffect, useCallback } from 'react';
-import { Search, Download, RefreshCw } from 'lucide-react';
-import { fetchDownloads, retryDownload, stopDownload, deleteDownload } from './api';
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import { Search, Download, RefreshCw, Wifi, WifiOff } from 'lucide-react';
+import { retryDownload, stopDownload, deleteDownload } from './api';
+import { connectSocket, disconnectSocket, requestDownloads } from './api/socket';
 import { StatsHeader } from './components/StatsHeader';
 import { DownloadItem } from './components/DownloadItem';
-import type { Download as DownloadType, Stats } from './types';
+import type { Download as DownloadType, Stats, DownloadsResponse } from './types';
+
+type TabType = 'active' | 'all';
 
 function App() {
   const [downloads, setDownloads] = useState<DownloadType[]>([]);
@@ -16,44 +19,74 @@ function App() {
     total_count: 0,
   });
   const [search, setSearch] = useState('');
-  const [loading, setLoading] = useState(true);
+  const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<TabType>('active');
 
-  const loadData = useCallback(async () => {
-    try {
-      const data = await fetchDownloads(search);
-      setDownloads(data.downloads);
-      setStats(data.stats);
-      setError(null);
-    } catch (err) {
-      setError('Failed to connect to server');
-    } finally {
-      setLoading(false);
-    }
+  const handleUpdate = useCallback((data: DownloadsResponse) => {
+    // Filter by search if needed
+    const query = search.toLowerCase();
+    const filtered = query
+      ? data.downloads.filter(d => d.file.toLowerCase().includes(query))
+      : data.downloads;
+
+    setDownloads(filtered);
+    setStats(data.stats);
+    setError(null);
+    setConnected(true);
   }, [search]);
 
   useEffect(() => {
-    loadData();
-    const interval = setInterval(loadData, 2000);
-    return () => clearInterval(interval);
-  }, [loadData]);
+    const socket = connectSocket(handleUpdate);
+
+    socket.on('connect', () => setConnected(true));
+    socket.on('disconnect', () => setConnected(false));
+    socket.on('connect_error', () => {
+      setConnected(false);
+      setError('Failed to connect to server');
+    });
+
+    return () => {
+      disconnectSocket();
+    };
+  }, [handleUpdate]);
+
+  // Request filtered data when search changes
+  useEffect(() => {
+    if (connected) {
+      requestDownloads(search);
+    }
+  }, [search, connected]);
 
   const handleRetry = async (id: number) => {
     await retryDownload(id);
-    loadData();
   };
 
   const handleStop = async (file: string) => {
     await stopDownload(file);
-    loadData();
   };
 
   const handleDelete = async (file: string) => {
     if (confirm('Are you sure you want to delete this download?')) {
       await deleteDownload(file);
-      loadData();
     }
   };
+
+  const handleRefresh = () => {
+    requestDownloads(search);
+  };
+
+  // Filter downloads based on active tab
+  const filteredDownloads = useMemo(() => {
+    if (activeTab === 'active') {
+      return downloads.filter(d => d.status !== 'done');
+    }
+    return downloads;
+  }, [downloads, activeTab]);
+
+  const activeCount = useMemo(() => {
+    return downloads.filter(d => d.status !== 'done').length;
+  }, [downloads]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
@@ -69,17 +102,47 @@ function App() {
               <p className="text-slate-400 text-sm">Monitor your downloads in real-time</p>
             </div>
           </div>
-          <button
-            onClick={loadData}
-            className="p-2 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-lg transition-colors"
-            title="Refresh"
-          >
-            <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} />
-          </button>
+          <div className="flex items-center gap-3">
+            <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg ${connected ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
+              {connected ? <Wifi className="w-4 h-4" /> : <WifiOff className="w-4 h-4" />}
+              <span className="text-sm">{connected ? 'Live' : 'Offline'}</span>
+            </div>
+            <button
+              onClick={handleRefresh}
+              className="p-2 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-lg transition-colors"
+              title="Refresh"
+            >
+              <RefreshCw className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         {/* Stats */}
         <StatsHeader stats={stats} />
+
+        {/* Tabs */}
+        <div className="flex gap-2 mb-4">
+          <button
+            onClick={() => setActiveTab('active')}
+            className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+              activeTab === 'active'
+                ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/50'
+                : 'bg-slate-800/50 text-slate-400 border border-slate-700 hover:bg-slate-700/50'
+            }`}
+          >
+            Active {activeCount > 0 && `(${activeCount})`}
+          </button>
+          <button
+            onClick={() => setActiveTab('all')}
+            className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+              activeTab === 'all'
+                ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/50'
+                : 'bg-slate-800/50 text-slate-400 border border-slate-700 hover:bg-slate-700/50'
+            }`}
+          >
+            All ({downloads.length})
+          </button>
+        </div>
 
         {/* Search */}
         <div className="relative mb-6">
@@ -102,14 +165,18 @@ function App() {
 
         {/* Downloads List */}
         <div className="space-y-3">
-          {downloads.length === 0 ? (
+          {filteredDownloads.length === 0 ? (
             <div className="text-center py-12 text-slate-400">
               <Download className="w-12 h-12 mx-auto mb-4 opacity-50" />
-              <p>No downloads yet</p>
-              <p className="text-sm">Files sent to your Telegram chat will appear here</p>
+              <p>{activeTab === 'active' ? 'No active downloads' : 'No downloads yet'}</p>
+              <p className="text-sm">
+                {activeTab === 'active'
+                  ? 'All downloads are complete'
+                  : 'Files sent to your Telegram chat will appear here'}
+              </p>
             </div>
           ) : (
-            downloads.map((download) => (
+            filteredDownloads.map((download) => (
               <DownloadItem
                 key={download.id}
                 download={download}

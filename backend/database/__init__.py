@@ -20,7 +20,8 @@ class Download(Base):
     progress = Column(Float, default=0)
     speed = Column(Float, default=0)
     error = Column(Text, nullable=True)
-    timestamp = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow)
     downloaded_bytes = Column(BigInteger, default=0)
     total_bytes = Column(BigInteger, default=0)
     pending_time = Column(Float, nullable=True)
@@ -34,7 +35,8 @@ class Download(Base):
             'progress': self.progress,
             'speed': self.speed,
             'error': self.error,
-            'timestamp': self.timestamp.isoformat() if self.timestamp else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
             'downloaded_bytes': self.downloaded_bytes,
             'total_bytes': self.total_bytes,
             'pending_time': self.pending_time
@@ -62,13 +64,15 @@ class DatabaseManager:
         """Add a new download entry"""
         session = self.get_session()
         try:
+            now = datetime.utcnow()
             download = Download(
                 file=file,
                 status=status,
                 progress=progress,
                 speed=speed,
                 error=error,
-                timestamp=datetime.utcnow(),
+                updated_at=now,
+                created_at=now,
                 downloaded_bytes=downloaded_bytes,
                 total_bytes=total_bytes,
                 pending_time=pending_time
@@ -128,10 +132,10 @@ class DatabaseManager:
             self.close_session()
 
     def get_all_downloads(self):
-        """Get all downloads ordered by timestamp descending"""
+        """Get all downloads ordered by updated_at descending"""
         session = self.get_session()
         try:
-            downloads = session.query(Download).order_by(Download.timestamp.desc()).all()
+            downloads = session.query(Download).order_by(Download.updated_at.desc()).all()
             return [d.to_dict() for d in downloads]
         finally:
             self.close_session()
