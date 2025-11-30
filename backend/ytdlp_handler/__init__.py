@@ -6,11 +6,14 @@ import subprocess
 import json
 import re
 import os
+import logging
 from datetime import datetime
 from urllib.parse import urlparse
 from backend.config import DOWNLOAD_DIR
 from backend.database import get_db, generate_uuid
 from backend.web_app import get_socketio
+
+logger = logging.getLogger(__name__)
 
 
 class YtdlpDownloader:
@@ -100,8 +103,9 @@ class YtdlpDownloader:
 
     def parse_progress(self, line: str) -> dict | None:
         """Parse yt-dlp progress output"""
-        # Match pattern like: [download]  45.2% of 150.00MiB at 2.50MiB/s ETA 00:35
-        progress_pattern = r'\[download\]\s+(\d+\.?\d*)%\s+of\s+~?(\d+\.?\d*)(Ki?B|Mi?B|Gi?B)\s+at\s+(\d+\.?\d*)(Ki?B|Mi?B|Gi?B)/s\s+ETA\s+(\d+:\d+(?::\d+)?)'
+        # Match pattern like: [download]  45.2% of ~  85.48MiB at  831.64KiB/s ETA 01:01 (frag 101/247)
+        # Also matches: [download]  45.2% of 150.00MiB at 2.50MiB/s ETA 00:35
+        progress_pattern = r'\[download\]\s+(\d+\.?\d*)%\s+of\s+~?\s*(\d+\.?\d*)\s*(Ki?B|Mi?B|Gi?B)\s+at\s+(\d+\.?\d*)\s*(Ki?B|Mi?B|Gi?B)/s\s+ETA\s+(\d+:\d+(?::\d+)?)'
         match = re.search(progress_pattern, line)
 
         if match:
@@ -143,7 +147,10 @@ class YtdlpDownloader:
 
     async def download(self, url: str, message_id: str):
         """Download video using yt-dlp with progress tracking"""
+        import sys
         db = get_db()
+        print(f"[yt-dlp] Starting download: {url} (id: {message_id})", flush=True)
+        sys.stdout.flush()
 
         # Create output template
         output_dir = DOWNLOAD_DIR / "Videos"
@@ -151,6 +158,7 @@ class YtdlpDownloader:
         output_template = str(output_dir / "%(title)s.%(ext)s")
 
         try:
+            print(f"[yt-dlp] Output dir: {output_dir}")
             process = await asyncio.create_subprocess_exec(
                 'yt-dlp',
                 '--newline',  # Output progress on new lines
@@ -160,6 +168,7 @@ class YtdlpDownloader:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT
             )
+            print(f"[yt-dlp] Process started: PID {process.pid}")
 
             self.processes[message_id] = process
             last_update = 0
@@ -169,6 +178,9 @@ class YtdlpDownloader:
 
                 if not line_str:
                     continue
+
+                # Log all output for debugging
+                print(f"[yt-dlp] {line_str}")
 
                 # Parse progress
                 progress_info = self.parse_progress(line_str)
@@ -219,6 +231,7 @@ class YtdlpDownloader:
                     return
 
             await process.wait()
+            print(f"[yt-dlp] Process exited with code: {process.returncode}")
 
             if process.returncode == 0:
                 db.update_download_by_message_id(
@@ -229,6 +242,7 @@ class YtdlpDownloader:
                     pending_time=0
                 )
                 self.emit_status(message_id, 'done')
+                print(f"[yt-dlp] Download completed: {message_id}")
             else:
                 db.update_download_by_message_id(
                     message_id,
@@ -237,8 +251,10 @@ class YtdlpDownloader:
                     error='Download failed'
                 )
                 self.emit_status(message_id, 'failed', 'Download failed')
+                print(f"[yt-dlp] Download failed: {message_id}")
 
         except asyncio.CancelledError:
+            print(f"[yt-dlp] Download cancelled: {message_id}")
             # Kill the process if cancelled
             if message_id in self.processes:
                 self.processes[message_id].terminate()
@@ -250,6 +266,9 @@ class YtdlpDownloader:
             db.update_download_by_message_id(message_id, status='stopped', speed=0)
             self.emit_status(message_id, 'stopped')
         except Exception as e:
+            print(f"[yt-dlp] Download error: {e}")
+            import traceback
+            traceback.print_exc()
             db.update_download_by_message_id(
                 message_id,
                 status='failed',
@@ -298,11 +317,25 @@ class YtdlpDownloader:
         self.emit_new_download(new_download)
 
         # Start download task
-        task = asyncio.run_coroutine_threadsafe(
+        import sys
+        print(f"[yt-dlp] Scheduling download task for {message_id}", flush=True)
+        sys.stdout.flush()
+        future = asyncio.run_coroutine_threadsafe(
             self.download(url, message_id),
             loop
         )
-        self.download_tasks[message_id] = task
+
+        # Add callback to catch any errors
+        def on_done(fut):
+            try:
+                fut.result()
+            except Exception as e:
+                print(f"[yt-dlp] Task error: {e}")
+                import traceback
+                traceback.print_exc()
+
+        future.add_done_callback(on_done)
+        self.download_tasks[message_id] = future
 
         return new_download
 

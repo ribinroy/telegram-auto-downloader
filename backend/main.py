@@ -78,12 +78,18 @@ def main():
     # Run event loop in a separate thread for yt-dlp async operations
     def run_loop():
         asyncio.set_event_loop(loop)
+        print("🔄 Event loop starting...")
         loop.run_forever()
 
     loop_thread = threading.Thread(target=run_loop, daemon=True)
     loop_thread.start()
 
+    # Give the loop thread a moment to start
+    import time
+    time.sleep(0.5)
+
     print("🎬 yt-dlp downloader ready")
+    print(f"   Event loop running: {loop.is_running()}")
 
     # Start Telegram client (this will block)
     telegram_downloader.start()
