@@ -1,4 +1,4 @@
-import { Download, HardDrive, Clock, Zap } from 'lucide-react';
+import { HardDrive, Clock, Zap } from 'lucide-react';
 import type { Stats } from '../types';
 import { formatBytes, formatSpeed } from '../utils/format';
 
@@ -8,21 +8,7 @@ interface StatsHeaderProps {
 
 export function StatsHeader({ stats }: StatsHeaderProps) {
   return (
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-      <div className="bg-slate-800/50 rounded-xl p-4 border border-slate-700">
-        <div className="flex items-center gap-3">
-          <div className="p-2 bg-blue-500/20 rounded-lg">
-            <Download className="w-5 h-5 text-blue-400" />
-          </div>
-          <div>
-            <p className="text-slate-400 text-sm">Downloads</p>
-            <p className="text-white font-semibold">
-              {stats.downloaded_count} / {stats.total_count}
-            </p>
-          </div>
-        </div>
-      </div>
-
+    <div className="grid grid-cols-3 gap-4 mb-6">
       <div className="bg-slate-800/50 rounded-xl p-4 border border-slate-700">
         <div className="flex items-center gap-3">
           <div className="p-2 bg-green-500/20 rounded-lg">

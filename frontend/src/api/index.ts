@@ -1,11 +1,21 @@
 import type { DownloadsResponse, Stats } from '../types';
 
-const API_BASE = 'http://192.168.0.135:4444';
+const API_BASE = 'http://192.168.0.135:4447';
 
-export async function fetchDownloads(search?: string, filter: 'all' | 'active' = 'all'): Promise<DownloadsResponse> {
+export type SortBy = 'created_at' | 'file' | 'status' | 'progress';
+export type SortOrder = 'asc' | 'desc';
+
+export async function fetchDownloads(
+  search?: string,
+  filter: 'all' | 'active' = 'all',
+  sortBy: SortBy = 'created_at',
+  sortOrder: SortOrder = 'desc'
+): Promise<DownloadsResponse> {
   const params = new URLSearchParams();
   if (search) params.set('search', search);
   params.set('filter', filter);
+  params.set('sort_by', sortBy);
+  params.set('sort_order', sortOrder);
 
   const url = `${API_BASE}/api/downloads?${params.toString()}`;
   const response = await fetch(url);

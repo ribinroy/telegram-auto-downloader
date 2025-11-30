@@ -109,13 +109,14 @@ export function DownloadItem({ download, index, onRetry, onStop, onDelete }: Dow
   return (
     <div className="bg-slate-800/30 rounded-xl p-4 border border-slate-700/50 hover:border-slate-600 transition-all">
       <div className="flex items-start gap-4">
-        {/* Index number */}
-        <div className="flex items-center justify-center w-8 h-8 bg-slate-700/50 rounded-lg text-slate-400 text-sm font-medium">
-          {index}
-        </div>
-
-        <div className="p-2 bg-slate-700/50 rounded-lg">
-          {getFileIcon(download.file)}
+        {/* Index + File Icon combined */}
+        <div className="relative">
+          <div className="p-2.5 bg-slate-700/50 rounded-lg">
+            {getFileIcon(download.file)}
+          </div>
+          <div className="absolute -top-1.5 -left-1.5 flex items-center justify-center w-5 h-5 bg-slate-600 rounded-full text-slate-300 text-xs font-medium border border-slate-500">
+            {index}
+          </div>
         </div>
 
         <div className="flex-1 min-w-0">
@@ -170,7 +171,7 @@ export function DownloadItem({ download, index, onRetry, onStop, onDelete }: Dow
 
             {/* Action buttons */}
             <div className="flex gap-2">
-              {(download.status === 'failed' || download.status === 'stopped') && (
+              {download.status === 'failed' && (
                 <button
                   onClick={() => onRetry(download.id)}
                   className="p-2 bg-green-500/20 hover:bg-green-500/30 text-green-400 rounded-lg transition-colors"
