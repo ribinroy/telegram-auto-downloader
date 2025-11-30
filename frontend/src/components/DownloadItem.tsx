@@ -18,8 +18,8 @@ import { formatBytes, formatTime, formatSpeed } from '../utils/format';
 interface DownloadItemProps {
   download: Download;
   onRetry: (id: number) => void;
-  onStop: (message_id: number) => void;
-  onDelete: (message_id: number) => void;
+  onStop: (message_id: string) => void;
+  onDelete: (message_id: string) => void;
 }
 
 function getFileIcon(filename: string) {

@@ -200,11 +200,11 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
     await retryDownload(id);
   };
 
-  const handleStop = async (message_id: number) => {
+  const handleStop = async (message_id: string) => {
     await stopDownload(message_id);
   };
 
-  const handleDelete = async (message_id: number) => {
+  const handleDelete = async (message_id: string) => {
     await deleteDownload(message_id);
   };
 

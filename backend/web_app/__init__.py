@@ -158,13 +158,17 @@ class WebApp:
             "active_count": active_count
         }
 
-    def emit_status(self, message_id: int, status: str):
+    def emit_status(self, message_id, status: str):
         """Emit status change for a specific download"""
-        self.socketio.emit('download:status', {'message_id': message_id, 'status': status})
+        # Ensure message_id is sent as string to avoid JS precision loss
+        msg_id_str = str(message_id) if message_id else None
+        self.socketio.emit('download:status', {'message_id': msg_id_str, 'status': status})
 
-    def emit_deleted(self, message_id: int):
+    def emit_deleted(self, message_id):
         """Emit download deleted event"""
-        self.socketio.emit('download:deleted', {'message_id': message_id})
+        # Ensure message_id is sent as string to avoid JS precision loss
+        msg_id_str = str(message_id) if message_id else None
+        self.socketio.emit('download:deleted', {'message_id': msg_id_str})
 
     def setup_routes(self):
         """Setup Flask API routes"""
@@ -259,7 +263,8 @@ class WebApp:
         @token_required
         def api_stop():
             data = request.json
-            message_id = data.get("message_id")
+            message_id_str = data.get("message_id")
+            message_id = int(message_id_str) if message_id_str else None
             db = get_db()
 
             # Cancel the running task by message_id
@@ -269,14 +274,15 @@ class WebApp:
 
             # Update database status to stopped
             db.update_download_by_message_id(message_id, status='stopped', speed=0)
-            self.emit_status(message_id, 'stopped')
+            self.emit_status(message_id_str, 'stopped')
             return jsonify({"status": "stopped"})
 
         @self.app.route("/api/delete", methods=["POST"])
         @token_required
         def api_delete():
             data = request.json
-            message_id = data.get("message_id")
+            message_id_str = data.get("message_id")
+            message_id = int(message_id_str) if message_id_str else None
             db = get_db()
 
             # Cancel task if running and mark as stopped
@@ -288,7 +294,7 @@ class WebApp:
 
             # Soft delete from database
             db.delete_download_by_message_id(message_id)
-            self.emit_deleted(message_id)
+            self.emit_deleted(message_id_str)
             return jsonify({"status": "deleted"})
 
         # Serve frontend

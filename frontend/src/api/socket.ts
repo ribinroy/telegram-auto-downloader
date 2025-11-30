@@ -6,7 +6,7 @@ const API_BASE = window.location.origin;
 let socket: Socket | null = null;
 
 export interface ProgressUpdate {
-  message_id: number;
+  message_id: string;  // String to avoid JS precision loss
   progress: number;
   downloaded_bytes: number;
   total_bytes: number;
@@ -15,13 +15,13 @@ export interface ProgressUpdate {
 }
 
 export interface StatusUpdate {
-  message_id: number;
+  message_id: string;  // String to avoid JS precision loss
   status: Download['status'];
   error?: string;
 }
 
 export interface DeletedUpdate {
-  message_id: number;
+  message_id: string;  // String to avoid JS precision loss
 }
 
 export interface SocketHandlers {

@@ -33,7 +33,7 @@ class Download(Base):
         """Convert model to dictionary"""
         return {
             'id': self.id,
-            'message_id': self.message_id,
+            'message_id': str(self.message_id) if self.message_id else None,  # String to avoid JS precision loss
             'file': self.file,
             'status': self.status,
             'progress': self.progress,
