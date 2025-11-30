@@ -1,0 +1,16 @@
+[Unit]
+Description=Telegram Downloader Service
+After=network.target
+
+[Service]
+Type=simple
+User=hs
+Group=hs
+WorkingDirectory=/home/hs/telegram-auto-downloader
+Environment="PATH=/home/hs/telegram-auto-downloader/venv/bin"
+ExecStart=/home/hs/telegram-auto-downloader/venv/bin/python /home/hs/telegram-auto-downloader/main.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -3,8 +3,8 @@ Migration script to import existing JSON data into PostgreSQL database
 """
 import json
 from datetime import datetime
-from src.config import DATABASE_URL
-from src.database import init_database, get_db
+from backend.config import DATABASE_URL
+from backend.database import init_database, get_db
 
 JSON_FILE = "/home/hs/telegram_downloader/downloads.json"
 
