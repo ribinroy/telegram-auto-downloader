@@ -43,6 +43,24 @@ class Download(Base):
         }
 
 
+class Settings(Base):
+    """Settings model for storing application configuration"""
+    __tablename__ = 'settings'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    key = Column(String(100), unique=True, nullable=False)
+    value = Column(Text, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        """Convert model to dictionary"""
+        return {
+            'key': self.key,
+            'value': self.value,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None
+        }
+
+
 class DatabaseManager:
     """Database manager for handling all database operations"""
 
@@ -163,6 +181,57 @@ class DatabaseManager:
                 session.commit()
                 return True
             return False
+        finally:
+            self.close_session()
+
+    def get_setting(self, key):
+        """Get a setting value by key"""
+        session = self.get_session()
+        try:
+            setting = session.query(Settings).filter_by(key=key).first()
+            return setting.value if setting else None
+        finally:
+            self.close_session()
+
+    def set_setting(self, key, value):
+        """Set a setting value (insert or update)"""
+        session = self.get_session()
+        try:
+            setting = session.query(Settings).filter_by(key=key).first()
+            if setting:
+                setting.value = value
+                setting.updated_at = datetime.utcnow()
+            else:
+                setting = Settings(key=key, value=value)
+                session.add(setting)
+            session.commit()
+            return setting.to_dict()
+        finally:
+            self.close_session()
+
+    def get_all_settings(self):
+        """Get all settings as a dictionary"""
+        session = self.get_session()
+        try:
+            settings = session.query(Settings).all()
+            return {s.key: s.value for s in settings}
+        finally:
+            self.close_session()
+
+    def set_multiple_settings(self, settings_dict):
+        """Set multiple settings at once"""
+        session = self.get_session()
+        try:
+            for key, value in settings_dict.items():
+                setting = session.query(Settings).filter_by(key=key).first()
+                if setting:
+                    setting.value = value
+                    setting.updated_at = datetime.utcnow()
+                else:
+                    setting = Settings(key=key, value=value)
+                    session.add(setting)
+            session.commit()
+            return self.get_all_settings()
         finally:
             self.close_session()
 
