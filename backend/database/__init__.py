@@ -347,6 +347,21 @@ class DatabaseManager:
         finally:
             self.close_session()
 
+    def update_user_password(self, user_id: int, current_password: str, new_password: str):
+        """Update user password after verifying current password"""
+        session = self.get_session()
+        try:
+            user = session.query(User).filter_by(id=user_id).first()
+            if not user:
+                return {'error': 'User not found'}
+            if not user.check_password(current_password):
+                return {'error': 'Current password is incorrect'}
+            user.password_hash = User.hash_password(new_password)
+            session.commit()
+            return {'success': True}
+        finally:
+            self.close_session()
+
     def seed_default_user(self):
         """Create default user if no users exist"""
         session = self.get_session()

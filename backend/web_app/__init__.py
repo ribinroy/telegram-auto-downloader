@@ -202,6 +202,24 @@ class WebApp:
         def verify_token():
             return jsonify({"user": request.user})
 
+        @self.app.route("/api/auth/password", methods=["POST"])
+        @token_required
+        def update_password():
+            data = request.json
+            current_password = data.get("current_password")
+            new_password = data.get("new_password")
+
+            if not current_password or not new_password:
+                return jsonify({"error": "Current and new password required"}), 400
+
+            db = get_db()
+            result = db.update_user_password(request.user['user_id'], current_password, new_password)
+
+            if 'error' in result:
+                return jsonify(result), 400
+
+            return jsonify({"success": True})
+
         @self.app.route("/api/downloads", methods=["GET"])
         @token_required
         def get_downloads():

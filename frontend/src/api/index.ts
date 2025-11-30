@@ -53,6 +53,18 @@ export async function verifyToken(): Promise<boolean> {
   return response.ok;
 }
 
+export async function updatePassword(currentPassword: string, newPassword: string): Promise<void> {
+  const response = await fetch(`${API_BASE}/api/auth/password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+  });
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error || 'Failed to update password');
+  }
+}
+
 export async function fetchDownloads(
   search?: string,
   filter: 'all' | 'active' = 'all',
