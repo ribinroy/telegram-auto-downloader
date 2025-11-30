@@ -188,29 +188,29 @@ function App() {
           </div>
           <div className="flex items-center gap-3">
             {/* Stats - icon only with tooltips */}
-            <div className="group relative flex items-center gap-2 px-3 py-1.5 bg-slate-700/50 rounded-lg cursor-default">
+            <div className="group relative flex items-center gap-2 px-3 py-1.5 bg-slate-700/50 rounded-lg cursor-default min-w-[100px]">
               <HardDrive className="w-4 h-4 text-green-400" />
-              <span className="text-sm text-green-400">{formatBytes(stats.total_downloaded)}</span>
+              <span className="text-sm text-green-400 tabular-nums">{formatBytes(stats.total_downloaded)}</span>
               <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">
                 Downloaded
               </div>
             </div>
-            <div className="group relative flex items-center gap-2 px-3 py-1.5 bg-slate-700/50 rounded-lg cursor-default">
+            <div className="group relative flex items-center gap-2 px-3 py-1.5 bg-slate-700/50 rounded-lg cursor-default min-w-[100px]">
               <Clock className="w-4 h-4 text-yellow-400" />
-              <span className="text-sm text-yellow-400">{formatBytes(stats.pending_bytes)}</span>
+              <span className="text-sm text-yellow-400 tabular-nums">{formatBytes(stats.pending_bytes)}</span>
               <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">
                 Pending
               </div>
             </div>
-            <div className="group relative flex items-center gap-2 px-3 py-1.5 bg-slate-700/50 rounded-lg cursor-default">
+            <div className="group relative flex items-center gap-2 px-3 py-1.5 bg-slate-700/50 rounded-lg cursor-default min-w-[110px]">
               <Zap className="w-4 h-4 text-purple-400" />
-              <span className="text-sm text-purple-400">{formatSpeed(stats.total_speed)}</span>
+              <span className="text-sm text-purple-400 tabular-nums">{formatSpeed(stats.total_speed)}</span>
               <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">
                 Speed
               </div>
             </div>
             {/* Connection status */}
-            <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg ${connected ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
+            <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg min-w-[80px] ${connected ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
               {connected ? <Wifi className="w-4 h-4" /> : <WifiOff className="w-4 h-4" />}
               <span className="text-sm">{connected ? 'Live' : 'Offline'}</span>
             </div>
@@ -304,11 +304,10 @@ function App() {
           </div>
         ) : (
           <div className="max-h-[600px] overflow-auto space-y-3">
-            {filteredDownloads.map((download, index) => (
+            {filteredDownloads.map((download) => (
               <DownloadItem
                 key={download.id}
                 download={download}
-                index={index + 1}
                 onRetry={handleRetry}
                 onStop={handleStop}
                 onDelete={handleDelete}

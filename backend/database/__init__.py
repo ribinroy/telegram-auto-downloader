@@ -38,8 +38,8 @@ class Download(Base):
             'progress': self.progress,
             'speed': self.speed,
             'error': self.error,
-            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
-            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': f"{self.updated_at.isoformat()}Z" if self.updated_at else None,
+            'created_at': f"{self.created_at.isoformat()}Z" if self.created_at else None,
             'downloaded_bytes': self.downloaded_bytes,
             'total_bytes': self.total_bytes,
             'pending_time': self.pending_time

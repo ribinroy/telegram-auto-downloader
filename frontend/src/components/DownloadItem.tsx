@@ -1,56 +1,25 @@
-import { useState, useEffect } from 'react';
 import {
   Square,
   Trash2,
   RefreshCw,
   CheckCircle,
   XCircle,
-  Loader2,
   StopCircle,
   FileText,
   Image,
   Video,
   Calendar,
-  Clock
+  ArrowDown
 } from 'lucide-react';
-import { formatDistanceToNow, format } from 'date-fns';
+import ReactTimeAgo from 'react-time-ago';
 import type { Download } from '../types';
 import { formatBytes, formatTime, formatSpeed } from '../utils/format';
 
 interface DownloadItemProps {
   download: Download;
-  index: number;
   onRetry: (id: number) => void;
   onStop: (message_id: number) => void;
   onDelete: (message_id: number) => void;
-}
-
-function useRelativeTime(dateString: string | null) {
-  const [relative, setRelative] = useState<string>('-');
-
-  useEffect(() => {
-    if (!dateString) {
-      setRelative('-');
-      return;
-    }
-
-    const updateRelative = () => {
-      const date = new Date(dateString);
-      setRelative(formatDistanceToNow(date, { addSuffix: true }));
-    };
-
-    updateRelative();
-
-    // Update every 10 seconds for recent times, every minute for older
-    const interval = setInterval(updateRelative, 10000);
-    return () => clearInterval(interval);
-  }, [dateString]);
-
-  const full = dateString
-    ? format(new Date(dateString), 'MMM d, yyyy h:mm a')
-    : '-';
-
-  return { relative, full };
 }
 
 function getFileIcon(filename: string) {
@@ -67,7 +36,7 @@ function getFileIcon(filename: string) {
 function getStatusIcon(status: Download['status']) {
   switch (status) {
     case 'downloading':
-      return <Loader2 className="w-4 h-4 text-cyan-400 animate-spin" />;
+      return <ArrowDown className="w-4 h-4 text-cyan-400 animate-bounce" />;
     case 'done':
       return <CheckCircle className="w-4 h-4 text-green-400" />;
     case 'failed':
@@ -90,10 +59,8 @@ function getStatusColor(status: Download['status']) {
   }
 }
 
-export function DownloadItem({ download, index, onRetry, onStop, onDelete }: DownloadItemProps) {
+export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadItemProps) {
   const progressPercent = download.progress || 0;
-  const createdTime = useRelativeTime(download.created_at);
-  const updatedTime = useRelativeTime(download.updated_at);
 
   const handleStop = () => {
     if (confirm('Are you sure you want to stop this download?')) {
@@ -104,14 +71,9 @@ export function DownloadItem({ download, index, onRetry, onStop, onDelete }: Dow
   return (
     <div className="bg-slate-800/30 rounded-xl p-4 border border-slate-700/50 hover:border-slate-600 transition-all">
       <div className="flex items-start gap-4">
-        {/* Index + File Icon combined */}
-        <div className="relative">
-          <div className="p-2.5 bg-slate-700/50 rounded-lg">
-            {getFileIcon(download.file)}
-          </div>
-          <div className="absolute -top-1.5 -left-1.5 flex items-center justify-center w-5 h-5 bg-slate-600 rounded-full text-slate-300 text-xs font-medium border border-slate-500">
-            {index}
-          </div>
+        {/* File Icon */}
+        <div className="p-2.5 bg-slate-700/50 rounded-lg">
+          {getFileIcon(download.file)}
         </div>
 
         <div className="flex-1 min-w-0">
@@ -157,11 +119,13 @@ export function DownloadItem({ download, index, onRetry, onStop, onDelete }: Dow
         <div className="flex flex-col items-end gap-2">
           <div className="flex items-center gap-3">
             {/* Status indicator */}
-            <div className="flex items-center gap-1.5 px-2 py-1 bg-slate-700/30 rounded-lg">
+            <div className={`flex items-center gap-1.5 px-2 py-1 bg-slate-700/30 rounded-lg ${download.status === 'downloading' ? 'aspect-square justify-center' : ''}`}>
               {getStatusIcon(download.status)}
-              <span className={`text-sm capitalize ${getStatusColor(download.status)}`}>
-                {download.status}
-              </span>
+              {download.status !== 'downloading' && (
+                <span className={`text-sm capitalize ${getStatusColor(download.status)}`}>
+                  {download.status}
+                </span>
+              )}
             </div>
 
             {/* Action buttons */}
@@ -198,7 +162,7 @@ export function DownloadItem({ download, index, onRetry, onStop, onDelete }: Dow
             </div>
           </div>
 
-          {/* ID and Dates */}
+          {/* ID and Date */}
           <div className="flex gap-4 text-xs text-slate-500">
             <div
               className="flex items-center gap-1 cursor-default"
@@ -207,20 +171,12 @@ export function DownloadItem({ download, index, onRetry, onStop, onDelete }: Dow
               <span className="text-slate-600">#</span>
               <span>{download.id}</span>
             </div>
-            <div
-              className="flex items-center gap-1 cursor-default"
-              title={`Created: ${createdTime.full}`}
-            >
-              <Calendar className="w-3 h-3" />
-              <span>{createdTime.relative}</span>
-            </div>
-            <div
-              className="flex items-center gap-1 cursor-default"
-              title={`Updated: ${updatedTime.full}`}
-            >
-              <Clock className="w-3 h-3" />
-              <span>{updatedTime.relative}</span>
-            </div>
+            {download.created_at && (
+              <div className="flex items-center gap-1 cursor-default">
+                <Calendar className="w-3 h-3" />
+                <ReactTimeAgo date={new Date(download.created_at)} locale="en-US" timeStyle="twitter" />
+              </div>
+            )}
           </div>
         </div>
       </div>
