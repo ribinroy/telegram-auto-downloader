@@ -50,22 +50,3 @@ export async function deleteDownload(file: string): Promise<void> {
     body: JSON.stringify({ file }),
   });
 }
-
-export interface AppSettings {
-  api_id: string;
-  api_hash: string;
-  chat_id: string;
-}
-
-export async function fetchSettings(): Promise<AppSettings> {
-  const response = await fetch(`${API_BASE}/api/settings`);
-  return response.json();
-}
-
-export async function updateSettings(settings: Partial<AppSettings>): Promise<void> {
-  await fetch(`${API_BASE}/api/settings`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(settings),
-  });
-}
