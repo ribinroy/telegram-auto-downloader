@@ -171,9 +171,16 @@ class WebApp:
         def api_stop():
             data = request.json
             file = data.get("file")
+            db = get_db()
+
+            # Cancel the running task
             task = self.download_tasks.get(file)
             if task and not task.done():
                 task.cancel()
+
+            # Update database status to stopped
+            db.update_download(file, status='stopped', speed=0)
+
             self.broadcast_update()
             return jsonify({"status": "stopped"})
 
