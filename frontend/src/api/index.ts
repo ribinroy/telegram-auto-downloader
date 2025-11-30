@@ -35,18 +35,18 @@ export async function retryDownload(id: number): Promise<void> {
   });
 }
 
-export async function stopDownload(file: string): Promise<void> {
+export async function stopDownload(message_id: number): Promise<void> {
   await fetch(`${API_BASE}/api/stop`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ file }),
+    body: JSON.stringify({ message_id }),
   });
 }
 
-export async function deleteDownload(file: string): Promise<void> {
+export async function deleteDownload(message_id: number): Promise<void> {
   await fetch(`${API_BASE}/api/delete`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ file }),
+    body: JSON.stringify({ message_id }),
   });
 }

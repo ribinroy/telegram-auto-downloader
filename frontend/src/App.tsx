@@ -1,5 +1,4 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useVirtualizer } from '@tanstack/react-virtual';
 import { Search, Download, Wifi, WifiOff, Loader2, HardDrive, Clock, Zap } from 'lucide-react';
 import { formatBytes, formatSpeed } from './utils/format';
 import { fetchDownloads, fetchStats, retryDownload, stopDownload, deleteDownload, type SortBy, type SortOrder } from './api';
@@ -22,7 +21,16 @@ function App() {
     active_count: 0,
   });
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [connected, setConnected] = useState(false);
+
+  // Debounce search input
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [search]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<TabType>('active');
@@ -51,7 +59,7 @@ function App() {
   const loadDownloads = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await fetchDownloads(search, activeTab, sortBy, sortOrder);
+      const data = await fetchDownloads(debouncedSearch, activeTab, sortBy, sortOrder);
       setDownloads(data.downloads);
       setError(null);
     } catch (err) {
@@ -59,7 +67,7 @@ function App() {
     } finally {
       setLoading(false);
     }
-  }, [search, activeTab, sortBy, sortOrder]);
+  }, [debouncedSearch, activeTab, sortBy, sortOrder]);
 
   // Fetch stats via REST API (separate endpoint, always overall stats)
   const loadStats = useCallback(async () => {
@@ -100,33 +108,23 @@ function App() {
     await retryDownload(id);
   };
 
-  const handleStop = async (file: string) => {
-    await stopDownload(file);
+  const handleStop = async (message_id: number) => {
+    await stopDownload(message_id);
   };
 
-  const handleDelete = async (file: string) => {
-    if (confirm('Are you sure you want to delete this download?')) {
-      await deleteDownload(file);
-    }
+  const handleDelete = async (message_id: number) => {
+    await deleteDownload(message_id);
   };
 
   // Downloads are already filtered by the backend based on activeTab
   const filteredDownloads = downloads;
 
-  // Virtual scroll setup
-  const parentRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
   // Focus search on mount
   useEffect(() => {
     searchRef.current?.focus();
   }, []);
-  const rowVirtualizer = useVirtualizer({
-    count: filteredDownloads.length,
-    getScrollElement: () => parentRef.current,
-    estimateSize: () => 88, // Estimated row height in pixels
-    overscan: 5,
-  });
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
@@ -259,44 +257,17 @@ function App() {
             </p>
           </div>
         ) : (
-          <div
-            ref={parentRef}
-            className="h-[600px] overflow-auto"
-          >
-            <div
-              style={{
-                height: `${rowVirtualizer.getTotalSize()}px`,
-                width: '100%',
-                position: 'relative',
-              }}
-            >
-              {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-                const download = filteredDownloads[virtualRow.index];
-                return (
-                  <div
-                    key={download.id}
-                    style={{
-                      position: 'absolute',
-                      top: 0,
-                      left: 0,
-                      width: '100%',
-                      height: `${virtualRow.size}px`,
-                      transform: `translateY(${virtualRow.start}px)`,
-                    }}
-                  >
-                    <div className="pb-3">
-                      <DownloadItem
-                        download={download}
-                        index={virtualRow.index + 1}
-                        onRetry={handleRetry}
-                        onStop={handleStop}
-                        onDelete={handleDelete}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+          <div className="max-h-[600px] overflow-auto space-y-3">
+            {filteredDownloads.map((download, index) => (
+              <DownloadItem
+                key={download.id}
+                download={download}
+                index={index + 1}
+                onRetry={handleRetry}
+                onStop={handleStop}
+                onDelete={handleDelete}
+              />
+            ))}
           </div>
         )}
 
