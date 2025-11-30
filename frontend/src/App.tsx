@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Search, Download, Wifi, WifiOff, Loader2, HardDrive, Clock, Zap, LogOut, Settings } from 'lucide-react';
+import { Search, Download, Wifi, WifiOff, Loader2, HardDrive, Clock, Zap, LogOut, Settings, Plus } from 'lucide-react';
 import { formatBytes, formatSpeed } from './utils/format';
 import { fetchDownloads, fetchStats, retryDownload, stopDownload, deleteDownload, verifyToken, clearToken, getToken, type SortBy, type SortOrder } from './api';
 import { connectSocket, disconnectSocket, type ProgressUpdate, type StatusUpdate, type DeletedUpdate } from './api/socket';
 import { DownloadItem } from './components/DownloadItem';
 import { LoginPage } from './components/LoginPage';
 import { SettingsDialog } from './components/SettingsDialog';
+import { AddUrlModal } from './components/AddUrlModal';
 import type { Download as DownloadType, Stats } from './types';
 
 type TabType = 'active' | 'all';
@@ -56,6 +57,7 @@ function App() {
 function MainApp({ onLogout }: { onLogout: () => void }) {
   const [downloads, setDownloads] = useState<DownloadType[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [addUrlOpen, setAddUrlOpen] = useState(false);
   const [stats, setStats] = useState<Stats>({
     total_downloaded: 0,
     total_size: 0,
@@ -73,7 +75,7 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<TabType>('active');
   const [sortBy, setSortBy] = useState<SortBy>('created_at');
-  const [sortOrder, setSortOrder] = useState<SortOrder>('asc');
+  const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
 
   // Debounce search input
   useEffect(() => {
@@ -212,11 +214,36 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
   const filteredDownloads = downloads;
 
   const searchRef = useRef<HTMLInputElement>(null);
+  const [pastedUrl, setPastedUrl] = useState<string | null>(null);
 
   // Focus search on mount
   useEffect(() => {
     searchRef.current?.focus();
   }, []);
+
+  // Listen for paste events to open URL modal
+  useEffect(() => {
+    const handlePaste = (e: ClipboardEvent) => {
+      // Don't intercept if modal is already open
+      if (addUrlOpen) return;
+
+      const text = e.clipboardData?.getData('text')?.trim();
+      if (!text) return;
+
+      // Open modal with pasted text (modal will validate it)
+      e.preventDefault();
+      setPastedUrl(text);
+      setAddUrlOpen(true);
+
+      // Blur any focused input
+      if (document.activeElement instanceof HTMLElement) {
+        document.activeElement.blur();
+      }
+    };
+
+    document.addEventListener('paste', handlePaste);
+    return () => document.removeEventListener('paste', handlePaste);
+  }, [addUrlOpen]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
@@ -380,8 +407,27 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
 
       </div>
 
+      {/* Floating Add Button */}
+      <button
+        onClick={() => setAddUrlOpen(true)}
+        className="fixed bottom-6 right-6 p-4 bg-gradient-to-br from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white rounded-full shadow-lg shadow-cyan-500/25 transition-all hover:scale-105 z-40"
+        title="Add URL download"
+      >
+        <Plus className="w-6 h-6" />
+      </button>
+
       {/* Settings Dialog */}
       <SettingsDialog isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
+
+      {/* Add URL Modal */}
+      <AddUrlModal
+        isOpen={addUrlOpen}
+        onClose={() => {
+          setAddUrlOpen(false);
+          setPastedUrl(null);
+        }}
+        initialUrl={pastedUrl}
+      />
     </div>
   );
 }
