@@ -8,9 +8,14 @@ from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv()
 
-# Base directory - adjust this to your project root
-BASE_DIR = Path(__file__).parent.parent.parent
-DOWNLOAD_DIR = BASE_DIR / "downloads"
+# Base directory - read from .env or use project root as fallback
+_base_dir_env = os.getenv('BASE_DIR', '').strip().strip('"').strip("'")
+BASE_DIR = Path(_base_dir_env) if _base_dir_env else Path(__file__).parent.parent.parent
+
+# Download directory - read from .env or use BASE_DIR/downloads as fallback
+_download_dir_env = os.getenv('DOWNLOAD_DIR', '').strip().strip('"').strip("'")
+DOWNLOAD_DIR = Path(_download_dir_env) if _download_dir_env else BASE_DIR / "downloads"
+
 LOGS_DIR = BASE_DIR / "logs"
 
 # Telegram API Configuration - loaded from environment variables
