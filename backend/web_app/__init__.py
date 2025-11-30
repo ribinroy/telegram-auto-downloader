@@ -128,10 +128,13 @@ class WebApp:
             "active_count": active_count
         }
 
-    def broadcast_update(self):
-        """Broadcast download update to all clients"""
-        data = self.get_downloads_data()
-        self.socketio.emit('downloads_update', data)
+    def emit_status(self, message_id: int, status: str):
+        """Emit status change for a specific download"""
+        self.socketio.emit('download:status', {'message_id': message_id, 'status': status})
+
+    def emit_deleted(self, message_id: int):
+        """Emit download deleted event"""
+        self.socketio.emit('download:deleted', {'message_id': message_id})
 
     def setup_routes(self):
         """Setup Flask API routes"""
@@ -164,7 +167,8 @@ class WebApp:
                         error=None,
                         updated_at=datetime.utcnow()
                     )
-                    self.broadcast_update()
+                    if download.get("message_id"):
+                        self.emit_status(download["message_id"], 'downloading')
             return jsonify({"status": "ok"})
 
         @self.app.route("/api/stop", methods=["POST"])
@@ -180,8 +184,7 @@ class WebApp:
 
             # Update database status to stopped
             db.update_download_by_message_id(message_id, status='stopped', speed=0)
-
-            self.broadcast_update()
+            self.emit_status(message_id, 'stopped')
             return jsonify({"status": "stopped"})
 
         @self.app.route("/api/delete", methods=["POST"])
@@ -198,7 +201,7 @@ class WebApp:
 
             # Delete from database
             db.delete_download_by_message_id(message_id)
-            self.broadcast_update()
+            self.emit_deleted(message_id)
             return jsonify({"status": "deleted"})
 
         # Serve frontend
