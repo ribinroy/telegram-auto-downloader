@@ -8,6 +8,7 @@ import re
 import os
 import logging
 from datetime import datetime
+from pathlib import Path
 from urllib.parse import urlparse
 from backend.config import DOWNLOAD_DIR
 from backend.database import get_db, generate_uuid
@@ -22,13 +23,21 @@ class YtdlpDownloader:
         self.processes = {}  # Track running yt-dlp processes by message_id
 
     def get_domain(self, url: str) -> str:
-        """Extract domain from URL"""
+        """Extract site name from URL (e.g., youtube.com -> youtube)"""
         try:
             parsed = urlparse(url)
             domain = parsed.netloc
             # Remove www. prefix if present
             if domain.startswith('www.'):
                 domain = domain[4:]
+            # Extract just the site name (remove TLD)
+            # e.g., youtube.com -> youtube, x.com -> x, tiktok.com -> tiktok
+            parts = domain.split('.')
+            if len(parts) >= 2:
+                # Handle special cases like co.uk, com.br etc.
+                if parts[-2] in ('co', 'com', 'org', 'net') and len(parts) >= 3:
+                    return parts[-3]
+                return parts[-2]
             return domain
         except Exception:
             return 'unknown'
@@ -152,9 +161,28 @@ class YtdlpDownloader:
         print(f"[yt-dlp] Starting download: {url} (id: {message_id})", flush=True)
         sys.stdout.flush()
 
-        # Create output template
-        output_dir = DOWNLOAD_DIR / "Videos"
-        output_dir.mkdir(exist_ok=True)
+        # Get the source name and check for custom folder mapping
+        source = self.get_domain(url)
+        mapping = db.get_download_type_map(source)
+
+        # Use custom folder from mapping if it exists and is accessible
+        output_dir = None
+        if mapping and mapping.get('folder'):
+            custom_folder = Path(mapping['folder'])
+            try:
+                # Check if folder exists or can be created
+                if custom_folder.exists() or custom_folder.parent.exists():
+                    custom_folder.mkdir(parents=True, exist_ok=True)
+                    output_dir = custom_folder
+                    print(f"[yt-dlp] Using custom folder: {output_dir}")
+            except (OSError, PermissionError) as e:
+                print(f"[yt-dlp] Custom folder not accessible: {e}, falling back to default")
+
+        # Fall back to default folder
+        if output_dir is None:
+            output_dir = DOWNLOAD_DIR / "Videos"
+            output_dir.mkdir(parents=True, exist_ok=True)
+
         output_template = str(output_dir / "%(title)s.%(ext)s")
 
         try:

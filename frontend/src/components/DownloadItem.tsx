@@ -24,21 +24,20 @@ interface DownloadItemProps {
   onDelete: (message_id: string) => void;
 }
 
-// Known platform colors
+// Known platform colors (using short names without TLD)
 const platformColors: Record<string, string> = {
-  'youtube.com': '#FF0000',
-  'youtu.be': '#FF0000',
-  'twitter.com': '#1DA1F2',
-  'x.com': '#000000',
-  'instagram.com': '#E4405F',
-  'facebook.com': '#1877F2',
-  'tiktok.com': '#000000',
-  'vimeo.com': '#1AB7EA',
-  'twitch.tv': '#9146FF',
-  'reddit.com': '#FF4500',
-  'dailymotion.com': '#00AAFF',
-  'soundcloud.com': '#FF5500',
-  'spotify.com': '#1DB954',
+  'youtube': '#FF0000',
+  'twitter': '#1DA1F2',
+  'x': '#000000',
+  'instagram': '#E4405F',
+  'facebook': '#1877F2',
+  'tiktok': '#000000',
+  'vimeo': '#1AB7EA',
+  'twitch': '#9146FF',
+  'reddit': '#FF4500',
+  'dailymotion': '#00AAFF',
+  'soundcloud': '#FF5500',
+  'spotify': '#1DB954',
   'telegram': '#26A5E4',
 };
 
@@ -56,7 +55,7 @@ function getPlatformIcon(source: string) {
   }
 
   // Twitter/X
-  if (domain.includes('twitter') || domain === 'x.com') {
+  if (domain.includes('twitter') || domain === 'x') {
     return (
       <svg viewBox="0 0 24 24" className="w-5 h-5" fill="currentColor">
         <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
