@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react';
 import {
   Square,
   Trash2,
@@ -12,6 +13,7 @@ import {
   Calendar,
   Clock
 } from 'lucide-react';
+import { formatDistanceToNow, format } from 'date-fns';
 import type { Download } from '../types';
 import { formatBytes, formatTime, formatSpeed } from '../utils/format';
 
@@ -23,45 +25,30 @@ interface DownloadItemProps {
   onDelete: (file: string) => void;
 }
 
-function formatRelativeDate(dateString: string | null): { relative: string; full: string } {
-  if (!dateString) return { relative: '-', full: '-' };
+function useRelativeTime(dateString: string | null) {
+  const [relative, setRelative] = useState<string>('-');
 
-  const date = new Date(dateString);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffSecs = Math.floor(diffMs / 1000);
-  const diffMins = Math.floor(diffSecs / 60);
-  const diffHours = Math.floor(diffMins / 60);
-  const diffDays = Math.floor(diffHours / 24);
-  const diffWeeks = Math.floor(diffDays / 7);
-  const diffMonths = Math.floor(diffDays / 30);
-  const diffYears = Math.floor(diffDays / 365);
+  useEffect(() => {
+    if (!dateString) {
+      setRelative('-');
+      return;
+    }
 
-  let relative: string;
-  if (diffSecs < 60) {
-    relative = 'just now';
-  } else if (diffMins < 60) {
-    relative = `${diffMins}m ago`;
-  } else if (diffHours < 24) {
-    relative = `${diffHours}h ago`;
-  } else if (diffDays < 7) {
-    relative = `${diffDays}d ago`;
-  } else if (diffWeeks < 4) {
-    relative = `${diffWeeks}w ago`;
-  } else if (diffMonths < 12) {
-    relative = `${diffMonths}mo ago`;
-  } else {
-    relative = `${diffYears}y ago`;
-  }
+    const updateRelative = () => {
+      const date = new Date(dateString);
+      setRelative(formatDistanceToNow(date, { addSuffix: true }));
+    };
 
-  const full = date.toLocaleString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true,
-  });
+    updateRelative();
+
+    // Update every 10 seconds for recent times, every minute for older
+    const interval = setInterval(updateRelative, 10000);
+    return () => clearInterval(interval);
+  }, [dateString]);
+
+  const full = dateString
+    ? format(new Date(dateString), 'MMM d, yyyy h:mm a')
+    : '-';
 
   return { relative, full };
 }
@@ -105,6 +92,14 @@ function getStatusColor(status: Download['status']) {
 
 export function DownloadItem({ download, index, onRetry, onStop, onDelete }: DownloadItemProps) {
   const progressPercent = download.progress || 0;
+  const createdTime = useRelativeTime(download.created_at);
+  const updatedTime = useRelativeTime(download.updated_at);
+
+  const handleStop = () => {
+    if (confirm('Are you sure you want to stop this download?')) {
+      onStop(download.file);
+    }
+  };
 
   return (
     <div className="bg-slate-800/30 rounded-xl p-4 border border-slate-700/50 hover:border-slate-600 transition-all">
@@ -182,7 +177,7 @@ export function DownloadItem({ download, index, onRetry, onStop, onDelete }: Dow
               )}
               {download.status === 'downloading' && (
                 <button
-                  onClick={() => onStop(download.file)}
+                  onClick={handleStop}
                   className="p-2 bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-400 rounded-lg transition-colors"
                   title="Stop"
                 >
@@ -199,21 +194,28 @@ export function DownloadItem({ download, index, onRetry, onStop, onDelete }: Dow
             </div>
           </div>
 
-          {/* Dates */}
+          {/* ID and Dates */}
           <div className="flex gap-4 text-xs text-slate-500">
             <div
               className="flex items-center gap-1 cursor-default"
-              title={`Created: ${formatRelativeDate(download.created_at).full}`}
+              title="Database ID"
             >
-              <Calendar className="w-3 h-3" />
-              <span>{formatRelativeDate(download.created_at).relative}</span>
+              <span className="text-slate-600">#</span>
+              <span>{download.id}</span>
             </div>
             <div
               className="flex items-center gap-1 cursor-default"
-              title={`Updated: ${formatRelativeDate(download.updated_at).full}`}
+              title={`Created: ${createdTime.full}`}
+            >
+              <Calendar className="w-3 h-3" />
+              <span>{createdTime.relative}</span>
+            </div>
+            <div
+              className="flex items-center gap-1 cursor-default"
+              title={`Updated: ${updatedTime.full}`}
             >
               <Clock className="w-3 h-3" />
-              <span>{formatRelativeDate(download.updated_at).relative}</span>
+              <span>{updatedTime.relative}</span>
             </div>
           </div>
         </div>

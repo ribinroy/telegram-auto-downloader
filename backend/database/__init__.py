@@ -3,7 +3,7 @@ Database module for Telegram Downloader
 """
 import os
 from datetime import datetime
-from sqlalchemy import create_engine, Column, Integer, BigInteger, String, Float, DateTime, Text
+from sqlalchemy import create_engine, Column, Integer, BigInteger, String, Float, DateTime, Text, Boolean
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, scoped_session
 
@@ -25,6 +25,7 @@ class Download(Base):
     downloaded_bytes = Column(BigInteger, default=0)
     total_bytes = Column(BigInteger, default=0)
     pending_time = Column(Float, nullable=True)
+    is_deleted = Column(Boolean, default=False)
 
     def to_dict(self):
         """Convert model to dictionary"""
@@ -150,21 +151,24 @@ class DatabaseManager:
             self.close_session()
 
     def get_all_downloads(self):
-        """Get all downloads ordered by updated_at descending"""
+        """Get all non-deleted downloads ordered by updated_at descending"""
         session = self.get_session()
         try:
-            downloads = session.query(Download).order_by(Download.updated_at.desc()).all()
+            downloads = session.query(Download).filter(
+                (Download.is_deleted == False) | (Download.is_deleted == None)
+            ).order_by(Download.updated_at.desc()).all()
             return [d.to_dict() for d in downloads]
         finally:
             self.close_session()
 
     def delete_download(self, file):
-        """Delete a download entry by filename"""
+        """Soft delete a download entry by filename"""
         session = self.get_session()
         try:
             download = session.query(Download).filter_by(file=file).first()
             if download:
-                session.delete(download)
+                download.is_deleted = True
+                download.updated_at = datetime.utcnow()
                 session.commit()
                 return True
             return False
@@ -172,12 +176,13 @@ class DatabaseManager:
             self.close_session()
 
     def delete_download_by_id(self, download_id):
-        """Delete a download entry by ID"""
+        """Soft delete a download entry by ID"""
         session = self.get_session()
         try:
             download = session.query(Download).filter_by(id=download_id).first()
             if download:
-                session.delete(download)
+                download.is_deleted = True
+                download.updated_at = datetime.utcnow()
                 session.commit()
                 return True
             return False
