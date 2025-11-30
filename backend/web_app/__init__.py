@@ -291,6 +291,38 @@ class WebApp:
             self.emit_deleted(message_id)
             return jsonify({"status": "deleted"})
 
+        @self.app.route("/api/download", methods=["POST"])
+        @token_required
+        def api_add_download():
+            data = request.json
+            url = data.get("url")
+
+            if not url:
+                return jsonify({"error": "URL is required"}), 400
+
+            # Add to database as pending
+            db = get_db()
+            import time
+            message_id = int(time.time() * 1000)  # Use timestamp as pseudo message_id
+            filename = url.split('/')[-1].split('?')[0] or 'download'
+
+            download = db.add_download(
+                file=filename,
+                status='pending',
+                message_id=message_id
+            )
+
+            # Emit new download event
+            from backend.web_app import get_socketio
+            socketio = get_socketio()
+            if socketio:
+                socketio.emit('download:new', download)
+
+            # TODO: Implement actual URL download logic here
+            # For now, just add to database as pending
+
+            return jsonify({"status": "added", "download": download})
+
         # Serve frontend
         @self.app.route('/')
         def serve_index():

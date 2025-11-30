@@ -118,3 +118,15 @@ export async function deleteDownload(message_id: number): Promise<void> {
     body: JSON.stringify({ message_id }),
   });
 }
+
+export async function addDownloadByUrl(url: string): Promise<void> {
+  const response = await fetch(`${API_BASE}/api/download`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ url }),
+  });
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error || 'Failed to add download');
+  }
+}
