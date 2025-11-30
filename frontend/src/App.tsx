@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Search, Download, RefreshCw, Wifi, WifiOff } from 'lucide-react';
-import { retryDownload, stopDownload, deleteDownload } from './api';
-import { connectSocket, disconnectSocket, requestDownloads } from './api/socket';
+import { fetchDownloads, fetchStats, retryDownload, stopDownload, deleteDownload } from './api';
+import { connectSocket, disconnectSocket } from './api/socket';
 import { StatsHeader } from './components/StatsHeader';
 import { DownloadItem } from './components/DownloadItem';
 import type { Download as DownloadType, Stats, DownloadsResponse } from './types';
@@ -17,12 +17,15 @@ function App() {
     total_speed: 0,
     downloaded_count: 0,
     total_count: 0,
+    all_count: 0,
+    active_count: 0,
   });
   const [search, setSearch] = useState('');
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabType>('active');
 
+  // Handle real-time updates from WebSocket
   const handleUpdate = useCallback((data: DownloadsResponse) => {
     // Filter by search if needed
     const query = search.toLowerCase();
@@ -33,9 +36,40 @@ function App() {
     setDownloads(filtered);
     setStats(data.stats);
     setError(null);
-    setConnected(true);
   }, [search]);
 
+  // Fetch downloads via REST API
+  const loadDownloads = useCallback(async () => {
+    try {
+      const data = await fetchDownloads(search, activeTab);
+      setDownloads(data.downloads);
+      setError(null);
+    } catch (err) {
+      setError('Failed to fetch downloads');
+    }
+  }, [search, activeTab]);
+
+  // Fetch stats via REST API (separate endpoint, always overall stats)
+  const loadStats = useCallback(async () => {
+    try {
+      const statsData = await fetchStats();
+      setStats(statsData);
+    } catch (err) {
+      console.error('Failed to fetch stats');
+    }
+  }, []);
+
+  // Load initial data on mount and when search/tab changes
+  useEffect(() => {
+    loadDownloads();
+  }, [loadDownloads]);
+
+  // Load stats on mount
+  useEffect(() => {
+    loadStats();
+  }, [loadStats]);
+
+  // Setup WebSocket for real-time updates only
   useEffect(() => {
     const socket = connectSocket(handleUpdate);
 
@@ -43,20 +77,12 @@ function App() {
     socket.on('disconnect', () => setConnected(false));
     socket.on('connect_error', () => {
       setConnected(false);
-      setError('Failed to connect to server');
     });
 
     return () => {
       disconnectSocket();
     };
   }, [handleUpdate]);
-
-  // Request filtered data when search changes
-  useEffect(() => {
-    if (connected) {
-      requestDownloads(search);
-    }
-  }, [search, connected]);
 
   const handleRetry = async (id: number) => {
     await retryDownload(id);
@@ -73,20 +99,12 @@ function App() {
   };
 
   const handleRefresh = () => {
-    requestDownloads(search);
+    loadDownloads();
+    loadStats();
   };
 
-  // Filter downloads based on active tab
-  const filteredDownloads = useMemo(() => {
-    if (activeTab === 'active') {
-      return downloads.filter(d => d.status !== 'done');
-    }
-    return downloads;
-  }, [downloads, activeTab]);
-
-  const activeCount = useMemo(() => {
-    return downloads.filter(d => d.status !== 'done').length;
-  }, [downloads]);
+  // Downloads are already filtered by the backend based on activeTab
+  const filteredDownloads = downloads;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
@@ -130,7 +148,7 @@ function App() {
                 : 'bg-slate-800/50 text-slate-400 border border-slate-700 hover:bg-slate-700/50'
             }`}
           >
-            Active {activeCount > 0 && `(${activeCount})`}
+            Active {stats.active_count > 0 && `(${stats.active_count})`}
           </button>
           <button
             onClick={() => setActiveTab('all')}
@@ -140,7 +158,7 @@ function App() {
                 : 'bg-slate-800/50 text-slate-400 border border-slate-700 hover:bg-slate-700/50'
             }`}
           >
-            All ({downloads.length})
+            All ({stats.all_count})
           </button>
         </div>
 

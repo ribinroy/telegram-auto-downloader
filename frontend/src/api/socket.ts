@@ -25,6 +25,7 @@ export function connectSocket(onUpdate: (data: DownloadsResponse) => void): Sock
     console.log('WebSocket disconnected');
   });
 
+  // Listen for real-time updates only
   socket.on('downloads_update', (data: DownloadsResponse) => {
     onUpdate(data);
   });
@@ -40,11 +41,5 @@ export function disconnectSocket(): void {
   if (socket) {
     socket.disconnect();
     socket = null;
-  }
-}
-
-export function requestDownloads(search?: string): void {
-  if (socket?.connected) {
-    socket.emit('get_downloads', { search: search || '' });
   }
 }

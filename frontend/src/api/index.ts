@@ -1,12 +1,19 @@
-import type { DownloadsResponse } from '../types';
+import type { DownloadsResponse, Stats } from '../types';
 
 const API_BASE = 'http://192.168.0.135:4444';
 
-export async function fetchDownloads(search?: string): Promise<DownloadsResponse> {
-  const url = search
-    ? `${API_BASE}/api/downloads?search=${encodeURIComponent(search)}`
-    : `${API_BASE}/api/downloads`;
+export async function fetchDownloads(search?: string, filter: 'all' | 'active' = 'all'): Promise<DownloadsResponse> {
+  const params = new URLSearchParams();
+  if (search) params.set('search', search);
+  params.set('filter', filter);
+
+  const url = `${API_BASE}/api/downloads?${params.toString()}`;
   const response = await fetch(url);
+  return response.json();
+}
+
+export async function fetchStats(): Promise<Stats> {
+  const response = await fetch(`${API_BASE}/api/stats`);
   return response.json();
 }
 
