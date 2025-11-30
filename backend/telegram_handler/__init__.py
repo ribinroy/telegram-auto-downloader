@@ -11,10 +11,34 @@ from backend.utils import human_readable_size, get_media_folder
 from backend.web_app import get_socketio
 
 
+def get_telegram_credentials():
+    """Get Telegram API credentials from database or fallback to config"""
+    db = get_db()
+    settings = db.get_all_settings()
+
+    api_id = settings.get('api_id')
+    api_hash = settings.get('api_hash')
+    chat_id = settings.get('chat_id')
+
+    # Use database values if available, otherwise fallback to config
+    return {
+        'api_id': int(api_id) if api_id else API_ID,
+        'api_hash': api_hash if api_hash else API_HASH,
+        'chat_id': int(chat_id) if chat_id else CHAT_ID
+    }
+
+
 class TelegramDownloader:
     def __init__(self, download_tasks):
         self.download_tasks = download_tasks
-        self.client = TelegramClient(str(SESSION_FILE), API_ID, API_HASH)
+
+        # Get credentials from database or config
+        creds = get_telegram_credentials()
+        self.api_id = creds['api_id']
+        self.api_hash = creds['api_hash']
+        self.chat_id = creds['chat_id']
+
+        self.client = TelegramClient(str(SESSION_FILE), self.api_id, self.api_hash)
         self.last_broadcast = 0
         self.setup_event_handlers()
 
@@ -53,7 +77,7 @@ class TelegramDownloader:
 
     def setup_event_handlers(self):
         """Setup Telegram event handlers"""
-        @self.client.on(events.NewMessage(chats=CHAT_ID))
+        @self.client.on(events.NewMessage(chats=self.chat_id))
         async def handle_new_file(event):
             await self._handle_new_file(event)
 

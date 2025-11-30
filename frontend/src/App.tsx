@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { Search, Download, RefreshCw, Wifi, WifiOff, Loader2 } from 'lucide-react';
+import { Search, Download, RefreshCw, Wifi, WifiOff, Loader2, Settings } from 'lucide-react';
 import { fetchDownloads, fetchStats, retryDownload, stopDownload, deleteDownload } from './api';
 import { connectSocket, disconnectSocket } from './api/socket';
 import { StatsHeader } from './components/StatsHeader';
 import { DownloadItem } from './components/DownloadItem';
+import { SettingsDialog } from './components/SettingsDialog';
 import type { Download as DownloadType, Stats, DownloadsResponse } from './types';
 
 type TabType = 'active' | 'all';
@@ -26,6 +27,7 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<TabType>('active');
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   // Handle real-time updates from WebSocket
   const handleUpdate = useCallback((data: DownloadsResponse) => {
@@ -146,6 +148,13 @@ function App() {
             >
               <RefreshCw className="w-5 h-5" />
             </button>
+            <button
+              onClick={() => setSettingsOpen(true)}
+              className="p-2 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-lg transition-colors"
+              title="Settings"
+            >
+              <Settings className="w-5 h-5" />
+            </button>
           </div>
         </div>
 
@@ -252,6 +261,8 @@ function App() {
             </div>
           </div>
         )}
+
+        <SettingsDialog isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
       </div>
     </div>
   );

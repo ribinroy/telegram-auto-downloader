@@ -171,6 +171,31 @@ class WebApp:
             self.broadcast_update()
             return jsonify({"status": "deleted"})
 
+        @self.app.route("/api/settings", methods=["GET"])
+        def get_settings():
+            db = get_db()
+            settings = db.get_all_settings()
+            return jsonify({
+                "api_id": settings.get("api_id", ""),
+                "api_hash": settings.get("api_hash", ""),
+                "chat_id": settings.get("chat_id", "")
+            })
+
+        @self.app.route("/api/settings", methods=["PUT"])
+        def update_settings():
+            data = request.json
+            db = get_db()
+            settings_to_save = {}
+            if "api_id" in data:
+                settings_to_save["api_id"] = str(data["api_id"])
+            if "api_hash" in data:
+                settings_to_save["api_hash"] = str(data["api_hash"])
+            if "chat_id" in data:
+                settings_to_save["chat_id"] = str(data["chat_id"])
+
+            db.set_multiple_settings(settings_to_save)
+            return jsonify({"status": "ok"})
+
     def run(self):
         """Run the Flask application with WebSocket support"""
         self.socketio.run(self.app, host=WEB_HOST, port=WEB_PORT, debug=False, use_reloader=False, allow_unsafe_werkzeug=True)
