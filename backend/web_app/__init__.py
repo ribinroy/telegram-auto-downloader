@@ -388,6 +388,75 @@ class WebApp:
 
             return jsonify(result)
 
+        # Download type mappings API
+        @self.app.route("/api/mappings", methods=["GET"])
+        @token_required
+        def get_mappings():
+            """Get all download type mappings"""
+            db = get_db()
+            return jsonify(db.get_all_download_type_maps())
+
+        @self.app.route("/api/mappings/secured", methods=["GET"])
+        @token_required
+        def get_secured_sources():
+            """Get list of secured source types"""
+            db = get_db()
+            return jsonify(db.get_secured_sources())
+
+        @self.app.route("/api/mappings", methods=["POST"])
+        @token_required
+        def add_mapping():
+            """Add a new download type mapping"""
+            data = request.json
+            downloaded_from = data.get("downloaded_from")
+            is_secured = data.get("is_secured", False)
+            folder = data.get("folder")
+
+            if not downloaded_from:
+                return jsonify({"error": "downloaded_from is required"}), 400
+
+            db = get_db()
+            result = db.add_download_type_map(downloaded_from, is_secured, folder)
+
+            if 'error' in result:
+                return jsonify(result), 400
+
+            return jsonify(result)
+
+        @self.app.route("/api/mappings/<int:map_id>", methods=["PUT"])
+        @token_required
+        def update_mapping(map_id):
+            """Update a download type mapping"""
+            data = request.json
+            db = get_db()
+
+            update_data = {}
+            if "downloaded_from" in data:
+                update_data["downloaded_from"] = data["downloaded_from"]
+            if "is_secured" in data:
+                update_data["is_secured"] = data["is_secured"]
+            if "folder" in data:
+                update_data["folder"] = data["folder"]
+
+            result = db.update_download_type_map(map_id, **update_data)
+
+            if isinstance(result, dict) and 'error' in result:
+                return jsonify(result), 400
+
+            return jsonify(result)
+
+        @self.app.route("/api/mappings/<int:map_id>", methods=["DELETE"])
+        @token_required
+        def delete_mapping(map_id):
+            """Delete a download type mapping"""
+            db = get_db()
+            success = db.delete_download_type_map(map_id)
+
+            if not success:
+                return jsonify({"error": "Mapping not found"}), 404
+
+            return jsonify({"status": "deleted"})
+
         # Serve frontend
         @self.app.route('/')
         def serve_index():

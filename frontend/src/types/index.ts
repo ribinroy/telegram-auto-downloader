@@ -40,3 +40,12 @@ export interface DownloadsResponse {
   downloads: Download[];
   stats: Stats;
 }
+
+export interface DownloadTypeMap {
+  id: number;
+  downloaded_from: string;
+  is_secured: boolean;
+  folder: string | null;
+  created_at: string;
+  updated_at: string;
+}
