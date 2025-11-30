@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { X, Link, Loader2, AlertCircle, CheckCircle, Download } from 'lucide-react';
 import { checkUrl, downloadUrl } from '../api';
 import type { UrlCheckResult } from '../types';
@@ -7,24 +7,26 @@ import { formatBytes } from '../utils/format';
 interface AddUrlModalProps {
   isOpen: boolean;
   onClose: () => void;
+  initialUrl?: string | null;
 }
 
-export function AddUrlModal({ isOpen, onClose }: AddUrlModalProps) {
+export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
   const [url, setUrl] = useState('');
   const [checking, setChecking] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [checkResult, setCheckResult] = useState<UrlCheckResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const hasAutoChecked = useRef(false);
 
-  const handleCheck = async () => {
-    if (!url.trim()) return;
+  const doCheck = async (urlToCheck: string) => {
+    if (!urlToCheck.trim()) return;
 
     setChecking(true);
     setError(null);
     setCheckResult(null);
 
     try {
-      const result = await checkUrl(url.trim());
+      const result = await checkUrl(urlToCheck.trim());
       setCheckResult(result);
       if (!result.supported) {
         setError(result.error || 'URL not supported');
@@ -36,24 +38,57 @@ export function AddUrlModal({ isOpen, onClose }: AddUrlModalProps) {
     }
   };
 
+  // Normalize URL by adding https:// if missing
+  const normalizeUrl = (input: string): string | null => {
+    let urlStr = input.trim();
+
+    // If no protocol, add https://
+    if (!urlStr.startsWith('http://') && !urlStr.startsWith('https://')) {
+      urlStr = 'https://' + urlStr;
+    }
+
+    // Validate the URL
+    try {
+      const urlObj = new URL(urlStr);
+      if (urlObj.protocol === 'http:' || urlObj.protocol === 'https:') {
+        return urlStr;
+      }
+    } catch {
+      // Invalid URL
+    }
+    return null;
+  };
+
+  // Auto-fill and check when initialUrl is provided
+  useEffect(() => {
+    if (isOpen && initialUrl && !hasAutoChecked.current) {
+      hasAutoChecked.current = true;
+
+      const normalized = normalizeUrl(initialUrl);
+      if (normalized) {
+        setUrl(normalized);
+        doCheck(normalized);
+      } else {
+        setUrl(initialUrl);
+        setError('Not a valid URL');
+      }
+    }
+    if (!isOpen) {
+      hasAutoChecked.current = false;
+    }
+  }, [isOpen, initialUrl]);
+
   const handleDownload = async () => {
     if (!url.trim() || !checkResult?.supported) return;
 
-    setDownloading(true);
-    setError(null);
+    // Close modal immediately
+    handleClose();
 
+    // Start download in background
     try {
-      const result = await downloadUrl(url.trim());
-      if ('error' in result) {
-        setError(result.error);
-      } else {
-        // Success - close modal
-        handleClose();
-      }
+      await downloadUrl(url.trim());
     } catch {
-      setError('Failed to start download');
-    } finally {
-      setDownloading(false);
+      // Error will be shown in the download list
     }
   };
 
@@ -66,12 +101,22 @@ export function AddUrlModal({ isOpen, onClose }: AddUrlModalProps) {
     onClose();
   };
 
+  const handleCheckClick = () => {
+    const normalized = normalizeUrl(url);
+    if (normalized) {
+      setUrl(normalized);
+      doCheck(normalized);
+    } else {
+      setError('Not a valid URL');
+    }
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !checking && !downloading) {
       if (checkResult?.supported) {
         handleDownload();
       } else {
-        handleCheck();
+        handleCheckClick();
       }
     }
     if (e.key === 'Escape') {
@@ -186,7 +231,7 @@ export function AddUrlModal({ isOpen, onClose }: AddUrlModalProps) {
             </button>
           ) : (
             <button
-              onClick={handleCheck}
+              onClick={handleCheckClick}
               disabled={!url.trim() || checking}
               className="flex-1 py-2.5 px-4 bg-cyan-600 hover:bg-cyan-500 disabled:bg-cyan-800 disabled:cursor-not-allowed text-white rounded-lg transition-colors flex items-center justify-center gap-2"
             >
