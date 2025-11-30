@@ -3,7 +3,7 @@ export function formatBytes(bytes: number): string {
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
   const k = 1024;
   const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return `${(bytes / Math.pow(k, i)).toFixed(1)} ${units[i]}`;
+  return `${(bytes / Math.pow(k, i)).toFixed(2)} ${units[i]}`;
 }
 
 export function formatTime(seconds: number | null): string {

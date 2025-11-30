@@ -7,11 +7,12 @@ import { ConfirmDialog } from './ConfirmDialog';
 interface SettingsDialogProps {
   isOpen: boolean;
   onClose: () => void;
+  showMappings?: boolean;
 }
 
 type TabType = 'password' | 'mappings';
 
-export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
+export function SettingsDialog({ isOpen, onClose, showMappings = false }: SettingsDialogProps) {
   const [activeTab, setActiveTab] = useState<TabType>('password');
 
   // Password state
@@ -235,17 +236,19 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
             <Key className="w-4 h-4" />
             Password
           </button>
-          <button
-            onClick={() => setActiveTab('mappings')}
-            className={`flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors ${
-              activeTab === 'mappings'
-                ? 'text-cyan-400 border-b-2 border-cyan-400'
-                : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            <FolderCog className="w-4 h-4" />
-            Mappings
-          </button>
+          {showMappings && (
+            <button
+              onClick={() => setActiveTab('mappings')}
+              className={`flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors ${
+                activeTab === 'mappings'
+                  ? 'text-cyan-400 border-b-2 border-cyan-400'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <FolderCog className="w-4 h-4" />
+              Mappings
+            </button>
+          )}
         </div>
 
         {/* Content */}
@@ -320,7 +323,7 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
             </>
           )}
 
-          {activeTab === 'mappings' && (
+          {activeTab === 'mappings' && showMappings && (
             <>
               {/* Error message */}
               {mappingsError && (
