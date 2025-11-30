@@ -1,0 +1,15 @@
+{
+  "name": "telegram-auto-downloader",
+  "version": "2.0.0",
+  "description": "Telegram Auto Downloader with Python backend and React frontend",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:backend": "./venv/bin/python main.py",
+    "dev:frontend": "cd frontend && npm run dev",
+    "build": "cd frontend && npm run build",
+    "install:all": "npm install && cd frontend && npm install"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}
