@@ -2,9 +2,9 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { Search, Download, Wifi, WifiOff, Loader2, HardDrive, Clock, Zap } from 'lucide-react';
 import { formatBytes, formatSpeed } from './utils/format';
 import { fetchDownloads, fetchStats, retryDownload, stopDownload, deleteDownload, type SortBy, type SortOrder } from './api';
-import { connectSocket, disconnectSocket } from './api/socket';
+import { connectSocket, disconnectSocket, type ProgressUpdate, type StatusUpdate, type DeletedUpdate } from './api/socket';
 import { DownloadItem } from './components/DownloadItem';
-import type { Download as DownloadType, Stats, DownloadsResponse } from './types';
+import type { Download as DownloadType, Stats } from './types';
 
 type TabType = 'active' | 'all';
 
@@ -23,6 +23,11 @@ function App() {
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [connected, setConnected] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState<TabType>('active');
+  const [sortBy, setSortBy] = useState<SortBy>('created_at');
+  const [sortOrder, setSortOrder] = useState<SortOrder>('asc');
 
   // Debounce search input
   useEffect(() => {
@@ -31,29 +36,56 @@ function App() {
     }, 300);
     return () => clearTimeout(timer);
   }, [search]);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<TabType>('active');
-  const [sortBy, setSortBy] = useState<SortBy>('created_at');
-  const [sortOrder, setSortOrder] = useState<SortOrder>('asc');
 
-  // Handle real-time updates from WebSocket
-  const handleUpdate = useCallback((data: DownloadsResponse) => {
-    // Filter by search if needed
-    const query = search.toLowerCase();
-    let filtered = query
-      ? data.downloads.filter(d => d.file.toLowerCase().includes(query))
-      : data.downloads;
+  // Handle progress updates - only update the specific download
+  const handleProgress = useCallback((data: ProgressUpdate) => {
+    setDownloads(prev => prev.map(d =>
+      d.message_id === data.message_id
+        ? { ...d, ...data }
+        : d
+    ));
+    // Update stats for speed
+    setStats(prev => ({
+      ...prev,
+      total_speed: data.speed,
+      pending_bytes: prev.total_size - prev.total_downloaded
+    }));
+  }, []);
 
-    // Filter by active tab
-    if (activeTab === 'active') {
-      filtered = filtered.filter(d => d.status !== 'done');
+  // Handle status changes
+  const handleStatus = useCallback((data: StatusUpdate) => {
+    setDownloads(prev => {
+      const updated = prev.map(d =>
+        d.message_id === data.message_id
+          ? { ...d, status: data.status, error: data.error || null, speed: 0 }
+          : d
+      );
+      // If on active tab and status changed to done, remove it
+      if (activeTab === 'active' && data.status === 'done') {
+        return updated.filter(d => d.message_id !== data.message_id);
+      }
+      return updated;
+    });
+    // Refresh stats when status changes
+    fetchStats().then(setStats).catch(() => {});
+  }, [activeTab]);
+
+  // Handle new downloads
+  const handleNewDownload = useCallback((data: DownloadType) => {
+    // Only add if matches current filter
+    if (activeTab === 'all' || data.status !== 'done') {
+      setDownloads(prev => [data, ...prev]);
     }
+    // Refresh stats
+    fetchStats().then(setStats).catch(() => {});
+  }, [activeTab]);
 
-    setDownloads(filtered);
-    setStats(data.stats);
-    setError(null);
-  }, [search, activeTab]);
+  // Handle deleted downloads
+  const handleDeleted = useCallback((data: DeletedUpdate) => {
+    setDownloads(prev => prev.filter(d => d.message_id !== data.message_id));
+    // Refresh stats
+    fetchStats().then(setStats).catch(() => {});
+  }, []);
 
   // Fetch downloads via REST API
   const loadDownloads = useCallback(async () => {
@@ -69,7 +101,7 @@ function App() {
     }
   }, [debouncedSearch, activeTab, sortBy, sortOrder]);
 
-  // Fetch stats via REST API (separate endpoint, always overall stats)
+  // Fetch stats via REST API
   const loadStats = useCallback(async () => {
     try {
       const statsData = await fetchStats();
@@ -89,20 +121,21 @@ function App() {
     loadStats();
   }, [loadStats]);
 
-  // Setup WebSocket for real-time updates only
+  // Setup WebSocket for real-time updates
   useEffect(() => {
-    const socket = connectSocket(handleUpdate);
-
-    socket.on('connect', () => setConnected(true));
-    socket.on('disconnect', () => setConnected(false));
-    socket.on('connect_error', () => {
-      setConnected(false);
+    connectSocket({
+      onProgress: handleProgress,
+      onStatus: handleStatus,
+      onNew: handleNewDownload,
+      onDeleted: handleDeleted,
+      onConnect: () => setConnected(true),
+      onDisconnect: () => setConnected(false),
     });
 
     return () => {
       disconnectSocket();
     };
-  }, [handleUpdate]);
+  }, [handleProgress, handleStatus, handleNewDownload, handleDeleted]);
 
   const handleRetry = async (id: number) => {
     await retryDownload(id);

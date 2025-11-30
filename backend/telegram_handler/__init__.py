@@ -24,41 +24,43 @@ class TelegramDownloader:
         self.last_broadcast = 0
         self.setup_event_handlers()
 
-    def broadcast_update(self):
-        """Broadcast update via WebSocket (throttled)"""
+    def emit_progress(self, message_id: int, progress: float, downloaded_bytes: int,
+                       total_bytes: int, speed: float, pending_time: float | None):
+        """Emit progress update for a specific download (throttled)"""
         now = datetime.now().timestamp()
-        # Throttle broadcasts to once per second
         if now - self.last_broadcast >= 1:
             self.last_broadcast = now
             socketio = get_socketio()
             if socketio:
-                from backend.database import get_db
-                db = get_db()
-                all_downloads = db.get_all_downloads()
-                sorted_list = sorted(all_downloads, key=lambda x: 0 if x["status"] == "downloading" else 1)
+                socketio.emit('download:progress', {
+                    'message_id': message_id,
+                    'progress': progress,
+                    'downloaded_bytes': downloaded_bytes,
+                    'total_bytes': total_bytes,
+                    'speed': speed,
+                    'pending_time': pending_time
+                })
 
-                total_downloaded = sum(d.get("downloaded_bytes", 0) or 0 for d in sorted_list)
-                total_size = sum(d.get("total_bytes", 0) or 0 for d in sorted_list)
-                pending_bytes = total_size - total_downloaded
-                total_speed = sum(d.get("speed", 0) or 0 for d in sorted_list)
-                downloaded_count = sum(1 for d in sorted_list if d.get("status") == "done")
-                total_count = len(sorted_list)
-                active_count = sum(1 for d in sorted_list if d.get("status") != "done")
+    def emit_status(self, message_id: int, status: str, error: str | None = None):
+        """Emit status change for a specific download"""
+        socketio = get_socketio()
+        if socketio:
+            data = {'message_id': message_id, 'status': status}
+            if error:
+                data['error'] = error
+            socketio.emit('download:status', data)
 
-                data = {
-                    "downloads": sorted_list,
-                    "stats": {
-                        "total_downloaded": total_downloaded,
-                        "total_size": total_size,
-                        "pending_bytes": pending_bytes,
-                        "total_speed": total_speed,
-                        "downloaded_count": downloaded_count,
-                        "total_count": total_count,
-                        "all_count": total_count,
-                        "active_count": active_count
-                    }
-                }
-                socketio.emit('downloads_update', data)
+    def emit_new_download(self, download: dict):
+        """Emit new download added event"""
+        socketio = get_socketio()
+        if socketio:
+            socketio.emit('download:new', download)
+
+    def emit_deleted(self, message_id: int):
+        """Emit download deleted event"""
+        socketio = get_socketio()
+        if socketio:
+            socketio.emit('download:deleted', {'message_id': message_id})
 
     def setup_event_handlers(self):
         """Setup Telegram event handlers"""
@@ -135,8 +137,8 @@ class TelegramDownloader:
                         pending_time=pending_time
                     )
 
-                    # Broadcast update via WebSocket
-                    self.broadcast_update()
+                    # Emit only changed fields
+                    self.emit_progress(message_id, progress, current, total, speed, pending_time)
 
                     # Throttle edits: 1 per 20 seconds
                     timestamp = now.timestamp()
@@ -146,7 +148,7 @@ class TelegramDownloader:
 
                 await event.download_media(file=path, progress_callback=progress_callback)
 
-                # Final update
+                # Final update - download complete
                 db.update_download_by_message_id(
                     message_id,
                     status='done',
@@ -154,14 +156,14 @@ class TelegramDownloader:
                     speed=0,
                     pending_time=0
                 )
-                self.broadcast_update()
+                self.emit_status(message_id, 'done')
                 if entry.get("_status_msg_id"):
                     await self.edit_status_message(event, entry, "Downloaded")
                 return
 
             except asyncio.CancelledError:
                 db.update_download_by_message_id(message_id, status='stopped', speed=0)
-                self.broadcast_update()
+                self.emit_status(message_id, 'stopped')
                 if entry.get("_status_msg_id"):
                     await self.edit_status_message(event, entry, "Stopped")
                 return
@@ -171,8 +173,9 @@ class TelegramDownloader:
                 logging.error(error_msg)
                 await asyncio.sleep(5)
 
+        # All retries exhausted - mark as failed
         db.update_download_by_message_id(message_id, status='failed', speed=0, pending_time=None)
-        self.broadcast_update()
+        self.emit_status(message_id, 'failed')
         if entry.get("_status_msg_id"):
             await self.edit_status_message(event, entry, "Failed")
 
@@ -192,7 +195,7 @@ class TelegramDownloader:
         db = get_db()
 
         # Add to database with Telegram message ID
-        entry_dict = db.add_download(
+        new_download = db.add_download(
             file=filename,
             status='downloading',
             progress=0,
@@ -204,8 +207,8 @@ class TelegramDownloader:
             message_id=event.id
         )
 
-        # Broadcast new download
-        self.broadcast_update()
+        # Emit new download event
+        self.emit_new_download(new_download)
 
         # Create entry dict for status message tracking
         entry = {
