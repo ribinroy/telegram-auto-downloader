@@ -371,6 +371,10 @@ class WebApp:
             """Start a download from URL using yt-dlp"""
             data = request.json
             url = data.get("url")
+            format_id = data.get("format_id")
+            title = data.get("title")
+            ext = data.get("ext")
+            filesize = data.get("filesize")
 
             if not url:
                 return jsonify({"error": "URL is required"}), 400
@@ -381,7 +385,13 @@ class WebApp:
             if not self.event_loop:
                 return jsonify({"error": "Event loop not available"}), 500
 
-            result = self.ytdlp_downloader.start_download(url, self.event_loop)
+            result = self.ytdlp_downloader.start_download(
+                url, self.event_loop,
+                format_id=format_id,
+                title=title,
+                ext=ext,
+                filesize=filesize
+            )
 
             if 'error' in result:
                 return jsonify(result), 400

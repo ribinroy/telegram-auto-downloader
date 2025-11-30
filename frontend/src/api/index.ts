@@ -132,11 +132,19 @@ export async function checkUrl(url: string): Promise<UrlCheckResult> {
   return response.json();
 }
 
-export async function downloadUrl(url: string): Promise<Download | { error: string }> {
+export interface DownloadOptions {
+  url: string;
+  format_id?: string;
+  title?: string;
+  ext?: string;
+  filesize?: number;
+}
+
+export async function downloadUrl(options: DownloadOptions): Promise<Download | { error: string }> {
   const response = await fetch(`${API_BASE}/api/url/download`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-    body: JSON.stringify({ url }),
+    body: JSON.stringify(options),
   });
   if (response.status === 401) {
     clearToken();

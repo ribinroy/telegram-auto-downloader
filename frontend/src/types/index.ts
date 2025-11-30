@@ -15,6 +15,18 @@ export interface Download {
   url: string | null;  // Source URL for yt-dlp downloads
 }
 
+export interface VideoFormat {
+  format_id: string;
+  ext: string;
+  resolution: string;
+  height: number | null;
+  width?: number;
+  filesize: number | null;
+  has_audio: boolean;
+  tbr?: number;
+  label: string;
+}
+
 export interface UrlCheckResult {
   supported: boolean;
   error?: string;
@@ -23,6 +35,8 @@ export interface UrlCheckResult {
   filesize?: number;
   ext?: string;
   uploader?: string;
+  formats?: VideoFormat[];
+  best_format_id?: string;
 }
 
 export interface Stats {

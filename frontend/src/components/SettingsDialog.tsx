@@ -313,14 +313,17 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
                     />
                   </div>
                   <div>
-                    <label className="block text-sm text-slate-400 mb-1">Folder (optional)</label>
+                    <label className="block text-sm text-slate-400 mb-1">Folder (optional, full path)</label>
                     <input
                       type="text"
                       value={newFolder}
                       onChange={(e) => setNewFolder(e.target.value)}
-                      placeholder="e.g., Videos/YouTube"
+                      placeholder="e.g., /mnt/storage/Videos"
                       className="w-full bg-slate-800 border border-slate-600 rounded-lg py-2 px-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 transition-colors"
                     />
+                    <p className="text-xs text-slate-500 mt-1">
+                      Run <code className="bg-slate-800 px-1 rounded">sudo chmod 777 /path/to/folder</code> to ensure write permissions
+                    </p>
                   </div>
                   <div className="flex items-center gap-2">
                     <input

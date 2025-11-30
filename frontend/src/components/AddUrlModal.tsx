@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { X, Link, Loader2, AlertCircle, CheckCircle, Download } from 'lucide-react';
 import { checkUrl, downloadUrl } from '../api';
-import type { UrlCheckResult } from '../types';
+import type { UrlCheckResult, VideoFormat } from '../types';
 import { formatBytes } from '../utils/format';
 
 interface AddUrlModalProps {
@@ -15,6 +15,7 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
   const [checking, setChecking] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [checkResult, setCheckResult] = useState<UrlCheckResult | null>(null);
+  const [selectedFormat, setSelectedFormat] = useState<VideoFormat | null>(null);
   const [error, setError] = useState<string | null>(null);
   const hasAutoChecked = useRef(false);
 
@@ -24,12 +25,16 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
     setChecking(true);
     setError(null);
     setCheckResult(null);
+    setSelectedFormat(null);
 
     try {
       const result = await checkUrl(urlToCheck.trim());
       setCheckResult(result);
       if (!result.supported) {
         setError(result.error || 'URL not supported');
+      } else if (result.formats && result.formats.length > 0) {
+        // Select the best format by default (first one, sorted by height desc)
+        setSelectedFormat(result.formats[0]);
       }
     } catch {
       setError('Failed to check URL');
@@ -86,7 +91,13 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
 
     // Start download in background
     try {
-      await downloadUrl(url.trim());
+      await downloadUrl({
+        url: url.trim(),
+        format_id: selectedFormat?.format_id,
+        title: checkResult.title,
+        ext: selectedFormat?.ext || checkResult.ext,
+        filesize: selectedFormat?.filesize || checkResult.filesize,
+      });
     } catch {
       // Error will be shown in the download list
     }
@@ -95,6 +106,7 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
   const handleClose = () => {
     setUrl('');
     setCheckResult(null);
+    setSelectedFormat(null);
     setError(null);
     setChecking(false);
     setDownloading(false);
@@ -126,9 +138,11 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
 
   if (!isOpen) return null;
 
+  const formats = checkResult?.formats || [];
+
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-slate-800 rounded-xl w-full max-w-lg border border-slate-700 shadow-xl">
+      <div className="bg-slate-800 rounded-xl w-full max-w-lg border border-slate-700 shadow-xl max-h-[90vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-slate-700">
           <div className="flex items-center gap-2">
@@ -144,7 +158,7 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
         </div>
 
         {/* Content */}
-        <div className="p-4 space-y-4">
+        <div className="p-4 space-y-4 overflow-y-auto flex-1">
           {/* URL Input */}
           <div>
             <label className="block text-sm text-slate-400 mb-2">
@@ -156,6 +170,7 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
               onChange={(e) => {
                 setUrl(e.target.value);
                 setCheckResult(null);
+                setSelectedFormat(null);
                 setError(null);
               }}
               onKeyDown={handleKeyDown}
@@ -175,7 +190,7 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
 
           {/* Video Info */}
           {checkResult?.supported && (
-            <div className="p-3 bg-green-500/10 border border-green-500/30 rounded-lg space-y-2">
+            <div className="p-3 bg-green-500/10 border border-green-500/30 rounded-lg space-y-3">
               <div className="flex items-center gap-2">
                 <CheckCircle className="w-5 h-5 text-green-400" />
                 <span className="text-sm text-green-400 font-medium">URL supported</span>
@@ -188,17 +203,43 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
                   <p className="text-slate-400">By: {checkResult.uploader}</p>
                 )}
                 <div className="flex gap-4 text-slate-400">
-                  {checkResult.filesize && (
-                    <span>Size: {formatBytes(checkResult.filesize)}</span>
-                  )}
                   {checkResult.duration && (
                     <span>Duration: {Math.floor(checkResult.duration / 60)}:{String(Math.floor(checkResult.duration % 60)).padStart(2, '0')}</span>
                   )}
-                  {checkResult.ext && (
-                    <span>Format: {checkResult.ext.toUpperCase()}</span>
-                  )}
                 </div>
               </div>
+
+              {/* Format Selection */}
+              {formats.length > 0 && (
+                <div className="pt-2 border-t border-green-500/20">
+                  <p className="text-sm text-slate-400 mb-2">Quality:</p>
+                  <div className="space-y-1.5 max-h-40 overflow-y-auto">
+                    {formats.map((format) => (
+                      <label
+                        key={format.format_id}
+                        className={`flex items-center gap-3 p-2 rounded-lg cursor-pointer transition-colors ${
+                          selectedFormat?.format_id === format.format_id
+                            ? 'bg-cyan-500/20 border border-cyan-500/50'
+                            : 'bg-slate-700/30 border border-transparent hover:bg-slate-700/50'
+                        }`}
+                      >
+                        <input
+                          type="radio"
+                          name="format"
+                          value={format.format_id}
+                          checked={selectedFormat?.format_id === format.format_id}
+                          onChange={() => setSelectedFormat(format)}
+                          className="w-4 h-4 text-cyan-500 bg-slate-700 border-slate-600 focus:ring-cyan-500 focus:ring-offset-0"
+                        />
+                        <span className="flex-1 text-sm text-white">{format.label}</span>
+                        {format.filesize && (
+                          <span className="text-xs text-slate-400">{formatBytes(format.filesize)}</span>
+                        )}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -225,7 +266,7 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
               ) : (
                 <>
                   <Download className="w-4 h-4" />
-                  Download
+                  Download {selectedFormat?.resolution && selectedFormat.resolution !== 'best' ? `(${selectedFormat.resolution})` : ''}
                 </>
               )}
             </button>
