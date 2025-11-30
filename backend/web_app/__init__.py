@@ -170,16 +170,16 @@ class WebApp:
         @self.app.route("/api/stop", methods=["POST"])
         def api_stop():
             data = request.json
-            file = data.get("file")
+            message_id = data.get("message_id")
             db = get_db()
 
-            # Cancel the running task
-            task = self.download_tasks.get(file)
+            # Cancel the running task by message_id
+            task = self.download_tasks.get(message_id)
             if task and not task.done():
                 task.cancel()
 
             # Update database status to stopped
-            db.update_download(file, status='stopped', speed=0)
+            db.update_download_by_message_id(message_id, status='stopped', speed=0)
 
             self.broadcast_update()
             return jsonify({"status": "stopped"})
@@ -187,17 +187,17 @@ class WebApp:
         @self.app.route("/api/delete", methods=["POST"])
         def api_delete():
             data = request.json
-            file = data.get("file")
+            message_id = data.get("message_id")
             db = get_db()
 
             # Cancel task if running
-            task = self.download_tasks.get(file)
+            task = self.download_tasks.get(message_id)
             if task and not task.done():
                 task.cancel()
-            self.download_tasks.pop(file, None)
+            self.download_tasks.pop(message_id, None)
 
             # Delete from database
-            db.delete_download(file)
+            db.delete_download_by_message_id(message_id)
             self.broadcast_update()
             return jsonify({"status": "deleted"})
 

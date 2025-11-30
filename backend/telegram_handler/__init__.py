@@ -43,6 +43,7 @@ class TelegramDownloader:
                 total_speed = sum(d.get("speed", 0) or 0 for d in sorted_list)
                 downloaded_count = sum(1 for d in sorted_list if d.get("status") == "done")
                 total_count = len(sorted_list)
+                active_count = sum(1 for d in sorted_list if d.get("status") != "done")
 
                 data = {
                     "downloads": sorted_list,
@@ -52,7 +53,9 @@ class TelegramDownloader:
                         "pending_bytes": pending_bytes,
                         "total_speed": total_speed,
                         "downloaded_count": downloaded_count,
-                        "total_count": total_count
+                        "total_count": total_count,
+                        "all_count": total_count,
+                        "active_count": active_count
                     }
                 }
                 socketio.emit('downloads_update', data)
@@ -87,7 +90,7 @@ class TelegramDownloader:
         start_time = datetime.now()
         last_update = 0  # timestamp of last message edit
         db = get_db()
-        filename = entry["file"]
+        message_id = entry["message_id"]
 
         # Send initial "Downloading" message
         try:
@@ -122,9 +125,9 @@ class TelegramDownloader:
                     entry["speed"] = speed
                     entry["pending_time"] = pending_time
 
-                    # Save to database
-                    db.update_download(
-                        filename,
+                    # Save to database using message_id
+                    db.update_download_by_message_id(
+                        message_id,
                         progress=progress,
                         downloaded_bytes=current,
                         total_bytes=total,
@@ -144,8 +147,8 @@ class TelegramDownloader:
                 await event.download_media(file=path, progress_callback=progress_callback)
 
                 # Final update
-                db.update_download(
-                    filename,
+                db.update_download_by_message_id(
+                    message_id,
                     status='done',
                     progress=100,
                     speed=0,
@@ -157,18 +160,18 @@ class TelegramDownloader:
                 return
 
             except asyncio.CancelledError:
-                db.update_download(filename, status='stopped', speed=0)
+                db.update_download_by_message_id(message_id, status='stopped', speed=0)
                 self.broadcast_update()
                 if entry.get("_status_msg_id"):
                     await self.edit_status_message(event, entry, "Stopped")
                 return
             except Exception as e:
                 error_msg = f"Attempt {attempt}/{MAX_RETRIES} failed: {str(e)}"
-                db.update_download(filename, error=error_msg)
+                db.update_download_by_message_id(message_id, error=error_msg)
                 logging.error(error_msg)
                 await asyncio.sleep(5)
 
-        db.update_download(filename, status='failed', speed=0, pending_time=None)
+        db.update_download_by_message_id(message_id, status='failed', speed=0, pending_time=None)
         self.broadcast_update()
         if entry.get("_status_msg_id"):
             await self.edit_status_message(event, entry, "Failed")
@@ -188,7 +191,7 @@ class TelegramDownloader:
 
         db = get_db()
 
-        # Add to database
+        # Add to database with Telegram message ID
         entry_dict = db.add_download(
             file=filename,
             status='downloading',
@@ -197,7 +200,8 @@ class TelegramDownloader:
             error=None,
             downloaded_bytes=0,
             total_bytes=0,
-            pending_time=None
+            pending_time=None,
+            message_id=event.id
         )
 
         # Broadcast new download
@@ -206,12 +210,13 @@ class TelegramDownloader:
         # Create entry dict for status message tracking
         entry = {
             "file": filename,
+            "message_id": event.id,
             "_status_msg_id": None
         }
 
         # Start the download task
         task = asyncio.create_task(self.safe_download(event, str(path), entry))
-        self.download_tasks[filename] = task
+        self.download_tasks[event.id] = task  # Use message_id as key
 
     def start(self):
         """Start the Telegram client"""

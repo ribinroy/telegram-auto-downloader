@@ -21,8 +21,8 @@ interface DownloadItemProps {
   download: Download;
   index: number;
   onRetry: (id: number) => void;
-  onStop: (file: string) => void;
-  onDelete: (file: string) => void;
+  onStop: (message_id: number) => void;
+  onDelete: (message_id: number) => void;
 }
 
 function useRelativeTime(dateString: string | null) {
@@ -97,7 +97,7 @@ export function DownloadItem({ download, index, onRetry, onStop, onDelete }: Dow
 
   const handleStop = () => {
     if (confirm('Are you sure you want to stop this download?')) {
-      onStop(download.file);
+      if (download.message_id) onStop(download.message_id);
     }
   };
 
@@ -185,7 +185,11 @@ export function DownloadItem({ download, index, onRetry, onStop, onDelete }: Dow
                 </button>
               )}
               <button
-                onClick={() => onDelete(download.file)}
+                onClick={() => {
+                  if (confirm('Are you sure you want to delete this download?')) {
+                    if (download.message_id) onDelete(download.message_id);
+                  }
+                }}
                 className="p-2 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg transition-colors"
                 title="Delete"
               >
