@@ -3,12 +3,13 @@ Flask REST API with WebSocket support for Telegram Downloader
 """
 import os
 import jwt
+import asyncio
 from datetime import datetime, timedelta
 from pathlib import Path
 from functools import wraps
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
-from flask_socketio import SocketIO, emit
+from flask_socketio import SocketIO
 from backend.config import WEB_PORT, WEB_HOST
 from backend.database import get_db
 
@@ -53,9 +54,11 @@ def token_required(f):
 
 
 class WebApp:
-    def __init__(self, download_tasks):
+    def __init__(self, download_tasks, ytdlp_downloader=None, event_loop=None):
         global socketio
         self.download_tasks = download_tasks
+        self.ytdlp_downloader = ytdlp_downloader
+        self.event_loop = event_loop
         self.app = Flask(__name__, static_folder=str(FRONTEND_DIST), static_url_path='')
         CORS(self.app, resources={r"/*": {"origins": "*"}})
         socketio = SocketIO(self.app, cors_allowed_origins="*", async_mode='threading')
@@ -263,39 +266,103 @@ class WebApp:
         @token_required
         def api_stop():
             data = request.json
-            message_id_str = data.get("message_id")
-            message_id = int(message_id_str) if message_id_str else None
+            message_id = data.get("message_id")  # Now always a string
             db = get_db()
 
-            # Cancel the running task by message_id
-            task = self.download_tasks.get(message_id)
-            if task and not task.done():
-                task.cancel()
+            # Check if it's a yt-dlp download (UUID format) or Telegram (numeric string)
+            is_uuid = message_id and '-' in message_id
+
+            if is_uuid:
+                # yt-dlp download - stop via ytdlp_downloader
+                if self.ytdlp_downloader:
+                    self.ytdlp_downloader.stop_download(message_id)
+                # Also try to cancel from download_tasks
+                task = self.download_tasks.get(message_id)
+                if task and hasattr(task, 'cancel'):
+                    task.cancel()
+            else:
+                # Telegram download - convert to int for task lookup
+                telegram_id = int(message_id) if message_id else None
+                task = self.download_tasks.get(telegram_id)
+                if task and not task.done():
+                    task.cancel()
 
             # Update database status to stopped
             db.update_download_by_message_id(message_id, status='stopped', speed=0)
-            self.emit_status(message_id_str, 'stopped')
+            self.emit_status(message_id, 'stopped')
             return jsonify({"status": "stopped"})
 
         @self.app.route("/api/delete", methods=["POST"])
         @token_required
         def api_delete():
             data = request.json
-            message_id_str = data.get("message_id")
-            message_id = int(message_id_str) if message_id_str else None
+            message_id = data.get("message_id")  # Now always a string
             db = get_db()
 
-            # Cancel task if running and mark as stopped
-            task = self.download_tasks.get(message_id)
-            if task and not task.done():
-                task.cancel()
-                db.update_download_by_message_id(message_id, status='stopped', speed=0)
-            self.download_tasks.pop(message_id, None)
+            # Check if it's a yt-dlp download (UUID format) or Telegram (numeric string)
+            is_uuid = message_id and '-' in message_id
+
+            if is_uuid:
+                # yt-dlp download - stop via ytdlp_downloader
+                if self.ytdlp_downloader:
+                    self.ytdlp_downloader.stop_download(message_id)
+                # Also try to cancel from download_tasks
+                task = self.download_tasks.get(message_id)
+                if task and hasattr(task, 'cancel'):
+                    task.cancel()
+                self.download_tasks.pop(message_id, None)
+            else:
+                # Telegram download - convert to int for task lookup
+                telegram_id = int(message_id) if message_id else None
+                task = self.download_tasks.get(telegram_id)
+                if task and not task.done():
+                    task.cancel()
+                    db.update_download_by_message_id(message_id, status='stopped', speed=0)
+                self.download_tasks.pop(telegram_id, None)
 
             # Soft delete from database
             db.delete_download_by_message_id(message_id)
-            self.emit_deleted(message_id_str)
+            self.emit_deleted(message_id)
             return jsonify({"status": "deleted"})
+
+        @self.app.route("/api/url/check", methods=["POST"])
+        @token_required
+        def api_check_url():
+            """Check if a URL is supported by yt-dlp"""
+            data = request.json
+            url = data.get("url")
+
+            if not url:
+                return jsonify({"error": "URL is required"}), 400
+
+            if not self.ytdlp_downloader:
+                return jsonify({"error": "yt-dlp downloader not available"}), 500
+
+            result = self.ytdlp_downloader.check_url(url)
+            return jsonify(result)
+
+        @self.app.route("/api/url/download", methods=["POST"])
+        @token_required
+        def api_download_url():
+            """Start a download from URL using yt-dlp"""
+            data = request.json
+            url = data.get("url")
+
+            if not url:
+                return jsonify({"error": "URL is required"}), 400
+
+            if not self.ytdlp_downloader:
+                return jsonify({"error": "yt-dlp downloader not available"}), 500
+
+            if not self.event_loop:
+                return jsonify({"error": "Event loop not available"}), 500
+
+            result = self.ytdlp_downloader.start_download(url, self.event_loop)
+
+            if 'error' in result:
+                return jsonify(result), 400
+
+            return jsonify(result)
 
         # Serve frontend
         @self.app.route('/')

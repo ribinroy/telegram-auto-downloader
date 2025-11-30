@@ -9,7 +9,8 @@ import {
   Image,
   Video,
   Calendar,
-  ArrowDown
+  ArrowDown,
+  Globe
 } from 'lucide-react';
 import ReactTimeAgo from 'react-time-ago';
 import type { Download } from '../types';
@@ -162,8 +163,18 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
             </div>
           </div>
 
-          {/* ID and Date */}
+          {/* Source, ID and Date */}
           <div className="flex gap-4 text-xs text-slate-500">
+            {/* Source indicator */}
+            {download.downloaded_from && download.downloaded_from !== 'telegram' && (
+              <div
+                className="flex items-center gap-1 cursor-default"
+                title={download.url || download.downloaded_from}
+              >
+                <Globe className="w-3 h-3 text-cyan-500" />
+                <span className="text-cyan-500">{download.downloaded_from}</span>
+              </div>
+            )}
             <div
               className="flex items-center gap-1 cursor-default"
               title="Database ID"
