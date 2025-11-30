@@ -250,16 +250,40 @@ class WebApp:
                 db = get_db()
                 download = db.get_download_by_id(download_id)
                 if download and download["status"] in ["failed", "stopped"]:
-                    db.update_download_by_id(
-                        download_id,
-                        status='downloading',
-                        progress=0,
-                        speed=0,
-                        error=None,
-                        updated_at=datetime.utcnow()
-                    )
-                    if download.get("message_id"):
-                        self.emit_status(download["message_id"], 'downloading')
+                    # Check if it's a yt-dlp download (has URL)
+                    if download.get("url") and self.ytdlp_downloader and self.event_loop:
+                        # Resume yt-dlp download (yt-dlp will continue from partial file)
+                        message_id = download.get("message_id")
+                        url = download.get("url")
+
+                        # Update status but keep progress (yt-dlp will resume)
+                        db.update_download_by_id(
+                            download_id,
+                            status='downloading',
+                            speed=0,
+                            error=None,
+                            updated_at=datetime.utcnow()
+                        )
+                        self.emit_status(message_id, 'downloading')
+
+                        # Start the download task (yt-dlp -c flag will resume)
+                        future = asyncio.run_coroutine_threadsafe(
+                            self.ytdlp_downloader.download(url, message_id),
+                            self.event_loop
+                        )
+                        self.download_tasks[message_id] = future
+                    else:
+                        # Telegram download - just update status (Telegram handler will pick it up)
+                        db.update_download_by_id(
+                            download_id,
+                            status='downloading',
+                            progress=0,
+                            speed=0,
+                            error=None,
+                            updated_at=datetime.utcnow()
+                        )
+                        if download.get("message_id"):
+                            self.emit_status(download["message_id"], 'downloading')
             return jsonify({"status": "ok"})
 
         @self.app.route("/api/stop", methods=["POST"])

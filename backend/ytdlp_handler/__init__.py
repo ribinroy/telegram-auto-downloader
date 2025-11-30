@@ -162,6 +162,7 @@ class YtdlpDownloader:
             process = await asyncio.create_subprocess_exec(
                 'yt-dlp',
                 '--newline',  # Output progress on new lines
+                '-c',  # Continue/resume partial downloads
                 '-o', output_template,
                 '--no-mtime',  # Don't set file modification time
                 url,
