@@ -1,6 +1,6 @@
 export interface Download {
   id: number;
-  message_id: number | null;
+  message_id: string | null;  // String to avoid JS precision loss with large Telegram IDs
   file: string;
   status: 'downloading' | 'done' | 'failed' | 'stopped';
   progress: number;

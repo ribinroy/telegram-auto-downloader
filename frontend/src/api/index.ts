@@ -103,7 +103,7 @@ export async function retryDownload(id: number): Promise<void> {
   });
 }
 
-export async function stopDownload(message_id: number): Promise<void> {
+export async function stopDownload(message_id: string): Promise<void> {
   await fetch(`${API_BASE}/api/stop`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
@@ -111,7 +111,7 @@ export async function stopDownload(message_id: number): Promise<void> {
   });
 }
 
-export async function deleteDownload(message_id: number): Promise<void> {
+export async function deleteDownload(message_id: string): Promise<void> {
   await fetch(`${API_BASE}/api/delete`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },

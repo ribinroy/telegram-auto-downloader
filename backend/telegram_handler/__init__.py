@@ -33,7 +33,7 @@ class TelegramDownloader:
             socketio = get_socketio()
             if socketio:
                 socketio.emit('download:progress', {
-                    'message_id': message_id,
+                    'message_id': str(message_id),  # String to avoid JS precision loss
                     'progress': progress,
                     'downloaded_bytes': downloaded_bytes,
                     'total_bytes': total_bytes,
@@ -45,13 +45,13 @@ class TelegramDownloader:
         """Emit status change for a specific download"""
         socketio = get_socketio()
         if socketio:
-            data = {'message_id': message_id, 'status': status}
+            data = {'message_id': str(message_id), 'status': status}  # String to avoid JS precision loss
             if error:
                 data['error'] = error
             socketio.emit('download:status', data)
 
     def emit_new_download(self, download: dict):
-        """Emit new download added event"""
+        """Emit new download added event (message_id already stringified in to_dict)"""
         socketio = get_socketio()
         if socketio:
             socketio.emit('download:new', download)
@@ -60,7 +60,7 @@ class TelegramDownloader:
         """Emit download deleted event"""
         socketio = get_socketio()
         if socketio:
-            socketio.emit('download:deleted', {'message_id': message_id})
+            socketio.emit('download:deleted', {'message_id': str(message_id)})
 
     def setup_event_handlers(self):
         """Setup Telegram event handlers"""
