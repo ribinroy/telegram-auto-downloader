@@ -5,11 +5,13 @@ import {
   CheckCircle,
   XCircle,
   StopCircle,
-  FileText,
-  Image,
-  Video,
   Calendar,
-  ArrowDown
+  ArrowDown,
+  Send,
+  Youtube,
+  Twitter,
+  Instagram,
+  Facebook
 } from 'lucide-react';
 import ReactTimeAgo from 'react-time-ago';
 import type { Download } from '../types';
@@ -22,15 +24,46 @@ interface DownloadItemProps {
   onDelete: (message_id: number) => void;
 }
 
-function getFileIcon(filename: string) {
-  const ext = filename.split('.').pop()?.toLowerCase();
-  if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(ext || '')) {
-    return <Image className="w-5 h-5 text-pink-400" />;
+function getSourceIcon(source: string) {
+  const domain = source?.toLowerCase() || 'telegram';
+
+  if (domain === 'telegram') {
+    return <Send className="w-5 h-5 text-sky-400" />;
   }
-  if (['mp4', 'mkv', 'avi', 'mov', 'webm'].includes(ext || '')) {
-    return <Video className="w-5 h-5 text-purple-400" />;
+  if (domain.includes('youtube') || domain.includes('youtu.be')) {
+    return <Youtube className="w-5 h-5 text-red-500" />;
   }
-  return <FileText className="w-5 h-5 text-blue-400" />;
+  if (domain.includes('twitter') || domain.includes('x.com')) {
+    return <Twitter className="w-5 h-5 text-sky-400" />;
+  }
+  if (domain.includes('instagram')) {
+    return <Instagram className="w-5 h-5 text-pink-500" />;
+  }
+  if (domain.includes('facebook') || domain.includes('fb.')) {
+    return <Facebook className="w-5 h-5 text-blue-500" />;
+  }
+  if (domain.includes('tiktok')) {
+    return (
+      <span className="w-5 h-5 flex items-center justify-center text-xs font-bold text-white bg-gradient-to-r from-cyan-400 to-pink-500 rounded">
+        T
+      </span>
+    );
+  }
+  if (domain.includes('vimeo')) {
+    return (
+      <span className="w-5 h-5 flex items-center justify-center text-xs font-bold text-cyan-400">
+        V
+      </span>
+    );
+  }
+
+  // Default: show first letter of domain
+  const firstLetter = domain.replace(/[^a-z]/g, '').charAt(0).toUpperCase() || 'U';
+  return (
+    <span className="w-5 h-5 flex items-center justify-center text-xs font-bold text-slate-400 bg-slate-600 rounded">
+      {firstLetter}
+    </span>
+  );
 }
 
 function getStatusIcon(status: Download['status']) {
@@ -71,9 +104,9 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
   return (
     <div className="bg-slate-800/30 rounded-xl p-4 border border-slate-700/50 hover:border-slate-600 transition-all">
       <div className="flex items-start gap-4">
-        {/* File Icon */}
-        <div className="p-2.5 bg-slate-700/50 rounded-lg">
-          {getFileIcon(download.file)}
+        {/* Source Icon */}
+        <div className="p-2.5 bg-slate-700/50 rounded-lg" title={download.downloaded_from || 'telegram'}>
+          {getSourceIcon(download.downloaded_from)}
         </div>
 
         <div className="flex-1 min-w-0">
@@ -133,7 +166,7 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
               {download.status === 'failed' && (
                 <button
                   onClick={() => onRetry(download.id)}
-                  className="p-2 bg-green-500/20 hover:bg-green-500/30 text-green-400 rounded-lg transition-colors"
+                  className="p-2 bg-green-500/20 hover:bg-green-500/30 text-green-400 rounded-lg transition-colors cursor-pointer"
                   title="Retry"
                 >
                   <RefreshCw className="w-4 h-4" />
@@ -142,7 +175,7 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
               {download.status === 'downloading' && (
                 <button
                   onClick={handleStop}
-                  className="p-2 bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-400 rounded-lg transition-colors"
+                  className="p-2 bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-400 rounded-lg transition-colors cursor-pointer"
                   title="Stop"
                 >
                   <Square className="w-4 h-4" />
@@ -154,7 +187,7 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
                     if (download.message_id) onDelete(download.message_id);
                   }
                 }}
-                className="p-2 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg transition-colors"
+                className="p-2 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg transition-colors cursor-pointer"
                 title="Delete"
               >
                 <Trash2 className="w-4 h-4" />

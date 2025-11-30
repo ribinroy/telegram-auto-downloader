@@ -11,6 +11,8 @@ export interface Download {
   downloaded_bytes: number;
   total_bytes: number;
   pending_time: number | null;
+  downloaded_from: string;
+  url: string | null;
 }
 
 export interface Stats {

@@ -300,26 +300,119 @@ class WebApp:
             if not url:
                 return jsonify({"error": "URL is required"}), 400
 
-            # Add to database as pending
-            db = get_db()
-            import time
-            message_id = int(time.time() * 1000)  # Use timestamp as pseudo message_id
-            filename = url.split('/')[-1].split('?')[0] or 'download'
+            import uuid
+            import threading
+            from urllib.parse import urlparse
 
+            # Extract domain from URL
+            try:
+                parsed = urlparse(url)
+                domain = parsed.netloc.replace('www.', '')
+            except:
+                domain = 'unknown'
+
+            db = get_db()
+            message_id = uuid.uuid4().int >> 64  # Use UUID as unique identifier (64-bit int)
+
+            # First check if yt-dlp supports this URL
+            try:
+                import yt_dlp
+                ydl_opts = {
+                    'quiet': True,
+                    'no_warnings': True,
+                    'extract_flat': True,
+                }
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(url, download=False)
+                    if not info:
+                        return jsonify({"error": "URL not supported by yt-dlp"}), 400
+                    filename = info.get('title', 'download') + '.' + info.get('ext', 'mp4')
+            except Exception as e:
+                return jsonify({"error": f"URL not supported: {str(e)}"}), 400
+
+            # Add to database
             download = db.add_download(
                 file=filename,
-                status='pending',
-                message_id=message_id
+                status='downloading',
+                message_id=message_id,
+                downloaded_from=domain,
+                url=url
             )
 
             # Emit new download event
-            from backend.web_app import get_socketio
             socketio = get_socketio()
             if socketio:
                 socketio.emit('download:new', download)
 
-            # TODO: Implement actual URL download logic here
-            # For now, just add to database as pending
+            # Start download in background thread
+            def download_video():
+                from backend.config import DOWNLOAD_DIR
+                try:
+                    def progress_hook(d):
+                        if d['status'] == 'downloading':
+                            total = d.get('total_bytes') or d.get('total_bytes_estimate') or 0
+                            downloaded = d.get('downloaded_bytes', 0)
+                            speed = d.get('speed', 0) or 0
+                            progress = (downloaded / total * 100) if total > 0 else 0
+                            eta = d.get('eta', 0) or 0
+
+                            db.update_download_by_message_id(
+                                message_id,
+                                progress=progress,
+                                downloaded_bytes=downloaded,
+                                total_bytes=total,
+                                speed=speed,
+                                pending_time=eta
+                            )
+
+                            if socketio:
+                                socketio.emit('download:progress', {
+                                    'message_id': message_id,
+                                    'progress': progress,
+                                    'downloaded_bytes': downloaded,
+                                    'total_bytes': total,
+                                    'speed': speed,
+                                    'pending_time': eta
+                                })
+                        elif d['status'] == 'finished':
+                            db.update_download_by_message_id(
+                                message_id,
+                                status='done',
+                                progress=100,
+                                speed=0
+                            )
+                            if socketio:
+                                socketio.emit('download:status', {
+                                    'message_id': message_id,
+                                    'status': 'done'
+                                })
+
+                    ydl_opts = {
+                        'outtmpl': str(DOWNLOAD_DIR / '%(title)s.%(ext)s'),
+                        'progress_hooks': [progress_hook],
+                        'quiet': True,
+                    }
+
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        ydl.download([url])
+
+                except Exception as e:
+                    db.update_download_by_message_id(
+                        message_id,
+                        status='failed',
+                        error=str(e),
+                        speed=0
+                    )
+                    if socketio:
+                        socketio.emit('download:status', {
+                            'message_id': message_id,
+                            'status': 'failed',
+                            'error': str(e)
+                        })
+
+            thread = threading.Thread(target=download_video)
+            thread.daemon = True
+            thread.start()
 
             return jsonify({"status": "added", "download": download})
 

@@ -28,6 +28,8 @@ class Download(Base):
     total_bytes = Column(BigInteger, default=0)
     pending_time = Column(Float, nullable=True)
     is_deleted = Column(Boolean, default=False)
+    downloaded_from = Column(String(100), default='telegram')  # Source domain
+    url = Column(Text, nullable=True)  # URL for non-telegram downloads
 
     def to_dict(self):
         """Convert model to dictionary"""
@@ -43,7 +45,9 @@ class Download(Base):
             'created_at': f"{self.created_at.isoformat()}Z" if self.created_at else None,
             'downloaded_bytes': self.downloaded_bytes,
             'total_bytes': self.total_bytes,
-            'pending_time': self.pending_time
+            'pending_time': self.pending_time,
+            'downloaded_from': self.downloaded_from or 'telegram',
+            'url': self.url
         }
 
 
@@ -109,7 +113,7 @@ class DatabaseManager:
         self.Session.remove()
 
     def add_download(self, file, status='downloading', progress=0, speed=0,
-                     error=None, downloaded_bytes=0, total_bytes=0, pending_time=None, message_id=None):
+                     error=None, downloaded_bytes=0, total_bytes=0, pending_time=None, message_id=None, downloaded_from='telegram', url=None):
         """Add a new download entry"""
         session = self.get_session()
         try:
@@ -125,7 +129,9 @@ class DatabaseManager:
                 created_at=now,
                 downloaded_bytes=downloaded_bytes,
                 total_bytes=total_bytes,
-                pending_time=pending_time
+                pending_time=pending_time,
+                downloaded_from=downloaded_from,
+                url=url
             )
             session.add(download)
             session.commit()
