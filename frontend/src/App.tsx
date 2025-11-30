@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Search, Download, Wifi, WifiOff, Loader2, HardDrive, Clock, Zap, LogOut, Settings, Plus } from 'lucide-react';
 import { formatBytes, formatSpeed } from './utils/format';
-import { fetchDownloads, fetchStats, retryDownload, stopDownload, deleteDownload, verifyToken, clearToken, getToken, type SortBy, type SortOrder } from './api';
+import { fetchDownloads, fetchStats, retryDownload, stopDownload, deleteDownload, verifyToken, clearToken, getToken, fetchSecuredSources, type SortBy, type SortOrder } from './api';
 import { connectSocket, disconnectSocket, type ProgressUpdate, type StatusUpdate, type DeletedUpdate } from './api/socket';
 import { DownloadItem } from './components/DownloadItem';
 import { LoginPage } from './components/LoginPage';
@@ -56,6 +56,10 @@ function App() {
 
 function MainApp({ onLogout }: { onLogout: () => void }) {
   const [downloads, setDownloads] = useState<DownloadType[]>([]);
+  const [securedSources, setSecuredSources] = useState<string[]>([]);
+  const [showSecured, setShowSecured] = useState(false);
+  const [secretClickCount, setSecretClickCount] = useState(0);
+  const secretClickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [addUrlOpen, setAddUrlOpen] = useState(false);
   const [stats, setStats] = useState<Stats>({
@@ -172,15 +176,26 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
     }
   }, []);
 
+  // Fetch secured sources
+  const loadSecuredSources = useCallback(async () => {
+    try {
+      const sources = await fetchSecuredSources();
+      setSecuredSources(sources);
+    } catch (err) {
+      console.error('Failed to fetch secured sources');
+    }
+  }, []);
+
   // Load initial data on mount and when search/tab changes
   useEffect(() => {
     loadDownloads();
   }, [loadDownloads]);
 
-  // Load stats on mount
+  // Load stats and secured sources on mount
   useEffect(() => {
     loadStats();
-  }, [loadStats]);
+    loadSecuredSources();
+  }, [loadStats, loadSecuredSources]);
 
   // Setup WebSocket for real-time updates
   useEffect(() => {
@@ -210,8 +225,31 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
     await deleteDownload(message_id);
   };
 
-  // Downloads are already filtered by the backend based on activeTab
-  const filteredDownloads = downloads;
+  // Secret click handler for showing secured downloads
+  const handleSecretClick = () => {
+    // Clear existing timer
+    if (secretClickTimer.current) {
+      clearTimeout(secretClickTimer.current);
+    }
+
+    const newCount = secretClickCount + 1;
+    setSecretClickCount(newCount);
+
+    if (newCount >= 4) {
+      setShowSecured(prev => !prev);
+      setSecretClickCount(0);
+    } else {
+      // Reset count after 1 second of no clicks
+      secretClickTimer.current = setTimeout(() => {
+        setSecretClickCount(0);
+      }, 1000);
+    }
+  };
+
+  // Filter downloads: exclude secured sources unless showSecured is true
+  const filteredDownloads = showSecured
+    ? downloads
+    : downloads.filter(d => !securedSources.includes(d.downloaded_from));
 
   const searchRef = useRef<HTMLInputElement>(null);
   const [pastedUrl, setPastedUrl] = useState<string | null>(null);
@@ -282,8 +320,11 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
                 Speed
               </div>
             </div>
-            {/* Connection status */}
-            <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg min-w-[80px] ${connected ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
+            {/* Connection status - secret click target */}
+            <div
+              onClick={handleSecretClick}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg min-w-[80px] cursor-default select-none ${connected ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}
+            >
               {connected ? <Wifi className="w-4 h-4" /> : <WifiOff className="w-4 h-4" />}
               <span className="text-sm">{connected ? 'Live' : 'Offline'}</span>
             </div>
@@ -417,7 +458,15 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
       </button>
 
       {/* Settings Dialog */}
-      <SettingsDialog isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <SettingsDialog
+        isOpen={settingsOpen}
+        onClose={() => {
+          setSettingsOpen(false);
+          // Reload secured sources in case mappings were changed
+          loadSecuredSources();
+        }}
+        showMappings={showSecured}
+      />
 
       {/* Add URL Modal */}
       <AddUrlModal

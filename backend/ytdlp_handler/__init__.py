@@ -8,6 +8,7 @@ import re
 import os
 import logging
 from datetime import datetime
+from pathlib import Path
 from urllib.parse import urlparse
 from backend.config import DOWNLOAD_DIR
 from backend.database import get_db, generate_uuid
@@ -22,25 +23,33 @@ class YtdlpDownloader:
         self.processes = {}  # Track running yt-dlp processes by message_id
 
     def get_domain(self, url: str) -> str:
-        """Extract domain from URL"""
+        """Extract site name from URL (e.g., youtube.com -> youtube)"""
         try:
             parsed = urlparse(url)
             domain = parsed.netloc
             # Remove www. prefix if present
             if domain.startswith('www.'):
                 domain = domain[4:]
+            # Extract just the site name (remove TLD)
+            # e.g., youtube.com -> youtube, x.com -> x, tiktok.com -> tiktok
+            parts = domain.split('.')
+            if len(parts) >= 2:
+                # Handle special cases like co.uk, com.br etc.
+                if parts[-2] in ('co', 'com', 'org', 'net') and len(parts) >= 3:
+                    return parts[-3]
+                return parts[-2]
             return domain
         except Exception:
             return 'unknown'
 
     def check_url(self, url: str) -> dict:
-        """Check if URL is supported by yt-dlp and get video info"""
+        """Check if URL is supported by yt-dlp and get video info with available formats"""
         try:
             result = subprocess.run(
                 ['yt-dlp', '--dump-json', '--no-download', url],
                 capture_output=True,
                 text=True,
-                timeout=30
+                timeout=60
             )
 
             if result.returncode != 0:
@@ -55,6 +64,65 @@ class YtdlpDownloader:
                 return {'supported': False, 'error': error_msg[:200] if error_msg else 'Unknown error'}
 
             info = json.loads(result.stdout)
+
+            # Extract available formats
+            formats = []
+            seen = set()  # Track unique format combinations
+            raw_formats = info.get('formats', [])
+
+            for fmt in raw_formats:
+                format_id = fmt.get('format_id', '')
+                ext = fmt.get('ext', '')
+                height = fmt.get('height')
+                width = fmt.get('width')
+                vcodec = fmt.get('vcodec', 'none')
+                acodec = fmt.get('acodec', 'none')
+                filesize = fmt.get('filesize') or fmt.get('filesize_approx')
+                tbr = fmt.get('tbr')  # Total bitrate
+
+                # Skip formats without video (audio-only) unless it's the only option
+                has_video = vcodec and vcodec != 'none'
+                has_audio = acodec and acodec != 'none'
+
+                # Create a readable label
+                if has_video and height:
+                    resolution = f"{height}p"
+                    # Create unique key for deduplication
+                    key = (height, ext)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+
+                    formats.append({
+                        'format_id': format_id,
+                        'ext': ext,
+                        'resolution': resolution,
+                        'height': height,
+                        'width': width,
+                        'filesize': filesize,
+                        'has_audio': has_audio,
+                        'tbr': tbr,
+                        'label': f"{resolution} ({ext.upper()}){'' if has_audio else ' - no audio'}"
+                    })
+
+            # Sort by height (resolution) descending
+            formats.sort(key=lambda x: (x.get('height') or 0), reverse=True)
+
+            # If no video formats found, add a default "best" option
+            if not formats:
+                formats.append({
+                    'format_id': 'best',
+                    'ext': info.get('ext', 'mp4'),
+                    'resolution': 'best',
+                    'height': None,
+                    'filesize': info.get('filesize') or info.get('filesize_approx'),
+                    'has_audio': True,
+                    'label': 'Best available'
+                })
+
+            # Get the best format (first after sorting)
+            best_format_id = formats[0]['format_id'] if formats else 'best'
+
             return {
                 'supported': True,
                 'title': info.get('title', 'Unknown'),
@@ -62,6 +130,8 @@ class YtdlpDownloader:
                 'filesize': info.get('filesize') or info.get('filesize_approx'),
                 'ext': info.get('ext', 'mp4'),
                 'uploader': info.get('uploader'),
+                'formats': formats,
+                'best_format_id': best_format_id,
             }
         except subprocess.TimeoutExpired:
             return {'supported': False, 'error': 'Request timed out'}
@@ -145,27 +215,58 @@ class YtdlpDownloader:
 
         return None
 
-    async def download(self, url: str, message_id: str):
+    async def download(self, url: str, message_id: str, format_id: str = None):
         """Download video using yt-dlp with progress tracking"""
         import sys
         db = get_db()
-        print(f"[yt-dlp] Starting download: {url} (id: {message_id})", flush=True)
+        print(f"[yt-dlp] Starting download: {url} (id: {message_id}, format: {format_id})", flush=True)
         sys.stdout.flush()
 
-        # Create output template
-        output_dir = DOWNLOAD_DIR / "Videos"
-        output_dir.mkdir(exist_ok=True)
+        # Get the source name and check for custom folder mapping
+        source = self.get_domain(url)
+        mapping = db.get_download_type_map(source)
+
+        # Use custom folder from mapping if it exists and is accessible
+        output_dir = None
+        if mapping and mapping.get('folder'):
+            custom_folder = Path(mapping['folder'])
+            try:
+                # Check if folder exists or can be created
+                if custom_folder.exists() or custom_folder.parent.exists():
+                    custom_folder.mkdir(parents=True, exist_ok=True)
+                    output_dir = custom_folder
+                    print(f"[yt-dlp] Using custom folder: {output_dir}")
+            except (OSError, PermissionError) as e:
+                print(f"[yt-dlp] Custom folder not accessible: {e}, falling back to default")
+
+        # Fall back to default folder
+        if output_dir is None:
+            output_dir = DOWNLOAD_DIR / "Videos"
+            output_dir.mkdir(parents=True, exist_ok=True)
+
         output_template = str(output_dir / "%(title)s.%(ext)s")
 
         try:
             print(f"[yt-dlp] Output dir: {output_dir}")
-            process = await asyncio.create_subprocess_exec(
+
+            # Build command with optional format selection
+            cmd = [
                 'yt-dlp',
                 '--newline',  # Output progress on new lines
                 '-c',  # Continue/resume partial downloads
                 '-o', output_template,
                 '--no-mtime',  # Don't set file modification time
-                url,
+            ]
+
+            # Add format selection if specified
+            if format_id and format_id != 'best':
+                # Request specific format + best audio, or just the format if it has audio
+                cmd.extend(['-f', f'{format_id}+bestaudio/best/{format_id}'])
+
+            cmd.append(url)
+
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT
             )
@@ -281,23 +382,28 @@ class YtdlpDownloader:
             self.processes.pop(message_id, None)
             self.download_tasks.pop(message_id, None)
 
-    def start_download(self, url: str, loop) -> dict:
+    def start_download(self, url: str, loop, format_id: str = None, title: str = None, ext: str = None, filesize: int = None, resolution: str = None) -> dict:
         """Start a new download and return the download info"""
         db = get_db()
 
-        # Check URL first
-        check_result = self.check_url(url)
-        if not check_result['supported']:
-            return {'error': check_result['error']}
+        # If title/ext not provided, check URL to get info
+        if not title:
+            check_result = self.check_url(url)
+            if not check_result['supported']:
+                return {'error': check_result['error']}
+            title = check_result.get('title', 'Unknown')
+            ext = check_result.get('ext', 'mp4')
+            filesize = check_result.get('filesize') or 0
 
         # Generate UUID for this download
         message_id = generate_uuid()
         domain = self.get_domain(url)
 
-        # Create initial filename from title
-        title = check_result.get('title', 'Unknown')
-        ext = check_result.get('ext', 'mp4')
-        filename = f"{title}.{ext}"
+        # Create initial filename from title, append resolution if provided
+        if resolution and resolution != 'best':
+            filename = f"{title}-{resolution}.{ext or 'mp4'}"
+        else:
+            filename = f"{title}.{ext or 'mp4'}"
 
         # Add to database
         new_download = db.add_download(
@@ -307,7 +413,7 @@ class YtdlpDownloader:
             speed=0,
             error=None,
             downloaded_bytes=0,
-            total_bytes=check_result.get('filesize') or 0,
+            total_bytes=filesize or 0,
             pending_time=None,
             message_id=message_id,
             downloaded_from=domain,
@@ -319,10 +425,10 @@ class YtdlpDownloader:
 
         # Start download task
         import sys
-        print(f"[yt-dlp] Scheduling download task for {message_id}", flush=True)
+        print(f"[yt-dlp] Scheduling download task for {message_id} (format: {format_id})", flush=True)
         sys.stdout.flush()
         future = asyncio.run_coroutine_threadsafe(
-            self.download(url, message_id),
+            self.download(url, message_id, format_id),
             loop
         )
 
