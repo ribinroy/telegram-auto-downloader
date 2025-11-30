@@ -82,6 +82,7 @@ class DownloadTypeMap(Base):
     downloaded_from = Column(String(100), unique=True, nullable=False)
     is_secured = Column(Boolean, default=False)
     folder = Column(String(255), nullable=True)
+    quality = Column(String(20), nullable=True)  # Default quality e.g., "720p", "1080p"
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow)
 
@@ -92,6 +93,7 @@ class DownloadTypeMap(Base):
             'downloaded_from': self.downloaded_from,
             'is_secured': self.is_secured,
             'folder': self.folder,
+            'quality': self.quality,
             'created_at': f"{self.created_at.isoformat()}Z" if self.created_at else None,
             'updated_at': f"{self.updated_at.isoformat()}Z" if self.updated_at else None
         }
@@ -446,7 +448,7 @@ class DatabaseManager:
         finally:
             self.close_session()
 
-    def add_download_type_map(self, downloaded_from: str, is_secured: bool = False, folder: str = None):
+    def add_download_type_map(self, downloaded_from: str, is_secured: bool = False, folder: str = None, quality: str = None):
         """Add a new download type mapping"""
         session = self.get_session()
         try:
@@ -456,7 +458,8 @@ class DatabaseManager:
             mapping = DownloadTypeMap(
                 downloaded_from=downloaded_from,
                 is_secured=is_secured,
-                folder=folder
+                folder=folder,
+                quality=quality
             )
             session.add(mapping)
             session.commit()

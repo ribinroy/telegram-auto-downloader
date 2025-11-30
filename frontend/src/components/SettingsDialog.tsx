@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { X, Loader2, AlertCircle, CheckCircle, Key, FolderCog, Plus, Trash2, Shield, ShieldOff } from 'lucide-react';
+import { X, Loader2, AlertCircle, CheckCircle, Key, FolderCog, Plus, Trash2, Shield, ShieldOff, Pencil, Check } from 'lucide-react';
 import { updatePassword, fetchMappings, addMapping, updateMapping, deleteMapping } from '../api';
 import type { DownloadTypeMap } from '../types';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -32,7 +32,14 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
   const [newDownloadedFrom, setNewDownloadedFrom] = useState('');
   const [newIsSecured, setNewIsSecured] = useState(false);
   const [newFolder, setNewFolder] = useState('');
+  const [newQuality, setNewQuality] = useState('');
   const [addingMapping, setAddingMapping] = useState(false);
+
+  // Edit mapping state
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editFolder, setEditFolder] = useState('');
+  const [editQuality, setEditQuality] = useState('');
+  const [savingEdit, setSavingEdit] = useState(false);
 
   // Delete confirmation
   const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null);
@@ -96,7 +103,8 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
       const result = await addMapping(
         newDownloadedFrom.trim().toLowerCase(),
         newIsSecured,
-        newFolder.trim() || null
+        newFolder.trim() || null,
+        newQuality.trim() || null
       );
       if ('error' in result) {
         setMappingsError(result.error);
@@ -105,6 +113,7 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
         setNewDownloadedFrom('');
         setNewIsSecured(false);
         setNewFolder('');
+        setNewQuality('');
         setShowAddForm(false);
       }
     } catch {
@@ -124,6 +133,41 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
       }
     } catch {
       setMappingsError('Failed to update mapping');
+    }
+  };
+
+  const handleStartEdit = (mapping: DownloadTypeMap) => {
+    setEditingId(mapping.id);
+    setEditFolder(mapping.folder || '');
+    setEditQuality(mapping.quality || '');
+  };
+
+  const handleCancelEdit = () => {
+    setEditingId(null);
+    setEditFolder('');
+    setEditQuality('');
+  };
+
+  const handleSaveEdit = async (id: number) => {
+    setSavingEdit(true);
+    setMappingsError(null);
+    try {
+      const result = await updateMapping(id, {
+        folder: editFolder.trim() || null,
+        quality: editQuality.trim() || null
+      });
+      if ('error' in result) {
+        setMappingsError(result.error);
+      } else {
+        setMappings(prev => prev.map(m => m.id === id ? result : m));
+        setEditingId(null);
+        setEditFolder('');
+        setEditQuality('');
+      }
+    } catch {
+      setMappingsError('Failed to update mapping');
+    } finally {
+      setSavingEdit(false);
     }
   };
 
@@ -148,6 +192,10 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
     setNewDownloadedFrom('');
     setNewIsSecured(false);
     setNewFolder('');
+    setNewQuality('');
+    setEditingId(null);
+    setEditFolder('');
+    setEditQuality('');
     onClose();
   };
 
@@ -307,7 +355,7 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
                       type="text"
                       value={newDownloadedFrom}
                       onChange={(e) => setNewDownloadedFrom(e.target.value)}
-                      placeholder="e.g., youtube.com, telegram"
+                      placeholder="e.g., youtube, twitter, tiktok"
                       className="w-full bg-slate-800 border border-slate-600 rounded-lg py-2 px-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 transition-colors"
                       required
                     />
@@ -323,6 +371,19 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
                     />
                     <p className="text-xs text-slate-500 mt-1">
                       Run <code className="bg-slate-800 px-1 rounded">sudo chmod 777 /path/to/folder</code> to ensure write permissions
+                    </p>
+                  </div>
+                  <div>
+                    <label className="block text-sm text-slate-400 mb-1">Default Quality (optional)</label>
+                    <input
+                      type="text"
+                      value={newQuality}
+                      onChange={(e) => setNewQuality(e.target.value)}
+                      placeholder="e.g., 720p, 1080p, 480p"
+                      className="w-full bg-slate-800 border border-slate-600 rounded-lg py-2 px-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 transition-colors"
+                    />
+                    <p className="text-xs text-slate-500 mt-1">
+                      Auto-select this quality when downloading from this source
                     </p>
                   </div>
                   <div className="flex items-center gap-2">
@@ -345,6 +406,7 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
                         setNewDownloadedFrom('');
                         setNewIsSecured(false);
                         setNewFolder('');
+                        setNewQuality('');
                       }}
                       className="flex-1 py-2 bg-slate-600 hover:bg-slate-500 text-white text-sm rounded-lg transition-colors"
                     >
@@ -376,47 +438,112 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
                   {mappings.map((mapping) => (
                     <div
                       key={mapping.id}
-                      className="flex items-center justify-between bg-slate-700/30 rounded-lg p-3"
+                      className="bg-slate-700/30 rounded-lg p-3"
                     >
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="text-white font-medium truncate">{mapping.downloaded_from}</span>
-                          {mapping.is_secured && (
-                            <span className="px-1.5 py-0.5 text-xs bg-red-500/20 text-red-400 rounded">
-                              Hidden
-                            </span>
-                          )}
+                      {editingId === mapping.id ? (
+                        // Edit mode
+                        <div className="space-y-2">
+                          <div className="flex items-center gap-2">
+                            <span className="text-white font-medium">{mapping.downloaded_from}</span>
+                            {mapping.is_secured && (
+                              <span className="px-1.5 py-0.5 text-xs bg-red-500/20 text-red-400 rounded">
+                                Hidden
+                              </span>
+                            )}
+                          </div>
+                          <div>
+                            <label className="block text-xs text-slate-500 mb-1">Folder</label>
+                            <input
+                              type="text"
+                              value={editFolder}
+                              onChange={(e) => setEditFolder(e.target.value)}
+                              placeholder="Folder path (optional)"
+                              className="w-full bg-slate-800 border border-slate-600 rounded-lg py-1.5 px-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 transition-colors"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs text-slate-500 mb-1">Default Quality</label>
+                            <input
+                              type="text"
+                              value={editQuality}
+                              onChange={(e) => setEditQuality(e.target.value)}
+                              placeholder="e.g., 720p, 1080p"
+                              className="w-full bg-slate-800 border border-slate-600 rounded-lg py-1.5 px-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 transition-colors"
+                            />
+                          </div>
+                          <div className="flex gap-2">
+                            <button
+                              onClick={handleCancelEdit}
+                              className="flex-1 py-1.5 bg-slate-600 hover:bg-slate-500 text-white text-sm rounded-lg transition-colors"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              onClick={() => handleSaveEdit(mapping.id)}
+                              disabled={savingEdit}
+                              className="flex-1 py-1.5 bg-cyan-600 hover:bg-cyan-500 disabled:bg-cyan-800 text-white text-sm rounded-lg transition-colors flex items-center justify-center gap-1"
+                            >
+                              {savingEdit ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+                              Save
+                            </button>
+                          </div>
                         </div>
-                        {mapping.folder && (
-                          <p className="text-xs text-slate-400 truncate mt-0.5">
-                            Folder: {mapping.folder}
-                          </p>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-2 ml-2">
-                        <button
-                          onClick={() => handleToggleSecured(mapping)}
-                          className={`p-2 rounded-lg transition-colors ${
-                            mapping.is_secured
-                              ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
-                              : 'bg-slate-600/50 text-slate-400 hover:bg-slate-600'
-                          }`}
-                          title={mapping.is_secured ? 'Show in list' : 'Hide from list'}
-                        >
-                          {mapping.is_secured ? (
-                            <Shield className="w-4 h-4" />
-                          ) : (
-                            <ShieldOff className="w-4 h-4" />
-                          )}
-                        </button>
-                        <button
-                          onClick={() => setDeleteConfirmId(mapping.id)}
-                          className="p-2 bg-slate-600/50 hover:bg-red-500/20 text-slate-400 hover:text-red-400 rounded-lg transition-colors"
-                          title="Delete mapping"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
+                      ) : (
+                        // View mode
+                        <div className="flex items-center justify-between">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="text-white font-medium truncate">{mapping.downloaded_from}</span>
+                              {mapping.is_secured && (
+                                <span className="px-1.5 py-0.5 text-xs bg-red-500/20 text-red-400 rounded">
+                                  Hidden
+                                </span>
+                              )}
+                              {mapping.quality && (
+                                <span className="px-1.5 py-0.5 text-xs bg-cyan-500/20 text-cyan-400 rounded">
+                                  {mapping.quality}
+                                </span>
+                              )}
+                            </div>
+                            {mapping.folder && (
+                              <p className="text-xs text-slate-400 truncate mt-0.5">
+                                Folder: {mapping.folder}
+                              </p>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2 ml-2">
+                            <button
+                              onClick={() => handleStartEdit(mapping)}
+                              className="p-2 bg-slate-600/50 hover:bg-slate-600 text-slate-400 hover:text-white rounded-lg transition-colors"
+                              title="Edit mapping"
+                            >
+                              <Pencil className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={() => handleToggleSecured(mapping)}
+                              className={`p-2 rounded-lg transition-colors ${
+                                mapping.is_secured
+                                  ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
+                                  : 'bg-slate-600/50 text-slate-400 hover:bg-slate-600'
+                              }`}
+                              title={mapping.is_secured ? 'Show in list' : 'Hide from list'}
+                            >
+                              {mapping.is_secured ? (
+                                <Shield className="w-4 h-4" />
+                              ) : (
+                                <ShieldOff className="w-4 h-4" />
+                              )}
+                            </button>
+                            <button
+                              onClick={() => setDeleteConfirmId(mapping.id)}
+                              className="p-2 bg-slate-600/50 hover:bg-red-500/20 text-slate-400 hover:text-red-400 rounded-lg transition-colors"
+                              title="Delete mapping"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>

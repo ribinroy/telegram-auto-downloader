@@ -1,8 +1,31 @@
 import { useState, useEffect, useRef } from 'react';
 import { X, Link, Loader2, AlertCircle, CheckCircle, Download } from 'lucide-react';
-import { checkUrl, downloadUrl } from '../api';
+import { checkUrl, downloadUrl, fetchMappingBySource } from '../api';
 import type { UrlCheckResult, VideoFormat } from '../types';
 import { formatBytes } from '../utils/format';
+
+// Extract domain/source from URL (e.g., youtube.com -> youtube)
+function getSourceFromUrl(url: string): string {
+  try {
+    const urlObj = new URL(url);
+    let domain = urlObj.hostname;
+    if (domain.startsWith('www.')) {
+      domain = domain.slice(4);
+    }
+    const parts = domain.split('.');
+    if (parts.length >= 2) {
+      if (parts[parts.length - 2] === 'co' || parts[parts.length - 2] === 'com' || parts[parts.length - 2] === 'org' || parts[parts.length - 2] === 'net') {
+        if (parts.length >= 3) {
+          return parts[parts.length - 3];
+        }
+      }
+      return parts[parts.length - 2];
+    }
+    return domain;
+  } catch {
+    return '';
+  }
+}
 
 interface AddUrlModalProps {
   isOpen: boolean;
@@ -33,8 +56,27 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
       if (!result.supported) {
         setError(result.error || 'URL not supported');
       } else if (result.formats && result.formats.length > 0) {
-        // Select the best format by default (first one, sorted by height desc)
-        setSelectedFormat(result.formats[0]);
+        // Try to get the default quality from mapping
+        const source = getSourceFromUrl(urlToCheck);
+        let defaultFormat: VideoFormat | null = null;
+
+        if (source) {
+          try {
+            const mapping = await fetchMappingBySource(source);
+            if (mapping?.quality) {
+              // Find format matching the default quality (e.g., "720p")
+              const targetQuality = mapping.quality.toLowerCase().replace('p', '');
+              defaultFormat = result.formats.find(f =>
+                f.resolution?.toLowerCase().replace('p', '') === targetQuality
+              ) || null;
+            }
+          } catch {
+            // Ignore mapping fetch errors, just use default
+          }
+        }
+
+        // Use default quality from mapping if found, otherwise use highest (first)
+        setSelectedFormat(defaultFormat || result.formats[0]);
       }
     } catch {
       setError('Failed to check URL');
@@ -97,6 +139,7 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
         title: checkResult.title,
         ext: selectedFormat?.ext || checkResult.ext,
         filesize: selectedFormat?.filesize || checkResult.filesize,
+        resolution: selectedFormat?.resolution,
       });
     } catch {
       // Error will be shown in the download list
