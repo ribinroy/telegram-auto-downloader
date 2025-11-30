@@ -1,35 +1,39 @@
 """
 Flask web application for Telegram Downloader dashboard
 """
-import os
-import asyncio
 from datetime import datetime
 from flask import Flask, jsonify, render_template_string, request
-from src.config import WEB_PORT, WEB_HOST, DOWNLOAD_DIR, CHAT_ID
-from src.utils import human_readable_size, format_time, save_state
+from src.config import WEB_PORT, WEB_HOST
+from src.database import get_db
+from src.utils import human_readable_size, format_time
 
 
 class WebApp:
-    def __init__(self, downloads, download_tasks):
-        self.downloads = downloads
+    def __init__(self, download_tasks):
         self.download_tasks = download_tasks
         self.app = Flask(__name__)
         self.setup_routes()
 
     def setup_routes(self):
         """Setup Flask routes"""
-        
+
         @self.app.route("/")
         def dashboard():
+            db = get_db()
+            all_downloads = db.get_all_downloads()
+
             query = request.args.get("search", "").lower()
-            sorted_list = sorted(self.downloads, key=lambda x: 0 if x["status"] == "downloading" else 1)
+            # Sort: downloading first, then others
+            sorted_list = sorted(all_downloads, key=lambda x: 0 if x["status"] == "downloading" else 1)
             filtered_list = [d for d in sorted_list if query in d.get("file", "").lower()] if query else sorted_list
-            total_downloaded = sum(d.get("downloaded_bytes", 0) for d in filtered_list)
-            total_size = sum(d.get("total_bytes", 0) for d in filtered_list)
+
+            total_downloaded = sum(d.get("downloaded_bytes", 0) or 0 for d in filtered_list)
+            total_size = sum(d.get("total_bytes", 0) or 0 for d in filtered_list)
             pending_bytes = total_size - total_downloaded
-            total_speed = sum(d.get("speed", 0) for d in filtered_list)
+            total_speed = sum(d.get("speed", 0) or 0 for d in filtered_list)
             downloaded_count = sum(1 for d in filtered_list if d.get("status") == "done")
             total_count = len(filtered_list)
+
             return render_template_string(
                 self.get_html_template(),
                 downloads=filtered_list,
@@ -46,19 +50,19 @@ class WebApp:
         @self.app.route("/api/retry", methods=["POST"])
         def api_retry():
             data = request.json
-            index = data.get("index")
-            if index is not None and 0 <= index < len(self.downloads):
-                entry = self.downloads[index]
-                if entry["status"] in ["failed", "stopped"]:
-                    entry["status"] = "downloading"
-                    entry["progress"] = 0
-                    entry["speed"] = 0
-                    entry["error"] = None
-                    entry["timestamp"] = datetime.now().isoformat()
-                    save_state(self.downloads, DOWNLOAD_DIR.parent / "downloads.json")
-                    
-                    # Note: This retry functionality would need proper integration with TelegramDownloader
-                    # For now, we'll just update the status
+            download_id = data.get("id")
+            if download_id is not None:
+                db = get_db()
+                download = db.get_download_by_id(download_id)
+                if download and download["status"] in ["failed", "stopped"]:
+                    db.update_download_by_id(
+                        download_id,
+                        status='downloading',
+                        progress=0,
+                        speed=0,
+                        error=None,
+                        timestamp=datetime.utcnow()
+                    )
             return jsonify({"status": "ok"})
 
         @self.app.route("/api/stop", methods=["POST"])
@@ -74,14 +78,16 @@ class WebApp:
         def api_delete():
             data = request.json
             file = data.get("file")
-            entry = next((d for d in self.downloads if d.get("file") == file), None)
-            if entry:
-                task = self.download_tasks.get(file)
-                if task and not task.done():
-                    task.cancel()
-                self.download_tasks.pop(file, None)
-                self.downloads.remove(entry)
-                save_state(self.downloads, DOWNLOAD_DIR.parent / "downloads.json")
+            db = get_db()
+
+            # Cancel task if running
+            task = self.download_tasks.get(file)
+            if task and not task.done():
+                task.cancel()
+            self.download_tasks.pop(file, None)
+
+            # Delete from database
+            db.delete_download(file)
             return jsonify({"status": "deleted"})
 
     def get_html_template(self):
@@ -103,8 +109,8 @@ th, td { padding: 8px; border-bottom: 1px solid #333; text-align: left; }
 button { padding: 4px 8px; margin-left: 4px; }
 </style>
 <script>
-function retryDownload(index){
-    fetch("/api/retry",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({index:index})})
+function retryDownload(id){
+    fetch("/api/retry",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:id})})
     .then(()=>{location.reload();});
 }
 function stopDownload(file){
@@ -135,13 +141,13 @@ Total Speed: {{ human_readable_size(total_speed*1024) }}/s
 <td class="status-{{ d.get('status','') }}">{{ d.get('status','') }}</td>
 <td>{{ d.get('progress',0) }}%</td>
 <td>{{ d.get('speed',0) }}</td>
-<td>{{ human_readable_size(d.get('downloaded_bytes',0)) }}/{{ human_readable_size(d.get('total_bytes',0)) }}</td>
-<td>{{ human_readable_size(d.get('total_bytes',0)-d.get('downloaded_bytes',0)) }}</td>
+<td>{{ human_readable_size(d.get('downloaded_bytes',0) or 0) }}/{{ human_readable_size(d.get('total_bytes',0) or 0) }}</td>
+<td>{{ human_readable_size((d.get('total_bytes',0) or 0)-(d.get('downloaded_bytes',0) or 0)) }}</td>
 <td>{{ format_time(d.get('pending_time')) }}</td>
-<td>{{ d.get('error','') }}</td>
+<td>{{ d.get('error','') or '' }}</td>
 <td>
-{% if d.get('status') == 'failed' %}
-<button onclick="retryDownload({{ loop.index0 }})">Retry</button>
+{% if d.get('status') == 'failed' or d.get('status') == 'stopped' %}
+<button onclick="retryDownload({{ d.get('id') }})">Retry</button>
 {% elif d.get('status') == 'downloading' %}
 <button onclick="stopDownload('{{ d.get('file','') }}')">Stop</button>
 {% endif %}

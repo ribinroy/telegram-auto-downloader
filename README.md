@@ -12,7 +12,8 @@ A Python application that automatically downloads files from a Telegram chat and
 - **File Organization**: Automatically sorts files into folders (`Images`, `Videos`, `Documents`)
 - **Retry Mechanism**: Automatic retry logic for failed downloads
 - **Download Management**: Stop, retry, or delete downloads from the dashboard
-- **Persistent State**: Keeps download history across restarts
+- **PostgreSQL Database**: Persistent download history stored in PostgreSQL
+- **Configurable Paths**: Custom base and download directories via environment variables
 - **Chat Reactions**: Automatically reacts in Telegram with ⬇️ ✅ ❌ to indicate download state
 
 ---
@@ -23,6 +24,7 @@ A Python application that automatically downloads files from a Telegram chat and
 telegram_downloader/
 ├── src/
 │   ├── config/             # Configuration and environment management
+│   ├── database/           # PostgreSQL database models and manager
 │   ├── telegram_handler/   # Telegram client and downloader logic
 │   ├── web_app/            # Flask web application
 │   └── utils/              # Helper utilities
@@ -38,6 +40,7 @@ telegram_downloader/
 ## 🧰 Prerequisites
 
 - **Python 3.8+**
+- **PostgreSQL** (running locally or remote)
 - **Telegram API credentials**
 - Internet access
 
@@ -186,9 +189,11 @@ Access the dashboard:
 API_ID=12345678
 API_HASH=abcd1234efgh5678ijkl
 CHAT_ID=-1001234567890
+BASE_DIR=/home/user/telegram_downloader
 DOWNLOAD_DIR=/mnt/Downloads/Telegram
 WEB_PORT=4444
 MAX_RETRIES=6
+DATABASE_URL=postgresql://telegram_user:your_password@localhost:5432/telegram_downloader
 ```
 
 ### Notes:
@@ -200,7 +205,34 @@ MAX_RETRIES=6
 
 ---
 
-## 🖥️ Step 4: Running as a Background Service (Linux only)
+## 🗄️ Step 4: Set Up PostgreSQL Database
+
+### 1. Connect to PostgreSQL as admin:
+
+```bash
+psql -U postgres -h localhost -d postgres
+```
+
+### 2. Create a dedicated user and database:
+
+```sql
+CREATE USER telegram_user WITH PASSWORD 'your_secure_password';
+CREATE DATABASE telegram_downloader OWNER telegram_user;
+GRANT ALL PRIVILEGES ON DATABASE telegram_downloader TO telegram_user;
+\q
+```
+
+### 3. Update your `.env` file with the credentials:
+
+```bash
+DATABASE_URL=postgresql://telegram_user:your_secure_password@localhost:5432/telegram_downloader
+```
+
+The database tables will be created automatically on first run.
+
+---
+
+## 🖥️ Step 5: Running as a Background Service (Linux only)
 
 To auto-run this on boot:
 
@@ -289,6 +321,7 @@ tail -f logs/telegram_downloader.log
 
 - `src/telegram_handler/`: Telethon client, reactions, retries
 - `src/web_app/`: Flask API, HTML template
+- `src/database/`: PostgreSQL models and database manager
 - `src/utils/`: Size/time formatters
 - `src/config/`: Environment + constants
 
@@ -329,6 +362,13 @@ Licensed under the [MIT License](LICENSE).
 ---
 
 ## 🧾 Changelog
+
+### **v1.1.0**
+
+- PostgreSQL database for persistent storage (replaces JSON)
+- Configurable BASE_DIR and DOWNLOAD_DIR via environment variables
+- Added database module with SQLAlchemy ORM
+- Improved download tracking with database IDs
 
 ### **v1.0.0**
 
