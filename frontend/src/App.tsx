@@ -1,5 +1,6 @@
-import { useState, useEffect, useCallback } from 'react';
-import { Search, Download, RefreshCw, Wifi, WifiOff } from 'lucide-react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
+import { Search, Download, RefreshCw, Wifi, WifiOff, Loader2 } from 'lucide-react';
 import { fetchDownloads, fetchStats, retryDownload, stopDownload, deleteDownload } from './api';
 import { connectSocket, disconnectSocket } from './api/socket';
 import { StatsHeader } from './components/StatsHeader';
@@ -23,6 +24,7 @@ function App() {
   const [search, setSearch] = useState('');
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<TabType>('active');
 
   // Handle real-time updates from WebSocket
@@ -40,12 +42,15 @@ function App() {
 
   // Fetch downloads via REST API
   const loadDownloads = useCallback(async () => {
+    setLoading(true);
     try {
       const data = await fetchDownloads(search, activeTab);
       setDownloads(data.downloads);
       setError(null);
     } catch (err) {
       setError('Failed to fetch downloads');
+    } finally {
+      setLoading(false);
     }
   }, [search, activeTab]);
 
@@ -105,6 +110,15 @@ function App() {
 
   // Downloads are already filtered by the backend based on activeTab
   const filteredDownloads = downloads;
+
+  // Virtual scroll setup
+  const parentRef = useRef<HTMLDivElement>(null);
+  const rowVirtualizer = useVirtualizer({
+    count: filteredDownloads.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 88, // Estimated row height in pixels
+    overscan: 5,
+  });
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
@@ -181,30 +195,62 @@ function App() {
           </div>
         )}
 
-        {/* Downloads List */}
-        <div className="space-y-3">
-          {filteredDownloads.length === 0 ? (
-            <div className="text-center py-12 text-slate-400">
-              <Download className="w-12 h-12 mx-auto mb-4 opacity-50" />
-              <p>{activeTab === 'active' ? 'No active downloads' : 'No downloads yet'}</p>
-              <p className="text-sm">
-                {activeTab === 'active'
-                  ? 'All downloads are complete'
-                  : 'Files sent to your Telegram chat will appear here'}
-              </p>
+        {/* Downloads List - Virtualized */}
+        {loading ? (
+          <div className="text-center py-12 text-slate-400">
+            <Loader2 className="w-12 h-12 mx-auto mb-4 animate-spin text-cyan-500" />
+            <p>Loading downloads...</p>
+          </div>
+        ) : filteredDownloads.length === 0 ? (
+          <div className="text-center py-12 text-slate-400">
+            <Download className="w-12 h-12 mx-auto mb-4 opacity-50" />
+            <p>{activeTab === 'active' ? 'No active downloads' : 'No downloads yet'}</p>
+            <p className="text-sm">
+              {activeTab === 'active'
+                ? 'All downloads are complete'
+                : 'Files sent to your Telegram chat will appear here'}
+            </p>
+          </div>
+        ) : (
+          <div
+            ref={parentRef}
+            className="h-[600px] overflow-auto"
+          >
+            <div
+              style={{
+                height: `${rowVirtualizer.getTotalSize()}px`,
+                width: '100%',
+                position: 'relative',
+              }}
+            >
+              {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+                const download = filteredDownloads[virtualRow.index];
+                return (
+                  <div
+                    key={download.id}
+                    style={{
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      width: '100%',
+                      height: `${virtualRow.size}px`,
+                      transform: `translateY(${virtualRow.start}px)`,
+                    }}
+                  >
+                    <div className="pb-3">
+                      <DownloadItem
+                        download={download}
+                        onRetry={handleRetry}
+                        onStop={handleStop}
+                        onDelete={handleDelete}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
             </div>
-          ) : (
-            filteredDownloads.map((download) => (
-              <DownloadItem
-                key={download.id}
-                download={download}
-                onRetry={handleRetry}
-                onStop={handleStop}
-                onDelete={handleDelete}
-              />
-            ))
-          )}
-        </div>
+          </div>
+        )}
       </div>
     </div>
   );
