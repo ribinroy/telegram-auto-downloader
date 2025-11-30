@@ -1,8 +1,8 @@
 """
 Database module for Telegram Downloader
 """
-import os
 import hashlib
+import uuid
 from datetime import datetime
 from sqlalchemy import create_engine, Column, Integer, BigInteger, String, Float, DateTime, Text, Boolean
 from sqlalchemy.ext.declarative import declarative_base
@@ -11,12 +11,17 @@ from sqlalchemy.orm import sessionmaker, scoped_session
 Base = declarative_base()
 
 
+def generate_uuid():
+    """Generate a UUID string for download tracking"""
+    return str(uuid.uuid4())
+
+
 class Download(Base):
     """Download model representing a file download"""
     __tablename__ = 'downloads'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    message_id = Column(BigInteger, nullable=True)  # Telegram message ID
+    message_id = Column(String(100), nullable=True)  # UUID or Telegram message ID as string
     file = Column(String(500), nullable=False)
     status = Column(String(50), default='downloading')
     progress = Column(Float, default=0)
@@ -28,12 +33,14 @@ class Download(Base):
     total_bytes = Column(BigInteger, default=0)
     pending_time = Column(Float, nullable=True)
     is_deleted = Column(Boolean, default=False)
+    downloaded_from = Column(String(100), default='telegram')  # 'telegram' or domain name
+    url = Column(Text, nullable=True)  # Source URL for yt-dlp downloads
 
     def to_dict(self):
         """Convert model to dictionary"""
         return {
             'id': self.id,
-            'message_id': str(self.message_id) if self.message_id else None,  # String to avoid JS precision loss
+            'message_id': self.message_id,
             'file': self.file,
             'status': self.status,
             'progress': self.progress,
@@ -43,7 +50,9 @@ class Download(Base):
             'created_at': f"{self.created_at.isoformat()}Z" if self.created_at else None,
             'downloaded_bytes': self.downloaded_bytes,
             'total_bytes': self.total_bytes,
-            'pending_time': self.pending_time
+            'pending_time': self.pending_time,
+            'downloaded_from': self.downloaded_from or 'telegram',
+            'url': self.url
         }
 
 
@@ -109,13 +118,16 @@ class DatabaseManager:
         self.Session.remove()
 
     def add_download(self, file, status='downloading', progress=0, speed=0,
-                     error=None, downloaded_bytes=0, total_bytes=0, pending_time=None, message_id=None):
+                     error=None, downloaded_bytes=0, total_bytes=0, pending_time=None,
+                     message_id=None, downloaded_from='telegram', url=None):
         """Add a new download entry"""
         session = self.get_session()
         try:
             now = datetime.utcnow()
+            # Convert message_id to string if it's an int (for Telegram IDs)
+            msg_id = str(message_id) if message_id is not None else generate_uuid()
             download = Download(
-                message_id=message_id,
+                message_id=msg_id,
                 file=file,
                 status=status,
                 progress=progress,
@@ -125,7 +137,9 @@ class DatabaseManager:
                 created_at=now,
                 downloaded_bytes=downloaded_bytes,
                 total_bytes=total_bytes,
-                pending_time=pending_time
+                pending_time=pending_time,
+                downloaded_from=downloaded_from,
+                url=url
             )
             session.add(download)
             session.commit()
@@ -164,10 +178,11 @@ class DatabaseManager:
             self.close_session()
 
     def update_download_by_message_id(self, message_id, **kwargs):
-        """Update a download entry by Telegram message ID"""
+        """Update a download entry by message ID (string UUID or Telegram ID)"""
         session = self.get_session()
         try:
-            download = session.query(Download).filter_by(message_id=message_id).first()
+            msg_id = str(message_id) if message_id is not None else None
+            download = session.query(Download).filter_by(message_id=msg_id).first()
             if download:
                 for key, value in kwargs.items():
                     if hasattr(download, key):
@@ -236,10 +251,11 @@ class DatabaseManager:
             self.close_session()
 
     def delete_download_by_message_id(self, message_id):
-        """Soft delete a download entry by Telegram message ID"""
+        """Soft delete a download entry by message ID (string UUID or Telegram ID)"""
         session = self.get_session()
         try:
-            download = session.query(Download).filter_by(message_id=message_id).first()
+            msg_id = str(message_id) if message_id is not None else None
+            download = session.query(Download).filter_by(message_id=msg_id).first()
             if download:
                 download.is_deleted = True
                 download.updated_at = datetime.utcnow()
@@ -250,10 +266,11 @@ class DatabaseManager:
             self.close_session()
 
     def get_download_by_message_id(self, message_id):
-        """Get a download entry by Telegram message ID"""
+        """Get a download entry by message ID (string UUID or Telegram ID)"""
         session = self.get_session()
         try:
-            download = session.query(Download).filter_by(message_id=message_id).first()
+            msg_id = str(message_id) if message_id is not None else None
+            download = session.query(Download).filter_by(message_id=msg_id).first()
             return download.to_dict() if download else None
         finally:
             self.close_session()

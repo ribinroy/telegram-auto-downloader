@@ -1,4 +1,4 @@
-import type { DownloadsResponse, Stats } from '../types';
+import type { DownloadsResponse, Stats, UrlCheckResult, Download } from '../types';
 
 const API_BASE = '';
 const TOKEN_KEY = 'auth_token';
@@ -117,4 +117,30 @@ export async function deleteDownload(message_id: string): Promise<void> {
     headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
     body: JSON.stringify({ message_id }),
   });
+}
+
+export async function checkUrl(url: string): Promise<UrlCheckResult> {
+  const response = await fetch(`${API_BASE}/api/url/check`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ url }),
+  });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  return response.json();
+}
+
+export async function downloadUrl(url: string): Promise<Download | { error: string }> {
+  const response = await fetch(`${API_BASE}/api/url/download`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ url }),
+  });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  return response.json();
 }

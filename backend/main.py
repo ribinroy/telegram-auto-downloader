@@ -1,11 +1,13 @@
 """
 Main entry point for Telegram Downloader
 """
+import asyncio
 import logging
 import threading
 from backend.config import LOG_FILE, DATABASE_URL
 from backend.database import init_database
 from backend.telegram_handler import TelegramDownloader
+from backend.ytdlp_handler import YtdlpDownloader
 from backend.web_app import WebApp
 
 
@@ -59,15 +61,29 @@ def main():
         return
 
     # Shared download state
-    download_tasks = {}  # key: filename, value: asyncio.Task
+    download_tasks = {}  # key: message_id, value: asyncio.Task
+
+    # Create event loop for async operations
+    loop = asyncio.new_event_loop()
 
     # Initialize components
     telegram_downloader = TelegramDownloader(download_tasks)
-    web_app = WebApp(download_tasks)
+    ytdlp_downloader = YtdlpDownloader(download_tasks)
+    web_app = WebApp(download_tasks, ytdlp_downloader, loop)
 
     # Start Flask in a separate thread
     flask_thread = threading.Thread(target=web_app.run, daemon=True)
     flask_thread.start()
+
+    # Run event loop in a separate thread for yt-dlp async operations
+    def run_loop():
+        asyncio.set_event_loop(loop)
+        loop.run_forever()
+
+    loop_thread = threading.Thread(target=run_loop, daemon=True)
+    loop_thread.start()
+
+    print("🎬 yt-dlp downloader ready")
 
     # Start Telegram client (this will block)
     telegram_downloader.start()
