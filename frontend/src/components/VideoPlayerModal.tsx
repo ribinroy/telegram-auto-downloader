@@ -69,8 +69,15 @@ export function VideoPlayerModal({ isOpen, onClose, videoUrl, title }: VideoPlay
             src={videoUrl}
             controls
             autoPlay
+            playsInline
             className="w-full max-h-[80vh]"
             controlsList="nodownload"
+            onError={(e) => {
+              const video = e.currentTarget;
+              console.error('Video error:', video.error?.message, video.error?.code);
+            }}
+            onLoadedMetadata={() => console.log('Video metadata loaded')}
+            onCanPlay={() => console.log('Video can play')}
           >
             Your browser does not support the video tag.
           </video>
