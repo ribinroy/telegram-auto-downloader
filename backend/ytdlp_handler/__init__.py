@@ -245,6 +245,44 @@ class YtdlpDownloader:
 
         return None
 
+    async def _try_browser_fallback(self, url: str, output_dir: Path, message_id: str, db) -> dict:
+        """
+        Try to download using browser automation when yt-dlp fails.
+        This handles Cloudflare-protected sites.
+        """
+        try:
+            from backend.browser_downloader import BrowserDownloader
+
+            print(f"[Browser Fallback] Starting browser download for: {url}")
+
+            def progress_callback(progress, downloaded, total):
+                # Update progress in database and emit to frontend
+                speed = 0  # Can't easily calculate speed here
+                db.update_download_by_message_id(
+                    message_id,
+                    progress=progress,
+                    downloaded_bytes=downloaded,
+                    total_bytes=total,
+                    speed=speed
+                )
+                self.emit_progress(message_id, progress, downloaded, total, speed, None)
+
+            downloader = BrowserDownloader(output_dir, progress_callback)
+            try:
+                result = await downloader.download(url)
+                return result
+            finally:
+                await downloader.close()
+
+        except ImportError as e:
+            print(f"[Browser Fallback] Playwright not available: {e}")
+            return {'error': 'Browser fallback not available (Playwright not installed)'}
+        except Exception as e:
+            print(f"[Browser Fallback] Error: {e}")
+            import traceback
+            traceback.print_exc()
+            return {'error': f'Browser fallback failed: {str(e)}'}
+
     async def download(self, url: str, message_id: str, format_id: str = None):
         """Download video using yt-dlp with progress tracking"""
         import sys
@@ -380,14 +418,34 @@ class YtdlpDownloader:
                 self.emit_status(message_id, 'done')
                 print(f"[yt-dlp] Download completed: {message_id}")
             else:
-                db.update_download_by_message_id(
-                    message_id,
-                    status='failed',
-                    speed=0,
-                    error='Download failed'
-                )
-                self.emit_status(message_id, 'failed', 'Download failed')
-                print(f"[yt-dlp] Download failed: {message_id}")
+                # Check if this is a Cloudflare 403 error - try browser fallback
+                print(f"[yt-dlp] Download failed, attempting browser fallback for: {url}")
+                browser_result = await self._try_browser_fallback(url, output_dir, message_id, db)
+
+                if browser_result.get('success'):
+                    # Browser download succeeded
+                    filename = os.path.basename(browser_result.get('file_path', ''))
+                    db.update_download_by_message_id(
+                        message_id,
+                        status='done',
+                        progress=100,
+                        speed=0,
+                        pending_time=0,
+                        file=filename
+                    )
+                    self.emit_status(message_id, 'done')
+                    print(f"[yt-dlp] Browser fallback succeeded: {message_id}")
+                else:
+                    # Both methods failed
+                    error_msg = browser_result.get('error', 'Download failed (yt-dlp and browser fallback)')
+                    db.update_download_by_message_id(
+                        message_id,
+                        status='failed',
+                        speed=0,
+                        error=error_msg
+                    )
+                    self.emit_status(message_id, 'failed', error_msg)
+                    print(f"[yt-dlp] Download failed (including browser fallback): {message_id}")
 
         except asyncio.CancelledError:
             print(f"[yt-dlp] Download cancelled: {message_id}")
