@@ -18,6 +18,13 @@ logger = logging.getLogger(__name__)
 
 
 class YtdlpDownloader:
+    # yt-dlp binary path (pipx version with curl_cffi for impersonation)
+    YTDLP_PATH = os.path.expanduser('~/.local/bin/yt-dlp')
+
+    # Impersonation target for Cloudflare bypass
+    # Options: 'chrome', 'firefox', 'safari', 'edge', or specific like 'chrome-131'
+    IMPERSONATE_TARGET = 'chrome'
+
     def __init__(self, download_tasks):
         self.download_tasks = download_tasks
         self.processes = {}  # Track running yt-dlp processes by message_id
@@ -46,7 +53,13 @@ class YtdlpDownloader:
         """Check if URL is supported by yt-dlp and get video info with available formats"""
         try:
             result = subprocess.run(
-                ['yt-dlp', '--dump-json', '--no-download', url],
+                [
+                    self.YTDLP_PATH,
+                    '--dump-json',
+                    '--no-download',
+                    '--impersonate', self.IMPERSONATE_TARGET,
+                    url
+                ],
                 capture_output=True,
                 text=True,
                 timeout=60
@@ -251,11 +264,12 @@ class YtdlpDownloader:
 
             # Build command with optional format selection
             cmd = [
-                'yt-dlp',
+                self.YTDLP_PATH,
                 '--newline',  # Output progress on new lines
                 '-c',  # Continue/resume partial downloads
                 '-o', output_template,
                 '--no-mtime',  # Don't set file modification time
+                '--impersonate', self.IMPERSONATE_TARGET,  # Cloudflare bypass
             ]
 
             # Add format selection if specified
