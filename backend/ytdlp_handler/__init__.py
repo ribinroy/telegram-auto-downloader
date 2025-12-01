@@ -18,8 +18,8 @@ logger = logging.getLogger(__name__)
 
 
 class YtdlpDownloader:
-    # yt-dlp binary path (pipx version with curl_cffi for impersonation)
-    YTDLP_PATH = os.path.expanduser('~/.local/bin/yt-dlp')
+    # yt-dlp binary path (venv version with curl_cffi for impersonation)
+    YTDLP_PATH = str(Path(__file__).parent.parent.parent / 'venv' / 'bin' / 'yt-dlp')
 
     # Impersonation target for Cloudflare bypass
     # Options: 'chrome', 'firefox', 'safari', 'edge', or specific like 'chrome-131'
