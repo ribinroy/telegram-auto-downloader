@@ -1,4 +1,4 @@
-import type { DownloadsResponse, Stats, UrlCheckResult, Download, DownloadTypeMap } from '../types';
+import type { DownloadsResponse, Stats, UrlCheckResult, Download, DownloadTypeMap, AnalyticsData } from '../types';
 
 const API_BASE = '';
 const TOKEN_KEY = 'auth_token';
@@ -255,6 +255,22 @@ export async function saveCookies(cookies: string): Promise<{ status?: string; e
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
     body: JSON.stringify({ cookies }),
+  });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  return response.json();
+}
+
+// Analytics API
+export async function fetchAnalytics(days: number = 30, groupBy: 'day' | 'hour' = 'day'): Promise<AnalyticsData> {
+  const params = new URLSearchParams();
+  params.set('days', days.toString());
+  params.set('group_by', groupBy);
+
+  const response = await fetch(`${API_BASE}/api/analytics?${params.toString()}`, {
+    headers: getAuthHeaders(),
   });
   if (response.status === 401) {
     clearToken();
