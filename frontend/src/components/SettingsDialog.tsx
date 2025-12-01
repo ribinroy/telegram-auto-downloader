@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { X, Loader2, AlertCircle, CheckCircle, Key, FolderCog, Plus, Trash2, Shield, ShieldOff, Pencil, Check } from 'lucide-react';
-import { updatePassword, fetchMappings, addMapping, updateMapping, deleteMapping } from '../api';
+import { X, Loader2, AlertCircle, CheckCircle, Key, FolderCog, Plus, Trash2, Shield, ShieldOff, Pencil, Check, Cookie } from 'lucide-react';
+import { updatePassword, fetchMappings, addMapping, updateMapping, deleteMapping, fetchCookies, saveCookies } from '../api';
 import type { DownloadTypeMap } from '../types';
 import { ConfirmDialog } from './ConfirmDialog';
 
@@ -10,7 +10,7 @@ interface SettingsDialogProps {
   showMappings?: boolean;
 }
 
-type TabType = 'password' | 'mappings';
+type TabType = 'password' | 'mappings' | 'cookies';
 
 export function SettingsDialog({ isOpen, onClose, showMappings = false }: SettingsDialogProps) {
   const [activeTab, setActiveTab] = useState<TabType>('password');
@@ -45,12 +45,58 @@ export function SettingsDialog({ isOpen, onClose, showMappings = false }: Settin
   // Delete confirmation
   const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null);
 
+  // Cookies state
+  const [cookiesContent, setCookiesContent] = useState('');
+  const [cookiesLoading, setCookiesLoading] = useState(false);
+  const [cookiesSaving, setCookiesSaving] = useState(false);
+  const [cookiesError, setCookiesError] = useState<string | null>(null);
+  const [cookiesSuccess, setCookiesSuccess] = useState(false);
+
   // Load mappings when tab changes to mappings
   useEffect(() => {
     if (isOpen && activeTab === 'mappings') {
       loadMappings();
     }
   }, [isOpen, activeTab]);
+
+  // Load cookies when tab changes to cookies
+  useEffect(() => {
+    if (isOpen && activeTab === 'cookies') {
+      loadCookies();
+    }
+  }, [isOpen, activeTab]);
+
+  const loadCookies = async () => {
+    setCookiesLoading(true);
+    setCookiesError(null);
+    try {
+      const data = await fetchCookies();
+      setCookiesContent(data);
+    } catch {
+      setCookiesError('Failed to load cookies');
+    } finally {
+      setCookiesLoading(false);
+    }
+  };
+
+  const handleSaveCookies = async () => {
+    setCookiesSaving(true);
+    setCookiesError(null);
+    setCookiesSuccess(false);
+    try {
+      const result = await saveCookies(cookiesContent);
+      if (result.error) {
+        setCookiesError(result.error);
+      } else {
+        setCookiesSuccess(true);
+        setTimeout(() => setCookiesSuccess(false), 3000);
+      }
+    } catch {
+      setCookiesError('Failed to save cookies');
+    } finally {
+      setCookiesSaving(false);
+    }
+  };
 
   const loadMappings = async () => {
     setMappingsLoading(true);
@@ -197,6 +243,8 @@ export function SettingsDialog({ isOpen, onClose, showMappings = false }: Settin
     setEditingId(null);
     setEditFolder('');
     setEditQuality('');
+    setCookiesError(null);
+    setCookiesSuccess(false);
     onClose();
   };
 
@@ -249,6 +297,17 @@ export function SettingsDialog({ isOpen, onClose, showMappings = false }: Settin
               Mappings
             </button>
           )}
+          <button
+            onClick={() => setActiveTab('cookies')}
+            className={`flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors ${
+              activeTab === 'cookies'
+                ? 'text-cyan-400 border-b-2 border-cyan-400'
+                : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            <Cookie className="w-4 h-4" />
+            Cookies
+          </button>
         </div>
 
         {/* Content */}
@@ -550,6 +609,61 @@ export function SettingsDialog({ isOpen, onClose, showMappings = false }: Settin
                     </div>
                   ))}
                 </div>
+              )}
+            </>
+          )}
+
+          {activeTab === 'cookies' && (
+            <>
+              {/* Success message */}
+              {cookiesSuccess && (
+                <div className="flex items-center gap-2 bg-green-500/20 border border-green-500/50 rounded-lg p-3 mb-4 text-green-400 text-sm">
+                  <CheckCircle className="w-4 h-4 shrink-0" />
+                  <span>Cookies saved successfully</span>
+                </div>
+              )}
+
+              {/* Error message */}
+              {cookiesError && (
+                <div className="flex items-center gap-2 bg-red-500/20 border border-red-500/50 rounded-lg p-3 mb-4 text-red-400 text-sm">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{cookiesError}</span>
+                </div>
+              )}
+
+              {/* Description */}
+              <p className="text-sm text-slate-400 mb-4">
+                Paste your browser cookies here for sites that require authentication or have Cloudflare protection.
+                Use a browser extension like "Get cookies.txt LOCALLY" to export cookies in Netscape format.
+              </p>
+
+              {cookiesLoading ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="w-6 h-6 text-cyan-500 animate-spin" />
+                </div>
+              ) : (
+                <>
+                  <textarea
+                    value={cookiesContent}
+                    onChange={(e) => setCookiesContent(e.target.value)}
+                    placeholder="# Netscape HTTP Cookie File&#10;# Paste cookies here...&#10;.example.com&#9;TRUE&#9;/&#9;FALSE&#9;0&#9;session_id&#9;abc123"
+                    className="w-full h-64 bg-slate-700/50 border border-slate-600 rounded-lg py-2 px-3 text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-xs resize-none"
+                  />
+                  <button
+                    onClick={handleSaveCookies}
+                    disabled={cookiesSaving}
+                    className="w-full bg-cyan-600 hover:bg-cyan-700 text-white font-medium py-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 mt-4"
+                  >
+                    {cookiesSaving ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Saving...
+                      </>
+                    ) : (
+                      'Save Cookies'
+                    )}
+                  </button>
+                </>
               )}
             </>
           )}
