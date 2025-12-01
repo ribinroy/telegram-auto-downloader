@@ -325,6 +325,8 @@ class YtdlpDownloader:
                 '-o', output_template,
                 '--no-mtime',  # Don't set file modification time
                 '--extractor-args', 'generic:impersonate',  # Cloudflare bypass
+                '--merge-output-format', 'mp4',  # Merge video+audio into mp4
+                '--no-part',  # Don't use .part files
             ]
 
             # Add cookies for authentication/Cloudflare bypass
@@ -333,7 +335,7 @@ class YtdlpDownloader:
             # Add format selection if specified
             if format_id and format_id != 'best':
                 # Request specific format + best audio, or just the format if it has audio
-                cmd.extend(['-f', f'{format_id}+bestaudio/best/{format_id}'])
+                cmd.extend(['-f', f'bestvideo[height<={format_id}]+bestaudio/best[height<={format_id}]/best'])
 
             cmd.append(url)
 
