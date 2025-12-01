@@ -64,3 +64,39 @@ export interface DownloadTypeMap {
   created_at: string;
   updated_at: string;
 }
+
+// Analytics types
+export interface TimeSeriesPoint {
+  label: string;
+  count: number;
+  size: number;
+}
+
+export interface SourceData {
+  source: string;
+  count: number;
+  size: number;
+}
+
+export interface HourlyData {
+  hour: number;
+  count: number;
+}
+
+export interface AnalyticsSummary {
+  total_downloads: number;
+  total_size: number;
+  completed: number;
+  failed: number;
+  success_rate: number;
+}
+
+export interface AnalyticsData {
+  time_series: TimeSeriesPoint[];
+  by_source: SourceData[];
+  by_status: Record<string, number>;
+  hourly_distribution: HourlyData[];
+  summary: AnalyticsSummary;
+  period_days: number;
+  group_by: 'day' | 'hour';
+}
