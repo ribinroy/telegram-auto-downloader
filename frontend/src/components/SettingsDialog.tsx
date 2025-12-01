@@ -632,10 +632,16 @@ export function SettingsDialog({ isOpen, onClose, showMappings = false }: Settin
               )}
 
               {/* Description */}
-              <p className="text-sm text-slate-400 mb-4">
-                Paste your browser cookies here for sites that require authentication or have Cloudflare protection.
-                Use a browser extension like "Get cookies.txt LOCALLY" to export cookies in Netscape format.
-              </p>
+              <div className="text-sm text-slate-400 mb-4 space-y-2">
+                <p>
+                  Paste your browser cookies here for sites with Cloudflare protection.
+                  Use a browser extension like "Get cookies.txt LOCALLY" to export cookies.
+                </p>
+                <p className="text-amber-400/80">
+                  <strong>Important:</strong> For CDN-protected sites, you need cookies from both the main site AND the CDN domain.
+                  Visit the video page in your browser to trigger Cloudflare on the CDN, then export all cookies.
+                </p>
+              </div>
 
               {cookiesLoading ? (
                 <div className="flex items-center justify-center py-8">
