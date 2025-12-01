@@ -341,14 +341,16 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
               {connected ? <Wifi className="w-4 h-4" /> : <WifiOff className="w-4 h-4" />}
               <span className="text-sm">{connected ? 'Live' : 'Offline'}</span>
             </div>
-            {/* Analytics button */}
-            <button
-              onClick={() => setCurrentPage('analytics')}
-              className="p-2 bg-slate-700/50 hover:bg-slate-600/50 text-slate-400 hover:text-white rounded-lg transition-colors"
-              title="Analytics"
-            >
-              <BarChart3 className="w-4 h-4" />
-            </button>
+            {/* Analytics button - only visible when secured sources are shown */}
+            {showSecured && (
+              <button
+                onClick={() => setCurrentPage('analytics')}
+                className="p-2 bg-slate-700/50 hover:bg-slate-600/50 text-slate-400 hover:text-white rounded-lg transition-colors"
+                title="Analytics"
+              >
+                <BarChart3 className="w-4 h-4" />
+              </button>
+            )}
             {/* Settings button */}
             <button
               onClick={() => setSettingsOpen(true)}
