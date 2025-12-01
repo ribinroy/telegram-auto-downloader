@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Search, Download, Wifi, WifiOff, Loader2, HardDrive, Clock, Zap, LogOut, Settings, Plus } from 'lucide-react';
+import { Search, Download, Wifi, WifiOff, Loader2, HardDrive, Clock, Zap, LogOut, Settings, Plus, BarChart3 } from 'lucide-react';
 import { formatBytes, formatSpeed } from './utils/format';
 import { fetchDownloads, fetchStats, retryDownload, stopDownload, deleteDownload, verifyToken, clearToken, getToken, fetchSecuredSources, type SortBy, type SortOrder } from './api';
 import { connectSocket, disconnectSocket, type ProgressUpdate, type StatusUpdate, type DeletedUpdate } from './api/socket';
@@ -7,6 +7,7 @@ import { DownloadItem } from './components/DownloadItem';
 import { LoginPage } from './components/LoginPage';
 import { SettingsDialog } from './components/SettingsDialog';
 import { AddUrlModal } from './components/AddUrlModal';
+import { AnalyticsPage } from './components/AnalyticsPage';
 import type { Download as DownloadType, Stats } from './types';
 
 type TabType = 'active' | 'all';
@@ -55,6 +56,7 @@ function App() {
 }
 
 function MainApp({ onLogout }: { onLogout: () => void }) {
+  const [currentPage, setCurrentPage] = useState<'downloads' | 'analytics'>('downloads');
   const [downloads, setDownloads] = useState<DownloadType[]>([]);
   const [securedSources, setSecuredSources] = useState<string[]>([]);
   const [showSecured, setShowSecured] = useState(false);
@@ -289,9 +291,14 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
     return () => document.removeEventListener('paste', handlePaste);
   }, [addUrlOpen]);
 
+  // Show analytics page if selected
+  if (currentPage === 'analytics') {
+    return <AnalyticsPage onBack={() => setCurrentPage('downloads')} />;
+  }
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
-      <div className="max-w-6xl mx-auto px-4 py-8">
+    <div className="h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex flex-col overflow-hidden">
+      <div className="max-w-6xl mx-auto px-4 py-8 w-full flex flex-col flex-1 min-h-0">
         {/* Header */}
         <div className="flex items-center justify-between mb-8">
           <div className="flex items-center gap-3">
@@ -334,6 +341,14 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
               {connected ? <Wifi className="w-4 h-4" /> : <WifiOff className="w-4 h-4" />}
               <span className="text-sm">{connected ? 'Live' : 'Offline'}</span>
             </div>
+            {/* Analytics button */}
+            <button
+              onClick={() => setCurrentPage('analytics')}
+              className="p-2 bg-slate-700/50 hover:bg-slate-600/50 text-slate-400 hover:text-white rounded-lg transition-colors"
+              title="Analytics"
+            >
+              <BarChart3 className="w-4 h-4" />
+            </button>
             {/* Settings button */}
             <button
               onClick={() => setSettingsOpen(true)}
@@ -422,24 +437,28 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
           </div>
         )}
 
-        {/* Downloads List - Virtualized */}
+        {/* Downloads List - Full Height */}
         {loading ? (
-          <div className="text-center py-12 text-slate-400">
-            <Loader2 className="w-12 h-12 mx-auto mb-4 animate-spin text-cyan-500" />
-            <p>Loading downloads...</p>
+          <div className="flex-1 flex items-center justify-center text-slate-400">
+            <div className="text-center">
+              <Loader2 className="w-12 h-12 mx-auto mb-4 animate-spin text-cyan-500" />
+              <p>Loading downloads...</p>
+            </div>
           </div>
         ) : filteredDownloads.length === 0 ? (
-          <div className="text-center py-12 text-slate-400">
-            <Download className="w-12 h-12 mx-auto mb-4 opacity-50" />
-            <p>{activeTab === 'active' ? 'No active downloads' : 'No downloads yet'}</p>
-            <p className="text-sm">
-              {activeTab === 'active'
-                ? 'All downloads are complete'
-                : 'Files sent to your Telegram chat will appear here'}
-            </p>
+          <div className="flex-1 flex items-center justify-center text-slate-400">
+            <div className="text-center">
+              <Download className="w-12 h-12 mx-auto mb-4 opacity-50" />
+              <p>{activeTab === 'active' ? 'No active downloads' : 'No downloads yet'}</p>
+              <p className="text-sm">
+                {activeTab === 'active'
+                  ? 'All downloads are complete'
+                  : 'Files sent to your Telegram chat will appear here'}
+              </p>
+            </div>
           </div>
         ) : (
-          <div className="max-h-[600px] overflow-auto space-y-3">
+          <div className="flex-1 min-h-0 overflow-auto space-y-3 pb-4">
             {filteredDownloads.map((download) => (
               <DownloadItem
                 key={download.id}
