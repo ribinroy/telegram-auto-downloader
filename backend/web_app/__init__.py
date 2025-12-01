@@ -1,5 +1,5 @@
 """
-Flask REST API with WebSocket support for Telegram Downloader
+Flask REST API with WebSocket support for DownloadLee
 """
 import os
 import jwt

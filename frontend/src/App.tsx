@@ -303,10 +303,10 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
         <div className="flex items-center justify-between mb-8">
           <div className="flex items-center gap-3">
             <div className="p-3 bg-gradient-to-br from-cyan-500 to-blue-600 rounded-xl">
-              <Download className="w-8 h-8 text-white" />
+              <img src="/logo.png" alt="DownloadLee logo" className="w-8 h-8" />
             </div>
             <div>
-              <h1 className="text-2xl font-bold text-white">Telegram Downloader</h1>
+              <h1 className="text-2xl font-bold text-white">DownloadLee</h1>
               <p className="text-slate-400 text-sm">Monitor your downloads in real-time</p>
             </div>
           </div>
