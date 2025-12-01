@@ -1,5 +1,5 @@
 """
-Main entry point for Telegram Downloader
+Main entry point for DownloadLee
 """
 import asyncio
 import logging
@@ -48,7 +48,7 @@ def validate_credentials():
 
 
 def main():
-    """Main function to start the Telegram Downloader"""
+    """Main function to start the DownloadLee"""
     # Setup logging
     setup_logging()
 

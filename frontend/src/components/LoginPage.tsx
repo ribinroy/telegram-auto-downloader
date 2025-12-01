@@ -37,7 +37,7 @@ export function LoginPage({ onLogin }: LoginPageProps) {
             <div className="p-4 bg-gradient-to-br from-cyan-500 to-blue-600 rounded-xl mb-4">
               <Download className="w-10 h-10 text-white" />
             </div>
-            <h1 className="text-2xl font-bold text-white">Telegram Downloader</h1>
+            <h1 className="text-2xl font-bold text-white">DownloadLee</h1>
             <p className="text-slate-400 text-sm mt-1">Sign in to continue</p>
           </div>
 
