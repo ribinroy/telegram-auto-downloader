@@ -13,6 +13,7 @@ export interface Download {
   pending_time: number | null;
   downloaded_from: string;  // 'telegram' or domain name
   url: string | null;  // Source URL for yt-dlp downloads
+  file_deleted: boolean;  // True if physical file was deleted from disk
 }
 
 export interface VideoFormat {

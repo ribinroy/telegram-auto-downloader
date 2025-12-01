@@ -635,6 +635,175 @@ class WebApp:
             except Exception as e:
                 return jsonify({"error": str(e)}), 500
 
+        # Video file API for playback
+        @self.app.route("/api/video/check/<int:download_id>", methods=["GET"])
+        @token_required
+        def check_video_file(download_id):
+            """Check if a video file exists for a download"""
+            db = get_db()
+            download = db.get_download_by_id(download_id)
+
+            if not download:
+                return jsonify({"exists": False, "error": "Download not found"}), 404
+
+            if download.get("status") != "done":
+                return jsonify({"exists": False, "error": "Download not complete"})
+
+            # Get the file path from the download record
+            file_name = download.get("file")
+            if not file_name:
+                return jsonify({"exists": False, "error": "No file name"})
+
+            # Check common download locations
+            from backend.config import DOWNLOAD_DIR
+            possible_paths = [
+                DOWNLOAD_DIR / file_name,
+                DOWNLOAD_DIR / "Videos" / file_name,
+            ]
+
+            # Also check if there's a custom folder mapping
+            downloaded_from = download.get("downloaded_from")
+            if downloaded_from:
+                mapping = db.get_download_type_map(downloaded_from)
+                if mapping and mapping.get("folder"):
+                    possible_paths.insert(0, Path(mapping["folder"]) / file_name)
+
+            for file_path in possible_paths:
+                if file_path.exists():
+                    # Check if it's a video file
+                    video_extensions = {'.mp4', '.mkv', '.webm', '.avi', '.mov', '.m4v', '.flv', '.wmv'}
+                    if file_path.suffix.lower() in video_extensions:
+                        # Reset file_deleted flag if file exists
+                        db.update_download_by_id(download_id, file_deleted=False)
+                        return jsonify({
+                            "exists": True,
+                            "path": str(file_path),
+                            "size": file_path.stat().st_size,
+                            "name": file_name
+                        })
+
+            # Mark file as deleted in database
+            db.update_download_by_id(download_id, file_deleted=True)
+            return jsonify({"exists": False, "error": "File not found"})
+
+        @self.app.route("/api/video/stream/<int:download_id>", methods=["GET"])
+        def stream_video(download_id):
+            """Stream a video file for playback"""
+            from flask import Response, request
+            import mimetypes
+
+            # Accept token from query param (for video element) or header
+            token = request.args.get('token')
+            if not token:
+                auth_header = request.headers.get('Authorization')
+                if auth_header and auth_header.startswith('Bearer '):
+                    token = auth_header.split(' ')[1]
+
+            if not token:
+                return jsonify({'error': 'Token is missing'}), 401
+
+            try:
+                jwt.decode(token, JWT_SECRET, algorithms=['HS256'])
+            except jwt.ExpiredSignatureError:
+                return jsonify({'error': 'Token has expired'}), 401
+            except jwt.InvalidTokenError:
+                return jsonify({'error': 'Invalid token'}), 401
+
+            db = get_db()
+            download = db.get_download_by_id(download_id)
+
+            if not download or download.get("status") != "done":
+                return jsonify({"error": "Video not available"}), 404
+
+            file_name = download.get("file")
+            if not file_name:
+                return jsonify({"error": "No file name"}), 404
+
+            # Find the file
+            from backend.config import DOWNLOAD_DIR
+            file_path = None
+            possible_paths = [
+                DOWNLOAD_DIR / file_name,
+                DOWNLOAD_DIR / "Videos" / file_name,
+            ]
+
+            downloaded_from = download.get("downloaded_from")
+            if downloaded_from:
+                mapping = db.get_download_type_map(downloaded_from)
+                if mapping and mapping.get("folder"):
+                    possible_paths.insert(0, Path(mapping["folder"]) / file_name)
+
+            for path in possible_paths:
+                if path.exists():
+                    file_path = path
+                    break
+
+            if not file_path:
+                return jsonify({"error": "File not found"}), 404
+
+            # Get file size and mime type
+            file_size = file_path.stat().st_size
+            mime_type = mimetypes.guess_type(str(file_path))[0] or 'video/mp4'
+
+            # Handle range requests for seeking
+            range_header = request.headers.get('Range')
+
+            if range_header:
+                # Parse range header
+                byte_start = 0
+                byte_end = file_size - 1
+
+                range_match = range_header.replace('bytes=', '').split('-')
+                if range_match[0]:
+                    byte_start = int(range_match[0])
+                if len(range_match) > 1 and range_match[1]:
+                    byte_end = int(range_match[1])
+
+                content_length = byte_end - byte_start + 1
+
+                def generate():
+                    with open(file_path, 'rb') as f:
+                        f.seek(byte_start)
+                        remaining = content_length
+                        chunk_size = 1024 * 1024  # 1MB chunks
+                        while remaining > 0:
+                            chunk = f.read(min(chunk_size, remaining))
+                            if not chunk:
+                                break
+                            remaining -= len(chunk)
+                            yield chunk
+
+                response = Response(
+                    generate(),
+                    status=206,
+                    mimetype=mime_type,
+                    direct_passthrough=True
+                )
+                response.headers['Content-Range'] = f'bytes {byte_start}-{byte_end}/{file_size}'
+                response.headers['Accept-Ranges'] = 'bytes'
+                response.headers['Content-Length'] = content_length
+                return response
+            else:
+                # Full file request
+                def generate():
+                    with open(file_path, 'rb') as f:
+                        chunk_size = 1024 * 1024  # 1MB chunks
+                        while True:
+                            chunk = f.read(chunk_size)
+                            if not chunk:
+                                break
+                            yield chunk
+
+                response = Response(
+                    generate(),
+                    status=200,
+                    mimetype=mime_type,
+                    direct_passthrough=True
+                )
+                response.headers['Accept-Ranges'] = 'bytes'
+                response.headers['Content-Length'] = file_size
+                return response
+
         # Serve frontend
         @self.app.route('/')
         def serve_index():
