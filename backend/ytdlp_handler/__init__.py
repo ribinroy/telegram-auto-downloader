@@ -18,6 +18,19 @@ logger = logging.getLogger(__name__)
 
 
 class YtdlpDownloader:
+    # yt-dlp binary path
+    YTDLP_PATH = str(Path(__file__).parent.parent.parent / 'venv' / 'bin' / 'yt-dlp')
+
+    # Browser to extract cookies from for authentication/Cloudflare bypass
+    # Options: 'chrome', 'firefox', 'brave', 'edge', 'chromium', 'opera', 'vivaldi', 'safari'
+    # Set to None to disable cookie extraction
+    COOKIES_FROM_BROWSER = None
+
+    # Path to cookies.txt file (Netscape format) - alternative to browser cookies
+    # Export from browser using "Get cookies.txt LOCALLY" extension
+    # Set to None to disable
+    COOKIES_FILE = str(Path(__file__).parent.parent.parent / 'cookies.txt')
+
     def __init__(self, download_tasks):
         self.download_tasks = download_tasks
         self.processes = {}  # Track running yt-dlp processes by message_id
@@ -42,11 +55,28 @@ class YtdlpDownloader:
         except Exception:
             return 'unknown'
 
+    def _get_cookie_args(self) -> list:
+        """Get cookie arguments for yt-dlp command"""
+        if self.COOKIES_FROM_BROWSER:
+            return ['--cookies-from-browser', self.COOKIES_FROM_BROWSER]
+        elif self.COOKIES_FILE and os.path.exists(self.COOKIES_FILE):
+            return ['--cookies', self.COOKIES_FILE]
+        return []
+
     def check_url(self, url: str) -> dict:
         """Check if URL is supported by yt-dlp and get video info with available formats"""
         try:
+            cmd = [
+                self.YTDLP_PATH,
+                '--dump-json',
+                '--no-download',
+                '--extractor-args', 'generic:impersonate',  # Cloudflare bypass
+            ]
+            cmd.extend(self._get_cookie_args())
+            cmd.append(url)
+
             result = subprocess.run(
-                ['yt-dlp', '--dump-json', '--no-download', url],
+                cmd,
                 capture_output=True,
                 text=True,
                 timeout=60
@@ -251,12 +281,16 @@ class YtdlpDownloader:
 
             # Build command with optional format selection
             cmd = [
-                'yt-dlp',
+                self.YTDLP_PATH,
                 '--newline',  # Output progress on new lines
                 '-c',  # Continue/resume partial downloads
                 '-o', output_template,
                 '--no-mtime',  # Don't set file modification time
+                '--extractor-args', 'generic:impersonate',  # Cloudflare bypass
             ]
+
+            # Add cookies for authentication/Cloudflare bypass
+            cmd.extend(self._get_cookie_args())
 
             # Add format selection if specified
             if format_id and format_id != 'best':
