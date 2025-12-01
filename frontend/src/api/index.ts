@@ -278,3 +278,28 @@ export async function fetchAnalytics(days: number = 30, groupBy: 'day' | 'hour' 
   }
   return response.json();
 }
+
+// Video playback API
+export interface VideoCheckResult {
+  exists: boolean;
+  path?: string;
+  size?: number;
+  name?: string;
+  error?: string;
+}
+
+export async function checkVideoFile(downloadId: number): Promise<VideoCheckResult> {
+  const response = await fetch(`${API_BASE}/api/video/check/${downloadId}`, {
+    headers: getAuthHeaders(),
+  });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  return response.json();
+}
+
+export function getVideoStreamUrl(downloadId: number): string {
+  const token = getToken();
+  return `${API_BASE}/api/video/stream/${downloadId}?token=${token}`;
+}
