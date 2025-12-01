@@ -10,12 +10,16 @@ import {
   ArrowDown,
   Send,
   Pause,
-  Play
+  Play,
+  Eye,
+  Loader2
 } from 'lucide-react';
 import ReactTimeAgo from 'react-time-ago';
 import type { Download } from '../types';
 import { formatBytes, formatTime, formatSpeed } from '../utils/format';
 import { ConfirmDialog } from './ConfirmDialog';
+import { VideoPlayerModal } from './VideoPlayerModal';
+import { checkVideoFile, getVideoStreamUrl } from '../api';
 
 interface DownloadItemProps {
   download: Download;
@@ -164,6 +168,10 @@ function getStatusColor(status: Download['status']) {
 
 export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadItemProps) {
   const [confirmAction, setConfirmAction] = useState<'stop' | 'delete' | null>(null);
+  const [videoPlayerOpen, setVideoPlayerOpen] = useState(false);
+  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [checkingVideo, setCheckingVideo] = useState(false);
+  const [localFileDeleted, setLocalFileDeleted] = useState(download.file_deleted);
   const progressPercent = download.progress || 0;
 
   const isTelegram = download.downloaded_from === 'telegram';
@@ -176,6 +184,24 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
   const handleDeleteConfirm = () => {
     if (download.message_id) onDelete(download.message_id);
     setConfirmAction(null);
+  };
+
+  const handleViewClick = async () => {
+    setCheckingVideo(true);
+    try {
+      const result = await checkVideoFile(download.id);
+      if (result.exists) {
+        setLocalFileDeleted(false);
+        setVideoUrl(getVideoStreamUrl(download.id));
+        setVideoPlayerOpen(true);
+      } else {
+        setLocalFileDeleted(true);
+      }
+    } catch (err) {
+      console.error('Failed to check video file:', err);
+    } finally {
+      setCheckingVideo(false);
+    }
   };
 
   return (
@@ -237,6 +263,26 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
                 </span>
               )}
             </div>
+
+            {/* View button for completed downloads */}
+            {download.status === 'done' && (
+              <button
+                onClick={handleViewClick}
+                disabled={checkingVideo}
+                className={`p-2 rounded-lg transition-colors ${
+                  localFileDeleted
+                    ? 'bg-slate-700/30 text-slate-500 hover:bg-slate-700/50 hover:text-slate-400'
+                    : 'bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-400'
+                }`}
+                title={localFileDeleted ? 'File not found - click to re-check' : 'Play video'}
+              >
+                {checkingVideo ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Eye className="w-4 h-4" />
+                )}
+              </button>
+            )}
 
             {/* Action buttons */}
             <div className="flex gap-2">
@@ -333,6 +379,16 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
         onConfirm={handleDeleteConfirm}
         onCancel={() => setConfirmAction(null)}
       />
+
+      {/* Video Player Modal */}
+      {videoUrl && (
+        <VideoPlayerModal
+          isOpen={videoPlayerOpen}
+          onClose={() => setVideoPlayerOpen(false)}
+          videoUrl={videoUrl}
+          title={download.file}
+        />
+      )}
     </div>
   );
 }

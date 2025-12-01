@@ -35,6 +35,7 @@ class Download(Base):
     is_deleted = Column(Boolean, default=False)
     downloaded_from = Column(String(100), default='telegram')  # 'telegram' or domain name
     url = Column(Text, nullable=True)  # Source URL for yt-dlp downloads
+    file_deleted = Column(Boolean, default=False)  # True if physical file was deleted from disk
 
     def to_dict(self):
         """Convert model to dictionary"""
@@ -52,7 +53,8 @@ class Download(Base):
             'total_bytes': self.total_bytes,
             'pending_time': self.pending_time,
             'downloaded_from': self.downloaded_from or 'telegram',
-            'url': self.url
+            'url': self.url,
+            'file_deleted': self.file_deleted or False
         }
 
 
@@ -133,6 +135,20 @@ class DatabaseManager:
         self.engine = create_engine(database_url, pool_pre_ping=True)
         self.Session = scoped_session(sessionmaker(bind=self.engine))
         Base.metadata.create_all(self.engine)
+        self._run_migrations()
+
+    def _run_migrations(self):
+        """Run any pending database migrations"""
+        from sqlalchemy import text, inspect
+
+        inspector = inspect(self.engine)
+        columns = [c['name'] for c in inspector.get_columns('downloads')]
+
+        with self.engine.connect() as conn:
+            # Add file_deleted column if it doesn't exist
+            if 'file_deleted' not in columns:
+                conn.execute(text('ALTER TABLE downloads ADD COLUMN file_deleted BOOLEAN DEFAULT FALSE'))
+                conn.commit()
 
     def get_session(self):
         """Get a new database session"""
