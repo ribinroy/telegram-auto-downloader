@@ -236,3 +236,29 @@ export async function deleteMapping(id: number): Promise<void> {
     throw new Error(error.error || 'Failed to delete mapping');
   }
 }
+
+// Cookies API for yt-dlp authentication
+export async function fetchCookies(): Promise<string> {
+  const response = await fetch(`${API_BASE}/api/settings/cookies`, {
+    headers: getAuthHeaders(),
+  });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  const data = await response.json();
+  return data.cookies || '';
+}
+
+export async function saveCookies(cookies: string): Promise<{ status?: string; error?: string }> {
+  const response = await fetch(`${API_BASE}/api/settings/cookies`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ cookies }),
+  });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  return response.json();
+}

@@ -265,6 +265,12 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
       // Don't intercept if modal is already open
       if (addUrlOpen) return;
 
+      // Don't intercept paste in input fields or textareas
+      const target = e.target as HTMLElement;
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
+        return;
+      }
+
       const text = e.clipboardData?.getData('text')?.trim();
       if (!text) return;
 

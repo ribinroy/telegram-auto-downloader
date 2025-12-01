@@ -482,6 +482,35 @@ class WebApp:
 
             return jsonify({"status": "deleted"})
 
+        # Cookies API for yt-dlp authentication
+        @self.app.route("/api/settings/cookies", methods=["GET"])
+        @token_required
+        def get_cookies():
+            """Get current cookies content"""
+            cookies_path = Path(__file__).parent.parent.parent / 'cookies.txt'
+            if cookies_path.exists():
+                return jsonify({"cookies": cookies_path.read_text()})
+            return jsonify({"cookies": ""})
+
+        @self.app.route("/api/settings/cookies", methods=["POST"])
+        @token_required
+        def save_cookies():
+            """Save cookies content"""
+            data = request.json
+            cookies_content = data.get("cookies", "")
+            cookies_path = Path(__file__).parent.parent.parent / 'cookies.txt'
+
+            try:
+                if cookies_content.strip():
+                    cookies_path.write_text(cookies_content)
+                else:
+                    # Delete file if empty
+                    if cookies_path.exists():
+                        cookies_path.unlink()
+                return jsonify({"status": "saved"})
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
+
         # Serve frontend
         @self.app.route('/')
         def serve_index():
