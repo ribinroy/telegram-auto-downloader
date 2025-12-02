@@ -20,6 +20,9 @@ JWT_EXPIRY_DAYS = 30  # Keep signed in for 30 days
 # Global socketio instance for broadcasting from other modules
 socketio = None
 
+# Global web app instance for accessing methods from other modules
+_web_app = None
+
 # Frontend dist directory
 FRONTEND_DIST = Path(__file__).parent.parent.parent / "frontend" / "dist"
 
@@ -27,6 +30,11 @@ FRONTEND_DIST = Path(__file__).parent.parent.parent / "frontend" / "dist"
 def get_socketio():
     """Get the global socketio instance"""
     return socketio
+
+
+def get_web_app():
+    """Get the global web app instance"""
+    return _web_app
 
 
 def token_required(f):
@@ -55,7 +63,7 @@ def token_required(f):
 
 class WebApp:
     def __init__(self, download_tasks, ytdlp_downloader=None, event_loop=None):
-        global socketio
+        global socketio, _web_app
         self.download_tasks = download_tasks
         self.ytdlp_downloader = ytdlp_downloader
         self.event_loop = event_loop
@@ -63,6 +71,7 @@ class WebApp:
         CORS(self.app, resources={r"/*": {"origins": "*"}})
         socketio = SocketIO(self.app, cors_allowed_origins="*", async_mode='threading')
         self.socketio = socketio
+        _web_app = self  # Set global web app instance
         self.setup_routes()
         self.setup_socketio()
 
@@ -78,20 +87,35 @@ class WebApp:
         def handle_disconnect():
             print("Client disconnected")
 
-    def get_downloads_data(self, search='', filter_type='all', sort_by='created_at', sort_order='desc'):
-        """Get downloads data with stats
+    def get_downloads_data(self, search='', filter_type='all', sort_by='created_at', sort_order='desc',
+                           limit=30, offset=0, exclude_mapping_ids=None):
+        """Get downloads data (paginated)
 
         Args:
             search: Search query to filter by filename
             filter_type: 'all' for all downloads, 'active' for non-done downloads
             sort_by: Field to sort by ('created_at', 'file', 'status', 'progress')
             sort_order: 'asc' or 'desc'
+            limit: Number of items to return (default 30)
+            offset: Number of items to skip (default 0)
+            exclude_mapping_ids: List of mapping IDs to exclude from results
         """
         db = get_db()
         all_downloads = db.get_all_downloads()
 
+        # Get sources to exclude based on mapping IDs
+        excluded_sources = []
+        if exclude_mapping_ids:
+            all_mappings = db.get_all_download_type_maps()
+            mapping_by_id = {m['id']: m for m in all_mappings}
+            excluded_sources = [mapping_by_id[mid]['downloaded_from'] for mid in exclude_mapping_ids if mid in mapping_by_id]
+
         query = search.lower()
         filtered_list = [d for d in all_downloads if query in d.get("file", "").lower()] if query else all_downloads
+
+        # Filter out excluded sources
+        if excluded_sources:
+            filtered_list = [d for d in filtered_list if d.get("downloaded_from") not in excluded_sources]
 
         # Apply filter_type
         if filter_type == 'active':
@@ -111,30 +135,16 @@ class WebApp:
             sorted_list = filtered_list
 
         filtered_list = sorted_list
-
-        total_downloaded = sum(d.get("downloaded_bytes", 0) or 0 for d in filtered_list)
-        total_size = sum(d.get("total_bytes", 0) or 0 for d in filtered_list)
-        pending_bytes = total_size - total_downloaded
-        total_speed = sum(d.get("speed", 0) or 0 for d in filtered_list)
-        downloaded_count = sum(1 for d in filtered_list if d.get("status") == "done")
         total_count = len(filtered_list)
 
-        # Calculate counts from unfiltered list for tab display
-        all_count = len(sorted_list)
-        active_count = sum(1 for d in sorted_list if d.get("status") != "done")
+        # Apply pagination
+        paginated_list = filtered_list[offset:offset + limit]
+        has_more = (offset + limit) < total_count
 
         return {
-            "downloads": filtered_list,
-            "stats": {
-                "total_downloaded": total_downloaded,
-                "total_size": total_size,
-                "pending_bytes": pending_bytes,
-                "total_speed": total_speed,
-                "downloaded_count": downloaded_count,
-                "total_count": total_count,
-                "all_count": all_count,
-                "active_count": active_count
-            }
+            "downloads": paginated_list,
+            "has_more": has_more,
+            "total": total_count
         }
 
     def get_stats(self):
@@ -142,9 +152,24 @@ class WebApp:
         db = get_db()
         all_downloads = db.get_all_downloads()
 
-        total_downloaded = sum(d.get("downloaded_bytes", 0) or 0 for d in all_downloads)
+        # For completed downloads, count total_bytes (full file size)
+        # For active downloads, count downloaded_bytes (current progress)
+        total_downloaded = sum(
+            d.get("total_bytes", 0) or 0 if d.get("status") == "done"
+            else d.get("downloaded_bytes", 0) or 0
+            for d in all_downloads
+        )
+
+        # Total size is sum of all total_bytes
         total_size = sum(d.get("total_bytes", 0) or 0 for d in all_downloads)
-        pending_bytes = total_size - total_downloaded
+
+        # Pending is only for active downloads
+        pending_bytes = sum(
+            (d.get("total_bytes", 0) or 0) - (d.get("downloaded_bytes", 0) or 0)
+            for d in all_downloads
+            if d.get("status") == "downloading"
+        )
+
         total_speed = sum(d.get("speed", 0) or 0 for d in all_downloads)
         downloaded_count = sum(1 for d in all_downloads if d.get("status") == "done")
         total_count = len(all_downloads)
@@ -161,17 +186,26 @@ class WebApp:
             "active_count": active_count
         }
 
+    def emit_stats(self):
+        """Emit current stats to all clients"""
+        stats = self.get_stats()
+        self.socketio.emit('stats', stats)
+
     def emit_status(self, message_id, status: str):
         """Emit status change for a specific download"""
         # Ensure message_id is sent as string to avoid JS precision loss
         msg_id_str = str(message_id) if message_id else None
         self.socketio.emit('download:status', {'message_id': msg_id_str, 'status': status})
+        # Also emit updated stats
+        self.emit_stats()
 
     def emit_deleted(self, message_id):
         """Emit download deleted event"""
         # Ensure message_id is sent as string to avoid JS precision loss
         msg_id_str = str(message_id) if message_id else None
         self.socketio.emit('download:deleted', {'message_id': msg_id_str})
+        # Also emit updated stats
+        self.emit_stats()
 
     def setup_routes(self):
         """Setup Flask API routes"""
@@ -234,7 +268,12 @@ class WebApp:
             filter_type = request.args.get("filter", "all")  # 'all' or 'active'
             sort_by = request.args.get("sort_by", "created_at")  # 'created_at', 'file', 'status', 'progress'
             sort_order = request.args.get("sort_order", "desc")  # 'asc' or 'desc'
-            return jsonify(self.get_downloads_data(search, filter_type, sort_by, sort_order))
+            limit = request.args.get("limit", 30, type=int)
+            offset = request.args.get("offset", 0, type=int)
+            # Parse exclude_mapping_ids as comma-separated list of integers
+            exclude_ids_str = request.args.get("exclude_mapping_ids", "")
+            exclude_mapping_ids = [int(x) for x in exclude_ids_str.split(",") if x.strip().isdigit()] if exclude_ids_str else None
+            return jsonify(self.get_downloads_data(search, filter_type, sort_by, sort_order, limit, offset, exclude_mapping_ids))
 
         @self.app.route("/api/stats", methods=["GET"])
         @token_required
@@ -414,6 +453,13 @@ class WebApp:
             """Get list of secured source types"""
             db = get_db()
             return jsonify(db.get_secured_sources())
+
+        @self.app.route("/api/mappings/secured-ids", methods=["GET"])
+        @token_required
+        def get_secured_mapping_ids():
+            """Get list of secured mapping IDs"""
+            db = get_db()
+            return jsonify(db.get_secured_mapping_ids())
 
         @self.app.route("/api/mappings/source/<source>", methods=["GET"])
         @token_required
