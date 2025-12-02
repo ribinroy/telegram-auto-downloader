@@ -55,6 +55,11 @@ class TelegramDownloader:
         socketio = get_socketio()
         if socketio:
             socketio.emit('download:new', download)
+            # Also emit updated stats
+            from backend.web_app import get_web_app
+            web_app = get_web_app()
+            if web_app:
+                web_app.emit_stats()
 
     def emit_deleted(self, message_id: int):
         """Emit download deleted event"""

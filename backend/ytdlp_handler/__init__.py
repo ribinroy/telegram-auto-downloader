@@ -200,6 +200,11 @@ class YtdlpDownloader:
         socketio = get_socketio()
         if socketio:
             socketio.emit('download:new', download)
+            # Also emit updated stats
+            from backend.web_app import get_web_app
+            web_app = get_web_app()
+            if web_app:
+                web_app.emit_stats()
 
     def parse_progress(self, line: str) -> dict | None:
         """Parse yt-dlp progress output"""
