@@ -1,5 +1,5 @@
 """
-Utility functions for DownloadLee
+Utility functions for DownLee
 """
 import os
 import json

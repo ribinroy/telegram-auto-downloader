@@ -1,5 +1,5 @@
 """
-Flask REST API with WebSocket support for DownloadLee
+Flask REST API with WebSocket support for DownLee
 """
 import os
 import jwt
