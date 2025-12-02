@@ -1,5 +1,5 @@
 """
-Database module for DownloadLee
+Database module for DownLee
 """
 import hashlib
 import uuid

@@ -1,5 +1,5 @@
 [Unit]
-Description=DownloadLee Service
+Description=DownLee Service
 After=network.target
 
 [Service]

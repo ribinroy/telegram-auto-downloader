@@ -1,5 +1,5 @@
 """
-Configuration module for DownloadLee
+Configuration module for DownLee
 """
 import os
 from pathlib import Path
