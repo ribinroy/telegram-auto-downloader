@@ -1,5 +1,5 @@
 [Unit]
-Description=Telegram Downloader Service
+Description=DownloadLee Service
 After=network.target
 
 [Service]

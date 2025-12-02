@@ -1,5 +1,5 @@
 """
-Database module for Telegram Downloader
+Database module for DownloadLee
 """
 import hashlib
 import uuid

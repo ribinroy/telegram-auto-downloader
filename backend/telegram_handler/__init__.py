@@ -223,7 +223,7 @@ class TelegramDownloader:
 
     def start(self):
         """Start the Telegram client"""
-        print("🚀 Telegram Downloader running...")
+        print("🚀 DownloadLee running...")
         self.client.start()
         self.client.run_until_disconnected()
 

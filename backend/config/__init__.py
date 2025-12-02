@@ -1,5 +1,5 @@
 """
-Configuration module for Telegram Downloader
+Configuration module for DownloadLee
 """
 import os
 from pathlib import Path
