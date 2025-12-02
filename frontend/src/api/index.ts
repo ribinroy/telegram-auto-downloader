@@ -1,6 +1,6 @@
 import type { DownloadsResponse, Stats, UrlCheckResult, Download, DownloadTypeMap, AnalyticsData } from '../types';
 
-const API_BASE = '';
+const API_BASE = import.meta.env.DEV ? 'http://192.168.0.135:4444' : '';
 const TOKEN_KEY = 'auth_token';
 
 export type SortBy = 'created_at' | 'file' | 'status' | 'progress';

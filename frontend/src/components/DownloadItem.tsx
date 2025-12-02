@@ -19,6 +19,7 @@ import type { Download } from '../types';
 import { formatBytes, formatTime, formatSpeed } from '../utils/format';
 import { ConfirmDialog } from './ConfirmDialog';
 import { VideoPlayerModal } from './VideoPlayerModal';
+import { Tooltip } from './Tooltip';
 import { checkVideoFile, getVideoStreamUrl } from '../api';
 
 interface DownloadItemProps {
@@ -205,7 +206,7 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
   };
 
   return (
-    <div className="bg-slate-800/30 rounded-xl p-4 border border-slate-700/50 hover:border-slate-600 transition-all">
+    <div className="bg-slate-800/30 rounded-xl p-4 border border-slate-700/50 hover:border-slate-600 transition-all overflow-visible">
       <div className="flex items-start gap-4">
         {/* Source Icon */}
         <div className="p-2.5 bg-slate-700/50 rounded-lg">
@@ -213,8 +214,8 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
         </div>
 
         <div className="flex-1 min-w-0">
-          <div className="mb-1">
-            <h3 className="text-white font-medium truncate" title={download.file}>
+          <div className="mb-1 group relative">
+            <h3 className="text-white font-medium truncate">
               {download.file}
             </h3>
           </div>
@@ -245,9 +246,14 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
               <span>Size: {formatBytes(download.total_bytes)}</span>
             )}
             {download.error && (
-              <span className="text-red-400 truncate" title={download.error}>
-                {download.error}
-              </span>
+              <div className="group relative">
+                <span className="text-red-400 truncate">
+                  {download.error}
+                </span>
+                <div className="absolute top-full left-0 mt-1 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-normal pointer-events-none z-50 max-w-xs">
+                  {download.error}
+                </div>
+              </div>
             )}
           </div>
         </div>
@@ -266,90 +272,115 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
 
             {/* View button for completed downloads */}
             {download.status === 'done' && (
-              <button
-                onClick={handleViewClick}
-                disabled={checkingVideo}
-                className={`p-2 rounded-lg transition-colors ${
-                  localFileDeleted
-                    ? 'bg-slate-700/30 text-slate-500 hover:bg-slate-700/50 hover:text-slate-400'
-                    : 'bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-400'
-                }`}
-                title={localFileDeleted ? 'File not found - click to re-check' : 'Play video'}
-              >
-                {checkingVideo ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (
-                  <Eye className="w-4 h-4" />
-                )}
-              </button>
+              <div className="group relative">
+                <button
+                  onClick={handleViewClick}
+                  disabled={checkingVideo}
+                  className={`p-2 rounded-lg transition-colors ${
+                    localFileDeleted
+                      ? 'bg-slate-700/30 text-slate-500 hover:bg-slate-700/50 hover:text-slate-400'
+                      : 'bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-400'
+                  }`}
+                >
+                  {checkingVideo ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Eye className="w-4 h-4" />
+                  )}
+                </button>
+                <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
+                  {localFileDeleted ? 'File not found - click to re-check' : 'Play video'}
+                </div>
+              </div>
             )}
 
             {/* Action buttons */}
             <div className="flex gap-2">
               {/* For non-telegram: show play button when stopped/failed to resume */}
               {!isTelegram && (download.status === 'failed' || download.status === 'stopped') && (
-                <button
-                  onClick={() => onRetry(download.id)}
-                  className="p-2 bg-green-500/20 hover:bg-green-500/30 text-green-400 rounded-lg transition-colors"
-                  title="Resume"
-                >
-                  <Play className="w-4 h-4" />
-                </button>
+                <div className="group relative">
+                  <button
+                    onClick={() => onRetry(download.id)}
+                    className="p-2 bg-green-500/20 hover:bg-green-500/30 text-green-400 rounded-lg transition-colors"
+                  >
+                    <Play className="w-4 h-4" />
+                  </button>
+                  <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
+                    Resume
+                  </div>
+                </div>
               )}
               {/* For telegram: show retry button when failed */}
               {isTelegram && download.status === 'failed' && (
-                <button
-                  onClick={() => onRetry(download.id)}
-                  className="p-2 bg-green-500/20 hover:bg-green-500/30 text-green-400 rounded-lg transition-colors"
-                  title="Retry"
-                >
-                  <RefreshCw className="w-4 h-4" />
-                </button>
+                <div className="group relative">
+                  <button
+                    onClick={() => onRetry(download.id)}
+                    className="p-2 bg-green-500/20 hover:bg-green-500/30 text-green-400 rounded-lg transition-colors"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                  </button>
+                  <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
+                    Retry
+                  </div>
+                </div>
               )}
               {/* For non-telegram: show pause button when downloading */}
               {!isTelegram && download.status === 'downloading' && (
-                <button
-                  onClick={() => setConfirmAction('stop')}
-                  className="p-2 bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-400 rounded-lg transition-colors"
-                  title="Pause"
-                >
-                  <Pause className="w-4 h-4" />
-                </button>
+                <div className="group relative">
+                  <button
+                    onClick={() => setConfirmAction('stop')}
+                    className="p-2 bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-400 rounded-lg transition-colors"
+                  >
+                    <Pause className="w-4 h-4" />
+                  </button>
+                  <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
+                    Pause
+                  </div>
+                </div>
               )}
               {/* For telegram: show stop button when downloading */}
               {isTelegram && download.status === 'downloading' && (
-                <button
-                  onClick={() => setConfirmAction('stop')}
-                  className="p-2 bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-400 rounded-lg transition-colors"
-                  title="Stop"
-                >
-                  <Square className="w-4 h-4" />
-                </button>
+                <div className="group relative">
+                  <button
+                    onClick={() => setConfirmAction('stop')}
+                    className="p-2 bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-400 rounded-lg transition-colors"
+                  >
+                    <Square className="w-4 h-4" />
+                  </button>
+                  <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
+                    Stop
+                  </div>
+                </div>
               )}
-              <button
-                onClick={() => setConfirmAction('delete')}
-                className="p-2 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg transition-colors"
-                title="Delete"
-              >
-                <Trash2 className="w-4 h-4" />
-              </button>
+              <div className="group relative">
+                <button
+                  onClick={() => setConfirmAction('delete')}
+                  className="p-2 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg transition-colors"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+                <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
+                  Delete
+                </div>
+              </div>
             </div>
           </div>
 
           {/* ID and Date */}
           <div className="flex gap-4 text-xs text-slate-500">
-            <div
-              className="flex items-center gap-1 cursor-default"
-              title="Database ID"
-            >
-              <span className="text-slate-600">#</span>
-              <span>{download.id}</span>
-            </div>
-            {download.created_at && (
+            <Tooltip content="Database ID">
               <div className="flex items-center gap-1 cursor-default">
-                <Calendar className="w-3 h-3" />
-                <ReactTimeAgo date={new Date(download.created_at)} locale="en-US" timeStyle="twitter" />
+                <span className="text-slate-600">#</span>
+                <span>{download.id}</span>
               </div>
+            </Tooltip>
+            {download.created_at && (
+              <Tooltip content={new Date(download.created_at).toLocaleString()}>
+                <div className="flex items-center gap-1 cursor-default">
+                  <Calendar className="w-3 h-3" />
+                  <ReactTimeAgo date={new Date(download.created_at)} locale="en-US" timeStyle="twitter" />
+                </div>
+              </Tooltip>
             )}
           </div>
         </div>

@@ -298,16 +298,12 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
 
   return (
     <div className="h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex flex-col overflow-hidden">
-      <div className="max-w-6xl mx-auto px-4 py-8 w-full flex flex-col flex-1 min-h-0">
+      <div className="max-w-7xl mx-auto px-4 pt-1 pb-0 w-full flex flex-col flex-1 min-h-0">
         {/* Header */}
-        <div className="flex items-center justify-between mb-8">
+        <div className="flex items-center justify-between mb-1">
           <div className="flex items-center gap-3">
-            <div className="p-3 bg-gradient-to-br from-cyan-500 to-blue-600 rounded-xl">
-              <Download className="w-8 h-8 text-white" />
-            </div>
-            <div>
-              <h1 className="text-2xl font-bold text-white">Telegram Downloader</h1>
-              <p className="text-slate-400 text-sm">Monitor your downloads in real-time</p>
+            <div className="p-3 rounded-xl">
+              <img src="/logo.png" alt="DownloadLee logo" className="w-8 h-8" />
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -315,21 +311,21 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
             <div className="group relative flex items-center gap-2 px-3 py-1.5 bg-slate-700/50 rounded-lg cursor-default min-w-[100px]">
               <HardDrive className="w-4 h-4 text-green-400" />
               <span className="text-sm text-green-400 tabular-nums">{formatBytes(stats.total_downloaded)}</span>
-              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">
+              <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
                 Downloaded
               </div>
             </div>
             <div className="group relative flex items-center gap-2 px-3 py-1.5 bg-slate-700/50 rounded-lg cursor-default min-w-[100px]">
               <Clock className="w-4 h-4 text-yellow-400" />
               <span className="text-sm text-yellow-400 tabular-nums">{formatBytes(stats.pending_bytes)}</span>
-              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">
+              <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
                 Pending
               </div>
             </div>
             <div className="group relative flex items-center gap-2 px-3 py-1.5 bg-slate-700/50 rounded-lg cursor-default min-w-[110px]">
               <Zap className="w-4 h-4 text-purple-400" />
               <span className="text-sm text-purple-400 tabular-nums">{formatSpeed(stats.total_speed)}</span>
-              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">
+              <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
                 Speed
               </div>
             </div>
@@ -343,30 +339,42 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
             </div>
             {/* Analytics button - only visible when secured sources are shown */}
             {showSecured && (
-              <button
-                onClick={() => setCurrentPage('analytics')}
-                className="p-2 bg-slate-700/50 hover:bg-slate-600/50 text-slate-400 hover:text-white rounded-lg transition-colors"
-                title="Analytics"
-              >
-                <BarChart3 className="w-4 h-4" />
-              </button>
+              <div className="group relative">
+                <button
+                  onClick={() => setCurrentPage('analytics')}
+                  className="p-2 bg-slate-700/50 hover:bg-slate-600/50 text-slate-400 hover:text-white rounded-lg transition-colors"
+                >
+                  <BarChart3 className="w-4 h-4" />
+                </button>
+                <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
+                  Analytics
+                </div>
+              </div>
             )}
             {/* Settings button */}
-            <button
-              onClick={() => setSettingsOpen(true)}
-              className="p-2 bg-slate-700/50 hover:bg-slate-600/50 text-slate-400 hover:text-white rounded-lg transition-colors"
-              title="Settings"
-            >
-              <Settings className="w-4 h-4" />
-            </button>
+            <div className="group relative">
+              <button
+                onClick={() => setSettingsOpen(true)}
+                className="p-2 bg-slate-700/50 hover:bg-slate-600/50 text-slate-400 hover:text-white rounded-lg transition-colors"
+              >
+                <Settings className="w-4 h-4" />
+              </button>
+              <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
+                Settings
+              </div>
+            </div>
             {/* Logout button */}
-            <button
-              onClick={onLogout}
-              className="p-2 bg-slate-700/50 hover:bg-slate-600/50 text-slate-400 hover:text-white rounded-lg transition-colors"
-              title="Sign out"
-            >
-              <LogOut className="w-4 h-4" />
-            </button>
+            <div className="group relative">
+              <button
+                onClick={onLogout}
+                className="p-2 bg-slate-700/50 hover:bg-slate-600/50 text-slate-400 hover:text-white rounded-lg transition-colors"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
+              <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
+                Sign out
+              </div>
+            </div>
           </div>
         </div>
 
@@ -460,7 +468,7 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
             </div>
           </div>
         ) : (
-          <div className="flex-1 min-h-0 overflow-auto space-y-3 pb-4">
+          <div className="flex-1 min-h-0 overflow-auto space-y-3 pb-12">
             {filteredDownloads.map((download) => (
               <DownloadItem
                 key={download.id}
@@ -476,13 +484,17 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
       </div>
 
       {/* Floating Add Button */}
-      <button
-        onClick={() => setAddUrlOpen(true)}
-        className="fixed bottom-6 right-6 p-4 bg-gradient-to-br from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white rounded-full shadow-lg shadow-cyan-500/25 transition-all hover:scale-105 z-40"
-        title="Add URL download"
-      >
-        <Plus className="w-6 h-6" />
-      </button>
+      <div className="group fixed bottom-6 right-6 z-40">
+        <button
+          onClick={() => setAddUrlOpen(true)}
+          className="p-4 bg-gradient-to-br from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white rounded-full shadow-lg shadow-cyan-500/25 transition-all hover:scale-105"
+        >
+          <Plus className="w-6 h-6" />
+        </button>
+        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
+          Add URL download
+        </div>
+      </div>
 
       {/* Settings Dialog */}
       <SettingsDialog

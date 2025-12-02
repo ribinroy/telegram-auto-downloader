@@ -1,5 +1,5 @@
 """
-Utility functions for Telegram Downloader
+Utility functions for DownloadLee
 """
 import os
 import json
