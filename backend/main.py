@@ -1,5 +1,5 @@
 """
-Main entry point for DownloadLee
+Main entry point for DownLee
 """
 import asyncio
 import logging
@@ -48,7 +48,7 @@ def validate_credentials():
 
 
 def main():
-    """Main function to start the DownloadLee"""
+    """Main function to start DownLee"""
     # Setup logging
     setup_logging()
 

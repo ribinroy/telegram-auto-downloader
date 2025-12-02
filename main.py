@@ -1,5 +1,5 @@
 """
-Main entry point for DownloadLee
+Main entry point for DownLee
 This file serves as the root entry point that imports from the backend package.
 """
 from backend.main import main
