@@ -53,7 +53,6 @@ export interface Stats {
 
 export interface DownloadsResponse {
   downloads: Download[];
-  stats: Stats;
   has_more: boolean;
   total: number;
 }

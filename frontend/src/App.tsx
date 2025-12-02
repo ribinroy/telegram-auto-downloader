@@ -138,8 +138,6 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
       }
       return updated;
     });
-    // Refresh stats when status changes
-    fetchStats().then(setStats).catch(() => {});
   }, [activeTab]);
 
   // Handle new downloads
@@ -148,15 +146,16 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
     if (activeTab === 'all' || data.status !== 'done') {
       setDownloads(prev => [data, ...prev]);
     }
-    // Refresh stats
-    fetchStats().then(setStats).catch(() => {});
   }, [activeTab]);
 
   // Handle deleted downloads
   const handleDeleted = useCallback((data: DeletedUpdate) => {
     setDownloads(prev => prev.filter(d => d.message_id !== data.message_id));
-    // Refresh stats
-    fetchStats().then(setStats).catch(() => {});
+  }, []);
+
+  // Handle stats updates from websocket
+  const handleStats = useCallback((data: Stats) => {
+    setStats(data);
   }, []);
 
   // Fetch downloads via REST API
@@ -184,7 +183,6 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
         setDownloads(prev => [...prev, ...data.downloads]);
       }
       setHasMore(data.has_more);
-      setStats(data.stats);
       setError(null);
     } catch (err) {
       setError('Failed to fetch downloads');
@@ -211,16 +209,27 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
     }
   }, []);
 
+  // Fetch stats on mount
+  const loadStats = useCallback(async () => {
+    try {
+      const statsData = await fetchStats();
+      setStats(statsData);
+    } catch (err) {
+      console.error('Failed to fetch stats');
+    }
+  }, []);
+
   // Load initial data on mount and when search/tab/sort changes
   useEffect(() => {
     loadDownloads(true);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [debouncedSearch, activeTab, sortBy, sortOrder, showSecured, securedMappingIds]);
 
-  // Load secured mapping IDs on mount
+  // Load secured mapping IDs and stats on mount
   useEffect(() => {
     loadSecuredMappingIds();
-  }, [loadSecuredMappingIds]);
+    loadStats();
+  }, [loadSecuredMappingIds, loadStats]);
 
   // Handle scroll to load more
   useEffect(() => {
@@ -246,6 +255,7 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
       onStatus: handleStatus,
       onNew: handleNewDownload,
       onDeleted: handleDeleted,
+      onStats: handleStats,
       onConnect: () => setConnected(true),
       onDisconnect: () => setConnected(false),
     });
@@ -253,7 +263,7 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
     return () => {
       disconnectSocket();
     };
-  }, [handleProgress, handleStatus, handleNewDownload, handleDeleted]);
+  }, [handleProgress, handleStatus, handleNewDownload, handleDeleted, handleStats]);
 
   const handleRetry = async (id: number) => {
     await retryDownload(id);

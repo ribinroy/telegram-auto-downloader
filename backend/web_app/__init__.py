@@ -80,7 +80,7 @@ class WebApp:
 
     def get_downloads_data(self, search='', filter_type='all', sort_by='created_at', sort_order='desc',
                            limit=30, offset=0, exclude_mapping_ids=None):
-        """Get downloads data with stats
+        """Get downloads data (paginated)
 
         Args:
             search: Search query to filter by filename
@@ -126,18 +126,7 @@ class WebApp:
             sorted_list = filtered_list
 
         filtered_list = sorted_list
-
-        # Calculate stats before pagination
-        total_downloaded = sum(d.get("downloaded_bytes", 0) or 0 for d in filtered_list)
-        total_size = sum(d.get("total_bytes", 0) or 0 for d in filtered_list)
-        pending_bytes = total_size - total_downloaded
-        total_speed = sum(d.get("speed", 0) or 0 for d in filtered_list)
-        downloaded_count = sum(1 for d in filtered_list if d.get("status") == "done")
         total_count = len(filtered_list)
-
-        # Calculate counts from filtered list for tab display
-        all_count = len(sorted_list)
-        active_count = sum(1 for d in sorted_list if d.get("status") != "done")
 
         # Apply pagination
         paginated_list = filtered_list[offset:offset + limit]
@@ -146,17 +135,7 @@ class WebApp:
         return {
             "downloads": paginated_list,
             "has_more": has_more,
-            "total": total_count,
-            "stats": {
-                "total_downloaded": total_downloaded,
-                "total_size": total_size,
-                "pending_bytes": pending_bytes,
-                "total_speed": total_speed,
-                "downloaded_count": downloaded_count,
-                "total_count": total_count,
-                "all_count": all_count,
-                "active_count": active_count
-            }
+            "total": total_count
         }
 
     def get_stats(self):
@@ -183,17 +162,26 @@ class WebApp:
             "active_count": active_count
         }
 
+    def emit_stats(self):
+        """Emit current stats to all clients"""
+        stats = self.get_stats()
+        self.socketio.emit('stats', stats)
+
     def emit_status(self, message_id, status: str):
         """Emit status change for a specific download"""
         # Ensure message_id is sent as string to avoid JS precision loss
         msg_id_str = str(message_id) if message_id else None
         self.socketio.emit('download:status', {'message_id': msg_id_str, 'status': status})
+        # Also emit updated stats
+        self.emit_stats()
 
     def emit_deleted(self, message_id):
         """Emit download deleted event"""
         # Ensure message_id is sent as string to avoid JS precision loss
         msg_id_str = str(message_id) if message_id else None
         self.socketio.emit('download:deleted', {'message_id': msg_id_str})
+        # Also emit updated stats
+        self.emit_stats()
 
     def setup_routes(self):
         """Setup Flask API routes"""
