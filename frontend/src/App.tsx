@@ -343,7 +343,7 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
         <div className="flex items-center justify-between mb-1">
           <div className="flex items-center gap-3">
             <div className="p-3 rounded-xl">
-              <img src="/logo.png" alt="DownloadLee logo" className="w-8 h-8" />
+              <img src="/logo.png" alt="DownLee logo" className="w-8 h-8" />
             </div>
           </div>
           <div className="flex items-center gap-3">
