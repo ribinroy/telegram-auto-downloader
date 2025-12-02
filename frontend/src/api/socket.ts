@@ -1,7 +1,7 @@
 import { io, Socket } from 'socket.io-client';
-import type { Download } from '../types';
+import type { Download, Stats } from '../types';
 
-const API_BASE = window.location.origin;
+const API_BASE = import.meta.env.DEV ? 'http://192.168.0.135:4444' : window.location.origin;
 
 let socket: Socket | null = null;
 
@@ -29,6 +29,7 @@ export interface SocketHandlers {
   onStatus: (data: StatusUpdate) => void;
   onNew: (data: Download) => void;
   onDeleted: (data: DeletedUpdate) => void;
+  onStats: (data: Stats) => void;
   onConnect: () => void;
   onDisconnect: () => void;
 }
@@ -60,6 +61,7 @@ export function connectSocket(handlers: SocketHandlers): Socket {
   socket.on('download:status', handlers.onStatus);
   socket.on('download:new', handlers.onNew);
   socket.on('download:deleted', handlers.onDeleted);
+  socket.on('stats', handlers.onStats);
 
   socket.on('connect_error', (error) => {
     console.error('WebSocket connection error:', error);

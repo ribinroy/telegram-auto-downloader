@@ -65,17 +65,37 @@ export async function updatePassword(currentPassword: string, newPassword: strin
   }
 }
 
-export async function fetchDownloads(
-  search?: string,
-  filter: 'all' | 'active' = 'all',
-  sortBy: SortBy = 'created_at',
-  sortOrder: SortOrder = 'desc'
-): Promise<DownloadsResponse> {
+export interface FetchDownloadsOptions {
+  search?: string;
+  filter?: 'all' | 'active';
+  sortBy?: SortBy;
+  sortOrder?: SortOrder;
+  limit?: number;
+  offset?: number;
+  excludeMappingIds?: number[];
+}
+
+export async function fetchDownloads(options: FetchDownloadsOptions = {}): Promise<DownloadsResponse> {
+  const {
+    search,
+    filter = 'all',
+    sortBy = 'created_at',
+    sortOrder = 'desc',
+    limit = 30,
+    offset = 0,
+    excludeMappingIds,
+  } = options;
+
   const params = new URLSearchParams();
   if (search) params.set('search', search);
   params.set('filter', filter);
   params.set('sort_by', sortBy);
   params.set('sort_order', sortOrder);
+  params.set('limit', limit.toString());
+  params.set('offset', offset.toString());
+  if (excludeMappingIds && excludeMappingIds.length > 0) {
+    params.set('exclude_mapping_ids', excludeMappingIds.join(','));
+  }
 
   const url = `${API_BASE}/api/downloads?${params.toString()}`;
   const response = await fetch(url, { headers: getAuthHeaders() });
@@ -168,6 +188,17 @@ export async function fetchMappings(): Promise<DownloadTypeMap[]> {
 
 export async function fetchSecuredSources(): Promise<string[]> {
   const response = await fetch(`${API_BASE}/api/mappings/secured`, {
+    headers: getAuthHeaders(),
+  });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  return response.json();
+}
+
+export async function fetchSecuredMappingIds(): Promise<number[]> {
+  const response = await fetch(`${API_BASE}/api/mappings/secured-ids`, {
     headers: getAuthHeaders(),
   });
   if (response.status === 401) {

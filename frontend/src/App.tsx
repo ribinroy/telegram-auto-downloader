@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Search, Download, Wifi, WifiOff, Loader2, HardDrive, Clock, Zap, LogOut, Settings, Plus, BarChart3 } from 'lucide-react';
 import { formatBytes, formatSpeed } from './utils/format';
-import { fetchDownloads, fetchStats, retryDownload, stopDownload, deleteDownload, verifyToken, clearToken, getToken, fetchSecuredSources, type SortBy, type SortOrder } from './api';
+import { fetchDownloads, fetchStats, retryDownload, stopDownload, deleteDownload, verifyToken, clearToken, getToken, fetchSecuredMappingIds, type SortBy, type SortOrder } from './api';
 import { connectSocket, disconnectSocket, type ProgressUpdate, type StatusUpdate, type DeletedUpdate } from './api/socket';
 import { DownloadItem } from './components/DownloadItem';
 import { LoginPage } from './components/LoginPage';
@@ -55,10 +55,12 @@ function App() {
   return <MainApp onLogout={handleLogout} />;
 }
 
+const PAGE_SIZE = 30;
+
 function MainApp({ onLogout }: { onLogout: () => void }) {
   const [currentPage, setCurrentPage] = useState<'downloads' | 'analytics'>('downloads');
   const [downloads, setDownloads] = useState<DownloadType[]>([]);
-  const [securedSources, setSecuredSources] = useState<string[]>([]);
+  const [securedMappingIds, setSecuredMappingIds] = useState<number[]>([]);
   const [showSecured, setShowSecured] = useState(false);
   const [secretClickCount, setSecretClickCount] = useState(0);
   const secretClickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -79,9 +81,12 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
   const [activeTab, setActiveTab] = useState<TabType>('active');
   const [sortBy, setSortBy] = useState<SortBy>('created_at');
   const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
+  const listRef = useRef<HTMLDivElement>(null);
 
   // Debounce search input
   useEffect(() => {
@@ -99,20 +104,15 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
           ? { ...d, ...data }
           : d
       );
-      // Calculate total speed from all downloading items
+      // Only update total_speed locally for responsiveness
+      // Other stats (total_downloaded, pending_bytes) come from backend via websocket
       const totalSpeed = updated
         .filter(d => d.status === 'downloading')
         .reduce((sum, d) => sum + (d.speed || 0), 0);
 
-      // Calculate total downloaded and pending bytes
-      const totalDownloaded = updated.reduce((sum, d) => sum + (d.downloaded_bytes || 0), 0);
-      const totalSize = updated.reduce((sum, d) => sum + (d.total_bytes || 0), 0);
-
       setStats(prev => ({
         ...prev,
-        total_speed: totalSpeed,
-        total_downloaded: totalDownloaded,
-        pending_bytes: totalSize - totalDownloaded
+        total_speed: totalSpeed
       }));
 
       return updated;
@@ -133,8 +133,6 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
       }
       return updated;
     });
-    // Refresh stats when status changes
-    fetchStats().then(setStats).catch(() => {});
   }, [activeTab]);
 
   // Handle new downloads
@@ -143,32 +141,70 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
     if (activeTab === 'all' || data.status !== 'done') {
       setDownloads(prev => [data, ...prev]);
     }
-    // Refresh stats
-    fetchStats().then(setStats).catch(() => {});
   }, [activeTab]);
 
   // Handle deleted downloads
   const handleDeleted = useCallback((data: DeletedUpdate) => {
     setDownloads(prev => prev.filter(d => d.message_id !== data.message_id));
-    // Refresh stats
-    fetchStats().then(setStats).catch(() => {});
+  }, []);
+
+  // Handle stats updates from websocket
+  const handleStats = useCallback((data: Stats) => {
+    setStats(data);
   }, []);
 
   // Fetch downloads via REST API
-  const loadDownloads = useCallback(async () => {
-    setLoading(true);
+  const loadDownloads = useCallback(async (reset = true) => {
+    if (reset) {
+      setLoading(true);
+    } else {
+      setLoadingMore(true);
+    }
     try {
-      const data = await fetchDownloads(debouncedSearch, activeTab, sortBy, sortOrder);
-      setDownloads(data.downloads);
+      const offset = reset ? 0 : downloads.length;
+      const excludeIds = showSecured ? undefined : securedMappingIds;
+      const data = await fetchDownloads({
+        search: debouncedSearch,
+        filter: activeTab,
+        sortBy,
+        sortOrder,
+        limit: PAGE_SIZE,
+        offset,
+        excludeMappingIds: excludeIds,
+      });
+      if (reset) {
+        setDownloads(data.downloads);
+      } else {
+        setDownloads(prev => [...prev, ...data.downloads]);
+      }
+      setHasMore(data.has_more);
       setError(null);
     } catch (err) {
       setError('Failed to fetch downloads');
     } finally {
       setLoading(false);
+      setLoadingMore(false);
     }
-  }, [debouncedSearch, activeTab, sortBy, sortOrder]);
+  }, [debouncedSearch, activeTab, sortBy, sortOrder, showSecured, securedMappingIds, downloads.length]);
 
-  // Fetch stats via REST API
+  // Load more downloads when scrolling to bottom
+  const loadMore = useCallback(() => {
+    if (!loadingMore && hasMore) {
+      loadDownloads(false);
+    }
+  }, [loadDownloads, loadingMore, hasMore]);
+
+  // Fetch secured mapping IDs
+  const loadSecuredMappingIds = useCallback(async () => {
+    try {
+      const ids = await fetchSecuredMappingIds();
+      setSecuredMappingIds(ids);
+    } catch (err) {
+      console.error('Failed to fetch secured mapping IDs');
+    }
+  }, []);
+
+  // Fetch stats on mount
   const loadStats = useCallback(async () => {
     try {
       const statsData = await fetchStats();
@@ -178,26 +214,34 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
     }
   }, []);
 
-  // Fetch secured sources
-  const loadSecuredSources = useCallback(async () => {
-    try {
-      const sources = await fetchSecuredSources();
-      setSecuredSources(sources);
-    } catch (err) {
-      console.error('Failed to fetch secured sources');
-    }
-  }, []);
-
-  // Load initial data on mount and when search/tab changes
+  // Load initial data on mount and when search/tab/sort changes
   useEffect(() => {
-    loadDownloads();
-  }, [loadDownloads]);
+    loadDownloads(true);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedSearch, activeTab, sortBy, sortOrder, showSecured, securedMappingIds]);
 
-  // Load stats and secured sources on mount
+  // Load secured mapping IDs and stats on mount
   useEffect(() => {
+    loadSecuredMappingIds();
     loadStats();
-    loadSecuredSources();
-  }, [loadStats, loadSecuredSources]);
+  }, [loadSecuredMappingIds, loadStats]);
+
+  // Handle scroll to load more
+  useEffect(() => {
+    const listElement = listRef.current;
+    if (!listElement) return;
+
+    const handleScroll = () => {
+      const { scrollTop, scrollHeight, clientHeight } = listElement;
+      // Load more when user is within 200px of the bottom
+      if (scrollHeight - scrollTop - clientHeight < 200) {
+        loadMore();
+      }
+    };
+
+    listElement.addEventListener('scroll', handleScroll);
+    return () => listElement.removeEventListener('scroll', handleScroll);
+  }, [loadMore]);
 
   // Setup WebSocket for real-time updates
   useEffect(() => {
@@ -206,6 +250,7 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
       onStatus: handleStatus,
       onNew: handleNewDownload,
       onDeleted: handleDeleted,
+      onStats: handleStats,
       onConnect: () => setConnected(true),
       onDisconnect: () => setConnected(false),
     });
@@ -213,7 +258,7 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
     return () => {
       disconnectSocket();
     };
-  }, [handleProgress, handleStatus, handleNewDownload, handleDeleted]);
+  }, [handleProgress, handleStatus, handleNewDownload, handleDeleted, handleStats]);
 
   const handleRetry = async (id: number) => {
     await retryDownload(id);
@@ -247,11 +292,6 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
       }, 1000);
     }
   };
-
-  // Filter downloads: exclude secured sources unless showSecured is true
-  const filteredDownloads = showSecured
-    ? downloads
-    : downloads.filter(d => !securedSources.includes(d.downloaded_from));
 
   const searchRef = useRef<HTMLInputElement>(null);
   const [pastedUrl, setPastedUrl] = useState<string | null>(null);
@@ -455,7 +495,7 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
               <p>Loading downloads...</p>
             </div>
           </div>
-        ) : filteredDownloads.length === 0 ? (
+        ) : downloads.length === 0 ? (
           <div className="flex-1 flex items-center justify-center text-slate-400">
             <div className="text-center">
               <Download className="w-12 h-12 mx-auto mb-4 opacity-50" />
@@ -468,8 +508,8 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
             </div>
           </div>
         ) : (
-          <div className="flex-1 min-h-0 overflow-auto space-y-3 pb-12">
-            {filteredDownloads.map((download) => (
+          <div ref={listRef} className="flex-1 min-h-0 overflow-auto space-y-3 pb-12">
+            {downloads.map((download) => (
               <DownloadItem
                 key={download.id}
                 download={download}
@@ -478,6 +518,11 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
                 onDelete={handleDelete}
               />
             ))}
+            {loadingMore && (
+              <div className="flex justify-center py-4">
+                <Loader2 className="w-6 h-6 text-cyan-500 animate-spin" />
+              </div>
+            )}
           </div>
         )}
 
@@ -501,8 +546,8 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
         isOpen={settingsOpen}
         onClose={() => {
           setSettingsOpen(false);
-          // Reload secured sources in case mappings were changed
-          loadSecuredSources();
+          // Reload secured mapping IDs in case mappings were changed
+          loadSecuredMappingIds();
         }}
         showMappings={showSecured}
       />
