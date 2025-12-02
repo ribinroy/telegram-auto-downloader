@@ -12,7 +12,8 @@ import {
   Pause,
   Play,
   Eye,
-  Loader2
+  Loader2,
+  ExternalLink
 } from 'lucide-react';
 import ReactTimeAgo from 'react-time-ago';
 import type { Download } from '../types';
@@ -366,8 +367,21 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
             </div>
           </div>
 
-          {/* ID and Date */}
+          {/* ID, Source Link, and Date */}
           <div className="flex gap-4 text-xs text-slate-500">
+            {download.url && (
+              <Tooltip content="Open source URL">
+                <a
+                  href={download.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1 text-cyan-400 hover:text-cyan-300 transition-colors"
+                >
+                  <ExternalLink className="w-3 h-3" />
+                  <span>Source</span>
+                </a>
+              </Tooltip>
+            )}
             <Tooltip content="Database ID">
               <div className="flex items-center gap-1 cursor-default">
                 <span className="text-slate-600">#</span>
