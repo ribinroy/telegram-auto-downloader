@@ -78,7 +78,8 @@ class WebApp:
         def handle_disconnect():
             print("Client disconnected")
 
-    def get_downloads_data(self, search='', filter_type='all', sort_by='created_at', sort_order='desc'):
+    def get_downloads_data(self, search='', filter_type='all', sort_by='created_at', sort_order='desc',
+                           limit=30, offset=0, exclude_mapping_ids=None):
         """Get downloads data with stats
 
         Args:
@@ -86,12 +87,26 @@ class WebApp:
             filter_type: 'all' for all downloads, 'active' for non-done downloads
             sort_by: Field to sort by ('created_at', 'file', 'status', 'progress')
             sort_order: 'asc' or 'desc'
+            limit: Number of items to return (default 30)
+            offset: Number of items to skip (default 0)
+            exclude_mapping_ids: List of mapping IDs to exclude from results
         """
         db = get_db()
         all_downloads = db.get_all_downloads()
 
+        # Get sources to exclude based on mapping IDs
+        excluded_sources = []
+        if exclude_mapping_ids:
+            all_mappings = db.get_all_download_type_maps()
+            mapping_by_id = {m['id']: m for m in all_mappings}
+            excluded_sources = [mapping_by_id[mid]['downloaded_from'] for mid in exclude_mapping_ids if mid in mapping_by_id]
+
         query = search.lower()
         filtered_list = [d for d in all_downloads if query in d.get("file", "").lower()] if query else all_downloads
+
+        # Filter out excluded sources
+        if excluded_sources:
+            filtered_list = [d for d in filtered_list if d.get("downloaded_from") not in excluded_sources]
 
         # Apply filter_type
         if filter_type == 'active':
@@ -112,6 +127,7 @@ class WebApp:
 
         filtered_list = sorted_list
 
+        # Calculate stats before pagination
         total_downloaded = sum(d.get("downloaded_bytes", 0) or 0 for d in filtered_list)
         total_size = sum(d.get("total_bytes", 0) or 0 for d in filtered_list)
         pending_bytes = total_size - total_downloaded
@@ -119,12 +135,18 @@ class WebApp:
         downloaded_count = sum(1 for d in filtered_list if d.get("status") == "done")
         total_count = len(filtered_list)
 
-        # Calculate counts from unfiltered list for tab display
+        # Calculate counts from filtered list for tab display
         all_count = len(sorted_list)
         active_count = sum(1 for d in sorted_list if d.get("status") != "done")
 
+        # Apply pagination
+        paginated_list = filtered_list[offset:offset + limit]
+        has_more = (offset + limit) < total_count
+
         return {
-            "downloads": filtered_list,
+            "downloads": paginated_list,
+            "has_more": has_more,
+            "total": total_count,
             "stats": {
                 "total_downloaded": total_downloaded,
                 "total_size": total_size,
@@ -234,7 +256,12 @@ class WebApp:
             filter_type = request.args.get("filter", "all")  # 'all' or 'active'
             sort_by = request.args.get("sort_by", "created_at")  # 'created_at', 'file', 'status', 'progress'
             sort_order = request.args.get("sort_order", "desc")  # 'asc' or 'desc'
-            return jsonify(self.get_downloads_data(search, filter_type, sort_by, sort_order))
+            limit = request.args.get("limit", 30, type=int)
+            offset = request.args.get("offset", 0, type=int)
+            # Parse exclude_mapping_ids as comma-separated list of integers
+            exclude_ids_str = request.args.get("exclude_mapping_ids", "")
+            exclude_mapping_ids = [int(x) for x in exclude_ids_str.split(",") if x.strip().isdigit()] if exclude_ids_str else None
+            return jsonify(self.get_downloads_data(search, filter_type, sort_by, sort_order, limit, offset, exclude_mapping_ids))
 
         @self.app.route("/api/stats", methods=["GET"])
         @token_required
@@ -414,6 +441,13 @@ class WebApp:
             """Get list of secured source types"""
             db = get_db()
             return jsonify(db.get_secured_sources())
+
+        @self.app.route("/api/mappings/secured-ids", methods=["GET"])
+        @token_required
+        def get_secured_mapping_ids():
+            """Get list of secured mapping IDs"""
+            db = get_db()
+            return jsonify(db.get_secured_mapping_ids())
 
         @self.app.route("/api/mappings/source/<source>", methods=["GET"])
         @token_required

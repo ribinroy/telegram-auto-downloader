@@ -464,6 +464,15 @@ class DatabaseManager:
         finally:
             self.close_session()
 
+    def get_secured_mapping_ids(self):
+        """Get list of mapping IDs that are secured"""
+        session = self.get_session()
+        try:
+            maps = session.query(DownloadTypeMap).filter_by(is_secured=True).all()
+            return [m.id for m in maps]
+        finally:
+            self.close_session()
+
     def add_download_type_map(self, downloaded_from: str, is_secured: bool = False, folder: str = None, quality: str = None):
         """Add a new download type mapping"""
         session = self.get_session()
