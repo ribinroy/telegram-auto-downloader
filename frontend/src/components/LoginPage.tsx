@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Download, Loader2, AlertCircle } from 'lucide-react';
+import { Loader2, AlertCircle } from 'lucide-react';
 import { login, setToken } from '../api';
 
 interface LoginPageProps {
@@ -34,8 +34,8 @@ export function LoginPage({ onLogin }: LoginPageProps) {
         <div className="bg-slate-800/50 rounded-2xl p-8 border border-slate-700/50 shadow-xl">
           {/* Header */}
           <div className="flex flex-col items-center mb-8">
-            <div className="p-4 bg-gradient-to-br from-cyan-500 to-blue-600 rounded-xl mb-4">
-              <Download className="w-10 h-10 text-white" />
+            <div className="p-4 rounded-xl mb-4">
+              <img src="/logo.png" alt="DownLee logo" className="w-16 h-16" />
             </div>
             <h1 className="text-2xl font-bold text-white">DownLee</h1>
             <p className="text-slate-400 text-sm mt-1">by Ribin Roy</p>
