@@ -104,20 +104,15 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
           ? { ...d, ...data }
           : d
       );
-      // Calculate total speed from all downloading items
+      // Only update total_speed locally for responsiveness
+      // Other stats (total_downloaded, pending_bytes) come from backend via websocket
       const totalSpeed = updated
         .filter(d => d.status === 'downloading')
         .reduce((sum, d) => sum + (d.speed || 0), 0);
 
-      // Calculate total downloaded and pending bytes
-      const totalDownloaded = updated.reduce((sum, d) => sum + (d.downloaded_bytes || 0), 0);
-      const totalSize = updated.reduce((sum, d) => sum + (d.total_bytes || 0), 0);
-
       setStats(prev => ({
         ...prev,
-        total_speed: totalSpeed,
-        total_downloaded: totalDownloaded,
-        pending_bytes: totalSize - totalDownloaded
+        total_speed: totalSpeed
       }));
 
       return updated;

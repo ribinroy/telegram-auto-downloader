@@ -185,6 +185,11 @@ class YtdlpDownloader:
                 'speed': speed,
                 'pending_time': pending_time
             })
+            # Also emit updated stats
+            from backend.web_app import get_web_app
+            web_app = get_web_app()
+            if web_app:
+                web_app.emit_stats()
 
     def emit_status(self, message_id: str, status: str, error: str | None = None):
         """Emit status change for a specific download"""
