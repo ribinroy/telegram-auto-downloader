@@ -20,6 +20,9 @@ JWT_EXPIRY_DAYS = 30  # Keep signed in for 30 days
 # Global socketio instance for broadcasting from other modules
 socketio = None
 
+# Global web app instance for accessing methods from other modules
+_web_app = None
+
 # Frontend dist directory
 FRONTEND_DIST = Path(__file__).parent.parent.parent / "frontend" / "dist"
 
@@ -27,6 +30,11 @@ FRONTEND_DIST = Path(__file__).parent.parent.parent / "frontend" / "dist"
 def get_socketio():
     """Get the global socketio instance"""
     return socketio
+
+
+def get_web_app():
+    """Get the global web app instance"""
+    return _web_app
 
 
 def token_required(f):
@@ -55,7 +63,7 @@ def token_required(f):
 
 class WebApp:
     def __init__(self, download_tasks, ytdlp_downloader=None, event_loop=None):
-        global socketio
+        global socketio, _web_app
         self.download_tasks = download_tasks
         self.ytdlp_downloader = ytdlp_downloader
         self.event_loop = event_loop
@@ -63,6 +71,7 @@ class WebApp:
         CORS(self.app, resources={r"/*": {"origins": "*"}})
         socketio = SocketIO(self.app, cors_allowed_origins="*", async_mode='threading')
         self.socketio = socketio
+        _web_app = self  # Set global web app instance
         self.setup_routes()
         self.setup_socketio()
 
@@ -143,9 +152,24 @@ class WebApp:
         db = get_db()
         all_downloads = db.get_all_downloads()
 
-        total_downloaded = sum(d.get("downloaded_bytes", 0) or 0 for d in all_downloads)
+        # For completed downloads, count total_bytes (full file size)
+        # For active downloads, count downloaded_bytes (current progress)
+        total_downloaded = sum(
+            d.get("total_bytes", 0) or 0 if d.get("status") == "done"
+            else d.get("downloaded_bytes", 0) or 0
+            for d in all_downloads
+        )
+
+        # Total size is sum of all total_bytes
         total_size = sum(d.get("total_bytes", 0) or 0 for d in all_downloads)
-        pending_bytes = total_size - total_downloaded
+
+        # Pending is only for active downloads
+        pending_bytes = sum(
+            (d.get("total_bytes", 0) or 0) - (d.get("downloaded_bytes", 0) or 0)
+            for d in all_downloads
+            if d.get("status") == "downloading"
+        )
+
         total_speed = sum(d.get("speed", 0) or 0 for d in all_downloads)
         downloaded_count = sum(1 for d in all_downloads if d.get("status") == "done")
         total_count = len(all_downloads)
