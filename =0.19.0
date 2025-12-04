@@ -1,0 +1,6 @@
+Collecting prometheus_client
+  Downloading prometheus_client-0.23.1-py3-none-any.whl.metadata (1.9 kB)
+Downloading prometheus_client-0.23.1-py3-none-any.whl (61 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 61.1/61.1 kB 1.7 MB/s eta 0:00:00
+Installing collected packages: prometheus_client
+Successfully installed prometheus_client-0.23.1
