@@ -51,6 +51,7 @@ logs/
 *.session-journal
 downloads.json
 cookies.txt
+telegram_config.json
 
 # Environment variables
 .env

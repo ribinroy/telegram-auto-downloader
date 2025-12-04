@@ -967,6 +967,34 @@ class WebApp:
             result = handler.logout()
             return jsonify(result)
 
+        @self.app.route("/api/telegram/config", methods=["GET"])
+        def get_telegram_config_api():
+            """Get current Telegram configuration (masked)"""
+            from backend.config import get_telegram_config
+            return jsonify(get_telegram_config())
+
+        @self.app.route("/api/telegram/config", methods=["POST"])
+        def save_telegram_config_api():
+            """Save Telegram configuration"""
+            data = request.json
+            api_id = data.get("api_id")
+            api_hash = data.get("api_hash")
+            chat_id = data.get("chat_id")
+
+            if not api_id or not api_hash or not chat_id:
+                return jsonify({"error": "api_id, api_hash, and chat_id are required"}), 400
+
+            try:
+                api_id = int(api_id)
+                chat_id = int(chat_id)
+            except ValueError:
+                return jsonify({"error": "api_id and chat_id must be numbers"}), 400
+
+            from backend.config import save_telegram_config
+            save_telegram_config(api_id, api_hash, chat_id)
+
+            return jsonify({"success": True})
+
         # Serve frontend
         @self.app.route('/')
         def serve_index():

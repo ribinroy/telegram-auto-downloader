@@ -5,7 +5,7 @@ import asyncio
 import logging
 from datetime import datetime
 from telethon import TelegramClient, events
-from backend.config import API_ID, API_HASH, CHAT_ID, DOWNLOAD_DIR, MAX_RETRIES, SESSION_FILE
+from backend.config import DOWNLOAD_DIR, MAX_RETRIES, SESSION_FILE, load_telegram_config
 from backend.database import get_db
 from backend.utils import human_readable_size, get_media_folder
 from backend.web_app import get_socketio
@@ -23,20 +23,28 @@ class TelegramDownloader:
     def __init__(self, download_tasks):
         self.download_tasks = download_tasks
 
-        # Get credentials from config (env file)
-        self.api_id = API_ID
-        self.api_hash = API_HASH
-        self.chat_id = CHAT_ID
+        # Load credentials from config (file or env)
+        config = load_telegram_config()
+        self.api_id = config['api_id']
+        self.api_hash = config['api_hash']
+        self.chat_id = config['chat_id']
 
         self.client = None
         self.last_broadcast = 0
 
-        # Only create client if session exists (to avoid creating empty session file)
-        if session_exists():
+        # Only create client if config is valid AND session exists
+        config_valid = self.api_id and self.api_hash and self.chat_id
+        if config_valid and session_exists():
             self._init_client()
 
     def _init_client(self):
         """Initialize the Telegram client and event handlers"""
+        # Reload config in case it was updated
+        config = load_telegram_config()
+        self.api_id = config['api_id']
+        self.api_hash = config['api_hash']
+        self.chat_id = config['chat_id']
+
         self.client = TelegramClient(str(SESSION_FILE), self.api_id, self.api_hash)
         self.setup_event_handlers()
 
@@ -265,6 +273,26 @@ class TelegramDownloader:
     def start(self):
         """Start the Telegram client"""
         print("🚀 DownLee running...")
+
+        # Check if config is missing
+        if not self.api_id or not self.api_hash or not self.chat_id:
+            print("⚠️  Telegram not configured!")
+            print("   Please configure via the web UI:")
+            print("   1. Open the web dashboard")
+            print("   2. Go to Settings → Telegram")
+            print("   3. Enter your API credentials and authenticate")
+            print("   4. Restart this service")
+            print("")
+            print("   Web server is still running for configuration...")
+            # Keep the process alive but don't start Telegram
+            import time
+            while True:
+                time.sleep(60)
+                # Check if config was created
+                config = load_telegram_config()
+                if config['api_id'] and config['api_hash'] and config['chat_id']:
+                    print("✅ Configuration detected! Please restart the service.")
+            return
 
         # Check if client was initialized (session existed at startup)
         if self.client is None:

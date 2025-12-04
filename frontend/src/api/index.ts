@@ -353,6 +353,7 @@ export interface TelegramAuthStatus {
 export interface TelegramSendCodeResult {
   success: boolean;
   already_authenticated?: boolean;
+  user?: TelegramUser;
   phone_code_hash?: string;
   next_step?: 'code';
   error?: string;
@@ -402,6 +403,32 @@ export async function logoutTelegram(): Promise<{ success: boolean; error?: stri
   const response = await fetch(`${API_BASE}/api/telegram/auth/logout`, {
     method: 'POST',
     headers: getAuthHeaders(),
+  });
+  return response.json();
+}
+
+// Telegram Configuration API
+export interface TelegramConfig {
+  api_id: number;
+  api_hash: string;  // Masked when returned from server
+  chat_id: number;
+  configured: boolean;
+}
+
+export async function getTelegramConfig(): Promise<TelegramConfig> {
+  const response = await fetch(`${API_BASE}/api/telegram/config`);
+  return response.json();
+}
+
+export async function saveTelegramConfig(
+  api_id: number,
+  api_hash: string,
+  chat_id: number
+): Promise<{ success?: boolean; error?: string }> {
+  const response = await fetch(`${API_BASE}/api/telegram/config`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ api_id, api_hash, chat_id }),
   });
   return response.json();
 }

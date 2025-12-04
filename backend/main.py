@@ -20,28 +20,15 @@ def setup_logging():
     )
 
 
-def validate_credentials():
-    """Validate credentials from .env file"""
-    from backend.config import API_ID, API_HASH, CHAT_ID
+def check_telegram_config():
+    """Check if Telegram is configured (from JSON file or .env)"""
+    from backend.config import load_telegram_config
 
-    errors = []
+    config = load_telegram_config()
 
-    # Check API_ID from .env
-    if not API_ID or API_ID == 0:
-        errors.append("API_ID is not set in .env file")
-
-    # Check API_HASH from .env
-    if not API_HASH or API_HASH == 'your_api_hash_here':
-        errors.append("API_HASH is not set in .env file")
-
-    # Check CHAT_ID from .env
-    if not CHAT_ID or CHAT_ID == 0:
-        errors.append("CHAT_ID is not set in .env file")
-
-    if errors:
-        print("❌ Configuration Error:")
-        for error in errors:
-            print(f"   - {error}")
+    if not config['api_id'] or not config['api_hash'] or not config['chat_id']:
+        print("⚠️  Telegram not configured yet")
+        print("   Configure via web UI: Settings → Telegram → Connect")
         return False
 
     return True
@@ -56,9 +43,8 @@ def main():
     print("📊 Initializing database...")
     init_database(DATABASE_URL)
 
-    # Validate credentials
-    if not validate_credentials():
-        return
+    # Check if Telegram is configured (just informational, don't exit)
+    telegram_configured = check_telegram_config()
 
     # Shared download state
     download_tasks = {}  # key: message_id, value: asyncio.Task
@@ -91,7 +77,7 @@ def main():
     print("🎬 yt-dlp downloader ready")
     print(f"   Event loop running: {loop.is_running()}")
 
-    # Start Telegram client (this will block)
+    # Start Telegram client (this will block, or wait for config if not configured)
     telegram_downloader.start()
 
 

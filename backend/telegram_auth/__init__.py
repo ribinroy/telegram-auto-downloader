@@ -9,7 +9,7 @@ import threading
 from pathlib import Path
 from telethon import TelegramClient
 from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError, PasswordHashInvalidError
-from backend.config import API_ID, API_HASH, SESSION_FILE
+from backend.config import SESSION_FILE, load_telegram_config
 
 
 class TelegramAuthHandler:
@@ -48,18 +48,26 @@ class TelegramAuthHandler:
     def _get_client(self):
         """Get or create the Telethon client"""
         if self._client is None:
-            self._client = TelegramClient(str(SESSION_FILE), API_ID, API_HASH)
+            # Load fresh config each time (in case it was updated via web UI)
+            config = load_telegram_config()
+            self._client = TelegramClient(str(SESSION_FILE), config['api_id'], config['api_hash'])
         return self._client
 
     def check_auth_simple(self):
         """
-        Simple check if session file exists - doesn't require connecting to Telegram.
+        Simple check if session file exists AND config is valid.
         Use this for initial page load to avoid event loop conflicts.
         """
+        # First check if config is valid
+        config = load_telegram_config()
+        if not config['api_id'] or not config['api_hash'] or not config['chat_id']:
+            return {'authenticated': False, 'configured': False}
+
+        # Then check if session file exists
         session_path = Path(str(SESSION_FILE) + '.session')
         if session_path.exists() and session_path.stat().st_size > 0:
-            return {'authenticated': True, 'session_exists': True}
-        return {'authenticated': False}
+            return {'authenticated': True, 'session_exists': True, 'configured': True}
+        return {'authenticated': False, 'configured': True}
 
     async def _check_auth_async(self):
         """Check if already authenticated by connecting to Telegram"""
@@ -93,11 +101,7 @@ class TelegramAuthHandler:
         """Check authentication status"""
         # Only do a quick session file check - don't try to connect
         # because the main app's Telegram client already has the session locked
-        simple_check = self.check_auth_simple()
-        if simple_check.get('session_exists'):
-            # Session exists, assume it's valid (main app is using it)
-            return {'authenticated': True, 'session_exists': True}
-        return simple_check
+        return self.check_auth_simple()
 
     async def _send_code_async(self, phone: str):
         """Send verification code to phone"""
@@ -111,7 +115,18 @@ class TelegramAuthHandler:
             # Check if already authorized
             if await client.is_user_authorized():
                 self._auth_state = 'authenticated'
-                return {'success': True, 'already_authenticated': True}
+                me = await client.get_me()
+                return {
+                    'success': True,
+                    'already_authenticated': True,
+                    'user': {
+                        'id': me.id,
+                        'first_name': me.first_name,
+                        'last_name': me.last_name,
+                        'username': me.username,
+                        'phone': me.phone
+                    }
+                }
 
             # Send code
             result = await client.send_code_request(phone)

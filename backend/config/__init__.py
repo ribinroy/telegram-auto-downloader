@@ -2,6 +2,7 @@
 Configuration module for DownLee
 """
 import os
+import json
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -21,10 +22,63 @@ DOWNLOAD_DIR = Path(_download_dir_env) if _download_dir_env else BASE_DIR / "dow
 
 LOGS_DIR = BASE_DIR / "logs"
 
-# Telegram API Configuration - loaded from environment variables
-API_ID = int(os.getenv('API_ID', '0'))
-API_HASH = os.getenv('API_HASH', 'your_api_hash_here')
-CHAT_ID = int(os.getenv('CHAT_ID', '0'))
+# Telegram config file (for web UI configuration)
+TELEGRAM_CONFIG_FILE = BASE_DIR / "telegram_config.json"
+
+
+def load_telegram_config():
+    """Load Telegram config from JSON file, fallback to env vars"""
+    config = {
+        'api_id': int(os.getenv('API_ID', '0')),
+        'api_hash': os.getenv('API_HASH', ''),
+        'chat_id': int(os.getenv('CHAT_ID', '0'))
+    }
+
+    # Try to load from config file (overrides env vars)
+    if TELEGRAM_CONFIG_FILE.exists():
+        try:
+            with open(TELEGRAM_CONFIG_FILE, 'r') as f:
+                file_config = json.load(f)
+                if file_config.get('api_id'):
+                    config['api_id'] = int(file_config['api_id'])
+                if file_config.get('api_hash'):
+                    config['api_hash'] = file_config['api_hash']
+                if file_config.get('chat_id'):
+                    config['chat_id'] = int(file_config['chat_id'])
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    return config
+
+
+def save_telegram_config(api_id: int, api_hash: str, chat_id: int):
+    """Save Telegram config to JSON file"""
+    config = {
+        'api_id': api_id,
+        'api_hash': api_hash,
+        'chat_id': chat_id
+    }
+    with open(TELEGRAM_CONFIG_FILE, 'w') as f:
+        json.dump(config, f, indent=2)
+    return True
+
+
+def get_telegram_config():
+    """Get current Telegram config (for API responses)"""
+    config = load_telegram_config()
+    return {
+        'api_id': config['api_id'],
+        'api_hash': config['api_hash'][:8] + '...' if config['api_hash'] else '',  # Masked
+        'chat_id': config['chat_id'],
+        'configured': bool(config['api_id'] and config['api_hash'] and config['chat_id'])
+    }
+
+
+# Load Telegram config
+_telegram_config = load_telegram_config()
+API_ID = _telegram_config['api_id']
+API_HASH = _telegram_config['api_hash']
+CHAT_ID = _telegram_config['chat_id']
 
 # Validate configuration
 def validate_config():

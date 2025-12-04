@@ -1,27 +1,74 @@
-import { useState } from 'react';
-import { Loader2, AlertCircle, Phone, KeyRound, Lock, CheckCircle2, MessageSquare } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Loader2, AlertCircle, Phone, KeyRound, Lock, CheckCircle2, MessageSquare, Settings2, ExternalLink } from 'lucide-react';
 import {
-  checkTelegramAuth,
   sendTelegramCode,
   verifyTelegramCode,
   verifyTelegramPassword,
+  getTelegramConfig,
+  saveTelegramConfig,
 } from '../api';
 import type { TelegramUser } from '../api';
 
-type Step = 'phone' | 'code' | 'password' | 'success';
+type Step = 'config' | 'phone' | 'code' | 'password' | 'success';
 
 interface TelegramSetupProps {
   onComplete: () => void;
 }
 
 export function TelegramSetup({ onComplete }: TelegramSetupProps) {
-  const [step, setStep] = useState<Step>('phone');
+  const [step, setStep] = useState<Step>('config');
+  const [apiId, setApiId] = useState('');
+  const [apiHash, setApiHash] = useState('');
+  const [chatId, setChatId] = useState('');
   const [phone, setPhone] = useState('');
   const [code, setCode] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [checkingConfig, setCheckingConfig] = useState(true);
   const [user, setUser] = useState<TelegramUser | null>(null);
+
+  // Check if config exists on mount
+  useEffect(() => {
+    const checkConfig = async () => {
+      try {
+        const config = await getTelegramConfig();
+        if (config.configured) {
+          // Config exists, skip to phone step
+          setStep('phone');
+        }
+      } catch {
+        // Config doesn't exist, stay on config step
+      } finally {
+        setCheckingConfig(false);
+      }
+    };
+    checkConfig();
+  }, []);
+
+  const handleSaveConfig = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setLoading(true);
+
+    try {
+      const result = await saveTelegramConfig(
+        parseInt(apiId),
+        apiHash,
+        parseInt(chatId)
+      );
+
+      if (result.error) {
+        setError(result.error);
+      } else {
+        setStep('phone');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save config');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleSendCode = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -31,13 +78,10 @@ export function TelegramSetup({ onComplete }: TelegramSetupProps) {
     try {
       const result = await sendTelegramCode(phone);
 
-      if (result.already_authenticated) {
-        // Already logged in, check status
-        const status = await checkTelegramAuth();
-        if (status.authenticated && status.user) {
-          setUser(status.user);
-          setStep('success');
-        }
+      if (result.already_authenticated && result.user) {
+        // Already logged in, use user info from response
+        setUser(result.user);
+        setStep('success');
       } else if (result.success) {
         setStep('code');
       } else {
@@ -98,6 +142,14 @@ export function TelegramSetup({ onComplete }: TelegramSetupProps) {
     onComplete();
   };
 
+  if (checkingConfig) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center">
+        <Loader2 className="w-8 h-8 text-cyan-500 animate-spin" />
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center px-4">
       <div className="w-full max-w-md">
@@ -109,12 +161,21 @@ export function TelegramSetup({ onComplete }: TelegramSetupProps) {
             </div>
             <h1 className="text-2xl font-bold text-white">Telegram Setup</h1>
             <p className="text-slate-400 text-sm mt-1 text-center">
-              Connect your Telegram account to enable auto-downloads
+              {step === 'config'
+                ? 'Configure your Telegram API credentials'
+                : 'Connect your Telegram account to enable auto-downloads'}
             </p>
           </div>
 
           {/* Progress Steps */}
           <div className="flex items-center justify-center gap-2 mb-8">
+            <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
+              step === 'config' ? 'bg-cyan-500 text-white' :
+              ['phone', 'code', 'password', 'success'].includes(step) ? 'bg-green-500 text-white' : 'bg-slate-700 text-slate-400'
+            }`}>
+              <Settings2 className="w-4 h-4" />
+            </div>
+            <div className={`w-8 h-0.5 ${['phone', 'code', 'password', 'success'].includes(step) ? 'bg-green-500' : 'bg-slate-700'}`} />
             <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
               step === 'phone' ? 'bg-cyan-500 text-white' :
               ['code', 'password', 'success'].includes(step) ? 'bg-green-500 text-white' : 'bg-slate-700 text-slate-400'
@@ -143,6 +204,93 @@ export function TelegramSetup({ onComplete }: TelegramSetupProps) {
               <AlertCircle className="w-4 h-4 shrink-0" />
               <span>{error}</span>
             </div>
+          )}
+
+          {/* Config Step */}
+          {step === 'config' && (
+            <form onSubmit={handleSaveConfig} className="space-y-4">
+              <div className="bg-slate-700/30 rounded-lg p-3 mb-4">
+                <p className="text-sm text-slate-300">
+                  Get your API credentials from{' '}
+                  <a
+                    href="https://my.telegram.org"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-cyan-400 hover:underline inline-flex items-center gap-1"
+                  >
+                    my.telegram.org
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                </p>
+              </div>
+
+              <div>
+                <label htmlFor="apiId" className="block text-sm font-medium text-slate-300 mb-1.5">
+                  API ID
+                </label>
+                <input
+                  id="apiId"
+                  type="text"
+                  value={apiId}
+                  onChange={(e) => setApiId(e.target.value)}
+                  className="w-full bg-slate-700/50 border border-slate-600 rounded-lg py-2.5 px-3 text-white placeholder-slate-400 focus:outline-none focus:border-cyan-500 transition-colors"
+                  placeholder="12345678"
+                  required
+                  autoFocus
+                />
+              </div>
+
+              <div>
+                <label htmlFor="apiHash" className="block text-sm font-medium text-slate-300 mb-1.5">
+                  API Hash
+                </label>
+                <input
+                  id="apiHash"
+                  type="text"
+                  value={apiHash}
+                  onChange={(e) => setApiHash(e.target.value)}
+                  className="w-full bg-slate-700/50 border border-slate-600 rounded-lg py-2.5 px-3 text-white placeholder-slate-400 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
+                  placeholder="0123456789abcdef0123456789abcdef"
+                  required
+                />
+              </div>
+
+              <div>
+                <label htmlFor="chatId" className="block text-sm font-medium text-slate-300 mb-1.5">
+                  Chat ID
+                </label>
+                <input
+                  id="chatId"
+                  type="text"
+                  value={chatId}
+                  onChange={(e) => setChatId(e.target.value)}
+                  className="w-full bg-slate-700/50 border border-slate-600 rounded-lg py-2.5 px-3 text-white placeholder-slate-400 focus:outline-none focus:border-cyan-500 transition-colors"
+                  placeholder="-1001234567890"
+                  required
+                />
+                <p className="text-xs text-slate-500 mt-1">
+                  The chat/channel ID to monitor for files
+                </p>
+              </div>
+
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-600 hover:to-blue-700 text-white font-medium py-2.5 rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                {loading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Saving...
+                  </>
+                ) : (
+                  <>
+                    <Settings2 className="w-4 h-4" />
+                    Save & Continue
+                  </>
+                )}
+              </button>
+            </form>
           )}
 
           {/* Phone Step */}
@@ -183,6 +331,14 @@ export function TelegramSetup({ onComplete }: TelegramSetupProps) {
                     Send Code
                   </>
                 )}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => { setStep('config'); setError(null); }}
+                className="w-full text-slate-400 hover:text-white text-sm py-2"
+              >
+                Edit API credentials
               </button>
             </form>
           )}
@@ -310,7 +466,7 @@ export function TelegramSetup({ onComplete }: TelegramSetupProps) {
                   <strong>Important:</strong> You need to restart the application for Telegram downloads to start working.
                 </p>
                 <p className="text-xs text-slate-500">
-                  Run: <code className="bg-slate-800 px-1 rounded">sudo systemctl restart downlee</code>
+                  Run: <code className="bg-slate-800 px-1 rounded">sudo systemctl restart telegram-downloader</code>
                 </p>
               </div>
 
