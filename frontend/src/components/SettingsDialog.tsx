@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react';
-import { X, Loader2, AlertCircle, CheckCircle, Key, FolderCog, Plus, Trash2, Shield, ShieldOff, Pencil, Check, Cookie } from 'lucide-react';
-import { updatePassword, fetchMappings, addMapping, updateMapping, deleteMapping, fetchCookies, saveCookies } from '../api';
+import { X, Loader2, AlertCircle, CheckCircle, Key, FolderCog, Plus, Trash2, Shield, ShieldOff, Pencil, Check, Cookie, MessageSquare, RefreshCw } from 'lucide-react';
+import { updatePassword, fetchMappings, addMapping, updateMapping, deleteMapping, fetchCookies, saveCookies, checkTelegramAuth } from '../api';
 import type { DownloadTypeMap } from '../types';
+import type { TelegramUser } from '../api';
 import { ConfirmDialog } from './ConfirmDialog';
+import { TelegramSetup } from './TelegramSetup';
 
 interface SettingsDialogProps {
   isOpen: boolean;
@@ -10,7 +12,7 @@ interface SettingsDialogProps {
   showMappings?: boolean;
 }
 
-type TabType = 'password' | 'mappings' | 'cookies';
+type TabType = 'password' | 'mappings' | 'cookies' | 'telegram';
 
 export function SettingsDialog({ isOpen, onClose, showMappings = false }: SettingsDialogProps) {
   const [activeTab, setActiveTab] = useState<TabType>('password');
@@ -52,6 +54,12 @@ export function SettingsDialog({ isOpen, onClose, showMappings = false }: Settin
   const [cookiesError, setCookiesError] = useState<string | null>(null);
   const [cookiesSuccess, setCookiesSuccess] = useState(false);
 
+  // Telegram state
+  const [telegramLoading, setTelegramLoading] = useState(false);
+  const [telegramUser, setTelegramUser] = useState<TelegramUser | null>(null);
+  const [telegramConnected, setTelegramConnected] = useState<boolean | null>(null);
+  const [showTelegramSetup, setShowTelegramSetup] = useState(false);
+
   // Load mappings when tab changes to mappings
   useEffect(() => {
     if (isOpen && activeTab === 'mappings') {
@@ -65,6 +73,26 @@ export function SettingsDialog({ isOpen, onClose, showMappings = false }: Settin
       loadCookies();
     }
   }, [isOpen, activeTab]);
+
+  // Load Telegram status when tab changes to telegram
+  useEffect(() => {
+    if (isOpen && activeTab === 'telegram') {
+      loadTelegramStatus();
+    }
+  }, [isOpen, activeTab]);
+
+  const loadTelegramStatus = async () => {
+    setTelegramLoading(true);
+    try {
+      const status = await checkTelegramAuth();
+      setTelegramConnected(status.authenticated);
+      setTelegramUser(status.user || null);
+    } catch {
+      setTelegramConnected(false);
+    } finally {
+      setTelegramLoading(false);
+    }
+  };
 
   const loadCookies = async () => {
     setCookiesLoading(true);
@@ -307,6 +335,17 @@ export function SettingsDialog({ isOpen, onClose, showMappings = false }: Settin
           >
             <Cookie className="w-4 h-4" />
             Cookies
+          </button>
+          <button
+            onClick={() => setActiveTab('telegram')}
+            className={`flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors ${
+              activeTab === 'telegram'
+                ? 'text-cyan-400 border-b-2 border-cyan-400'
+                : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            <MessageSquare className="w-4 h-4" />
+            Telegram
           </button>
         </div>
 
@@ -669,6 +708,89 @@ export function SettingsDialog({ isOpen, onClose, showMappings = false }: Settin
                       'Save Cookies'
                     )}
                   </button>
+                </>
+              )}
+            </>
+          )}
+
+          {activeTab === 'telegram' && (
+            <>
+              {showTelegramSetup ? (
+                <div className="fixed inset-0 z-50">
+                  <TelegramSetup
+                    onComplete={() => {
+                      setShowTelegramSetup(false);
+                      loadTelegramStatus();
+                    }}
+                  />
+                </div>
+              ) : (
+                <>
+                  {telegramLoading ? (
+                    <div className="flex items-center justify-center py-8">
+                      <Loader2 className="w-6 h-6 text-cyan-500 animate-spin" />
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {/* Connection Status */}
+                      <div className={`p-4 rounded-lg border ${
+                        telegramConnected
+                          ? 'bg-green-500/10 border-green-500/30'
+                          : 'bg-red-500/10 border-red-500/30'
+                      }`}>
+                        <div className="flex items-center gap-3">
+                          <div className={`w-3 h-3 rounded-full ${
+                            telegramConnected ? 'bg-green-500' : 'bg-red-500'
+                          }`} />
+                          <div className="flex-1">
+                            <p className={`font-medium ${
+                              telegramConnected ? 'text-green-400' : 'text-red-400'
+                            }`}>
+                              {telegramConnected ? 'Connected' : 'Not Connected'}
+                            </p>
+                            {telegramUser && (
+                              <p className="text-sm text-slate-400">
+                                {telegramUser.first_name}
+                                {telegramUser.username && ` (@${telegramUser.username})`}
+                              </p>
+                            )}
+                          </div>
+                          <button
+                            onClick={loadTelegramStatus}
+                            className="p-2 text-slate-400 hover:text-white transition-colors"
+                            title="Refresh status"
+                          >
+                            <RefreshCw className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Description */}
+                      <p className="text-sm text-slate-400">
+                        {telegramConnected
+                          ? 'Telegram is connected. Files sent to your configured chat will be automatically downloaded.'
+                          : 'Connect your Telegram account to enable automatic file downloads from your configured chat.'}
+                      </p>
+
+                      {/* Action Button */}
+                      {!telegramConnected && (
+                        <button
+                          onClick={() => setShowTelegramSetup(true)}
+                          className="w-full bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-600 hover:to-blue-700 text-white font-medium py-2.5 rounded-lg transition-all flex items-center justify-center gap-2"
+                        >
+                          <MessageSquare className="w-4 h-4" />
+                          Connect Telegram
+                        </button>
+                      )}
+
+                      {/* Info */}
+                      <div className="bg-slate-700/30 rounded-lg p-3">
+                        <p className="text-xs text-slate-500">
+                          <strong className="text-slate-400">Note:</strong> After connecting, you may need to restart the application for changes to take effect.
+                        </p>
+                      </div>
+                    </div>
+                  )}
                 </>
               )}
             </>

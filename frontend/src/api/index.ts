@@ -334,3 +334,74 @@ export function getVideoStreamUrl(downloadId: number): string {
   const token = getToken();
   return `${API_BASE}/api/video/stream/${downloadId}?token=${token}`;
 }
+
+// Telegram Authentication API
+export interface TelegramUser {
+  id: number;
+  first_name: string;
+  last_name: string | null;
+  username: string | null;
+  phone: string | null;
+}
+
+export interface TelegramAuthStatus {
+  authenticated: boolean;
+  user?: TelegramUser;
+  error?: string;
+}
+
+export interface TelegramSendCodeResult {
+  success: boolean;
+  already_authenticated?: boolean;
+  phone_code_hash?: string;
+  next_step?: 'code';
+  error?: string;
+}
+
+export interface TelegramVerifyResult {
+  success: boolean;
+  user?: TelegramUser;
+  needs_password?: boolean;
+  next_step?: 'password';
+  error?: string;
+}
+
+export async function checkTelegramAuth(): Promise<TelegramAuthStatus> {
+  const response = await fetch(`${API_BASE}/api/telegram/auth/status`);
+  return response.json();
+}
+
+export async function sendTelegramCode(phone: string): Promise<TelegramSendCodeResult> {
+  const response = await fetch(`${API_BASE}/api/telegram/auth/send-code`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ phone }),
+  });
+  return response.json();
+}
+
+export async function verifyTelegramCode(code: string): Promise<TelegramVerifyResult> {
+  const response = await fetch(`${API_BASE}/api/telegram/auth/verify-code`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code }),
+  });
+  return response.json();
+}
+
+export async function verifyTelegramPassword(password: string): Promise<TelegramVerifyResult> {
+  const response = await fetch(`${API_BASE}/api/telegram/auth/verify-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password }),
+  });
+  return response.json();
+}
+
+export async function logoutTelegram(): Promise<{ success: boolean; error?: string }> {
+  const response = await fetch(`${API_BASE}/api/telegram/auth/logout`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+  });
+  return response.json();
+}

@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Search, Download, Wifi, WifiOff, Loader2, HardDrive, Clock, Zap, LogOut, Settings, Plus, BarChart3 } from 'lucide-react';
 import { formatBytes, formatSpeed } from './utils/format';
-import { fetchDownloads, fetchStats, retryDownload, stopDownload, deleteDownload, verifyToken, clearToken, getToken, fetchSecuredMappingIds, type SortBy, type SortOrder } from './api';
+import { fetchDownloads, fetchStats, retryDownload, stopDownload, deleteDownload, verifyToken, clearToken, getToken, fetchSecuredMappingIds, checkTelegramAuth, type SortBy, type SortOrder } from './api';
 import { connectSocket, disconnectSocket, type ProgressUpdate, type StatusUpdate, type DeletedUpdate } from './api/socket';
 import { DownloadItem } from './components/DownloadItem';
 import { LoginPage } from './components/LoginPage';
+import { TelegramSetup } from './components/TelegramSetup';
 import { SettingsDialog } from './components/SettingsDialog';
 import { AddUrlModal } from './components/AddUrlModal';
 import { AnalyticsPage } from './components/AnalyticsPage';
@@ -14,6 +15,8 @@ type TabType = 'active' | 'all';
 
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
+  const [telegramAuthenticated, setTelegramAuthenticated] = useState<boolean | null>(null);
+  const [showTelegramSetup, setShowTelegramSetup] = useState(false);
 
   // Check auth on mount
   useEffect(() => {
@@ -29,6 +32,26 @@ function App() {
     checkAuth();
   }, []);
 
+  // Check Telegram auth status after user login
+  useEffect(() => {
+    if (isAuthenticated) {
+      const checkTelegram = async () => {
+        try {
+          const status = await checkTelegramAuth();
+          setTelegramAuthenticated(status.authenticated);
+          // Show setup wizard if not authenticated with Telegram
+          if (!status.authenticated) {
+            setShowTelegramSetup(true);
+          }
+        } catch {
+          // If check fails, assume authenticated (service might just need restart)
+          setTelegramAuthenticated(true);
+        }
+      };
+      checkTelegram();
+    }
+  }, [isAuthenticated]);
+
   const handleLogin = () => {
     setIsAuthenticated(true);
   };
@@ -36,6 +59,12 @@ function App() {
   const handleLogout = () => {
     clearToken();
     setIsAuthenticated(false);
+    setTelegramAuthenticated(null);
+  };
+
+  const handleTelegramSetupComplete = () => {
+    setTelegramAuthenticated(true);
+    setShowTelegramSetup(false);
   };
 
   // Show loading while checking auth
@@ -50,6 +79,11 @@ function App() {
   // Show login page if not authenticated
   if (!isAuthenticated) {
     return <LoginPage onLogin={handleLogin} />;
+  }
+
+  // Show Telegram setup wizard if needed
+  if (showTelegramSetup && telegramAuthenticated === false) {
+    return <TelegramSetup onComplete={handleTelegramSetupComplete} />;
   }
 
   return <MainApp onLogout={handleLogout} />;

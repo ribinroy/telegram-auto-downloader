@@ -12,6 +12,13 @@ from backend.web_app import get_socketio
 from backend import metrics
 
 
+def session_exists():
+    """Check if a valid session file exists (before creating client)"""
+    from pathlib import Path
+    session_path = Path(str(SESSION_FILE) + '.session')
+    return session_path.exists() and session_path.stat().st_size > 0
+
+
 class TelegramDownloader:
     def __init__(self, download_tasks):
         self.download_tasks = download_tasks
@@ -21,8 +28,16 @@ class TelegramDownloader:
         self.api_hash = API_HASH
         self.chat_id = CHAT_ID
 
-        self.client = TelegramClient(str(SESSION_FILE), self.api_id, self.api_hash)
+        self.client = None
         self.last_broadcast = 0
+
+        # Only create client if session exists (to avoid creating empty session file)
+        if session_exists():
+            self._init_client()
+
+    def _init_client(self):
+        """Initialize the Telegram client and event handlers"""
+        self.client = TelegramClient(str(SESSION_FILE), self.api_id, self.api_hash)
         self.setup_event_handlers()
 
     def emit_progress(self, message_id: int, progress: float, downloaded_bytes: int,
@@ -250,6 +265,26 @@ class TelegramDownloader:
     def start(self):
         """Start the Telegram client"""
         print("🚀 DownLee running...")
+
+        # Check if client was initialized (session existed at startup)
+        if self.client is None:
+            print("⚠️  No Telegram session found!")
+            print("   Please authenticate via the web UI:")
+            print("   1. Open the web dashboard")
+            print("   2. Go to Settings → Telegram")
+            print("   3. Click 'Connect Telegram' and complete authentication")
+            print("   4. Restart this service")
+            print("")
+            print("   Web server is still running for authentication...")
+            # Keep the process alive but don't start Telegram
+            import time
+            while True:
+                time.sleep(60)
+                # Check if session was created
+                if session_exists():
+                    print("✅ Session file detected! Please restart the service.")
+            return
+
         self.client.start()
         self.client.run_until_disconnected()
 
