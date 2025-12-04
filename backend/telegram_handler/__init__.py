@@ -9,6 +9,7 @@ from backend.config import API_ID, API_HASH, CHAT_ID, DOWNLOAD_DIR, MAX_RETRIES,
 from backend.database import get_db
 from backend.utils import human_readable_size, get_media_folder
 from backend.web_app import get_socketio
+from backend import metrics
 
 
 class TelegramDownloader:
@@ -100,9 +101,14 @@ class TelegramDownloader:
         """Downloads the media safely with live progress."""
         last_bytes = 0
         start_time = datetime.now()
+        download_start_time = datetime.now()  # For metrics duration
         last_update = 0  # timestamp of last message edit
         db = get_db()
         message_id = entry["message_id"]
+        final_total_bytes = 0  # Track for metrics
+
+        # Record download started
+        metrics.record_download_started('telegram')
 
         # Send initial "Downloading" message
         try:
@@ -113,9 +119,13 @@ class TelegramDownloader:
             entry["_status_msg_id"] = None
 
         for attempt in range(1, MAX_RETRIES + 1):
+            if attempt > 1:
+                metrics.record_retry('telegram')
+
             try:
                 def progress_callback(current, total):
-                    nonlocal last_bytes, start_time, last_update
+                    nonlocal last_bytes, start_time, last_update, final_total_bytes
+                    final_total_bytes = total  # Track for metrics
                     now = datetime.now()
                     delta = (now - start_time).total_seconds()
                     speed = 0
@@ -169,6 +179,10 @@ class TelegramDownloader:
                 self.emit_status(message_id, 'done')
                 if entry.get("_status_msg_id"):
                     await self.edit_status_message(event, entry, "Downloaded")
+
+                # Record completed download metrics
+                duration = (datetime.now() - download_start_time).total_seconds()
+                metrics.record_download_completed('telegram', final_total_bytes, duration)
                 return
 
             except asyncio.CancelledError:
@@ -176,6 +190,7 @@ class TelegramDownloader:
                 self.emit_status(message_id, 'stopped')
                 if entry.get("_status_msg_id"):
                     await self.edit_status_message(event, entry, "Stopped")
+                metrics.record_download_stopped('telegram')
                 return
             except Exception as e:
                 error_msg = f"Attempt {attempt}/{MAX_RETRIES} failed: {str(e)}"
@@ -188,6 +203,7 @@ class TelegramDownloader:
         self.emit_status(message_id, 'failed')
         if entry.get("_status_msg_id"):
             await self.edit_status_message(event, entry, "Failed")
+        metrics.record_download_failed('telegram', 'max_retries')
 
     async def _handle_new_file(self, event):
         """Handle new file messages from Telegram"""

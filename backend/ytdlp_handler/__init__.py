@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 from backend.config import DOWNLOAD_DIR
 from backend.database import get_db, generate_uuid
 from backend.web_app import get_socketio
+from backend import metrics
 
 logger = logging.getLogger(__name__)
 
@@ -302,6 +303,11 @@ class YtdlpDownloader:
 
         # Get the source name and check for custom folder mapping
         source = self.get_domain(url)
+        download_start_time = datetime.now()
+        final_total_bytes = 0
+
+        # Record download started
+        metrics.record_download_started(source)
         mapping = db.get_download_type_map(source)
 
         # Use custom folder from mapping if it exists and is accessible
@@ -371,6 +377,10 @@ class YtdlpDownloader:
                 if progress_info:
                     now = datetime.now().timestamp()
 
+                    # Track total bytes for metrics
+                    if progress_info.get('total_bytes'):
+                        final_total_bytes = progress_info['total_bytes']
+
                     # Throttle updates to once per second
                     if now - last_update >= 1:
                         last_update = now
@@ -412,6 +422,8 @@ class YtdlpDownloader:
                         pending_time=0
                     )
                     self.emit_status(message_id, 'done')
+                    duration = (datetime.now() - download_start_time).total_seconds()
+                    metrics.record_download_completed(source, final_total_bytes, duration)
                     return
 
             await process.wait()
@@ -427,6 +439,8 @@ class YtdlpDownloader:
                 )
                 self.emit_status(message_id, 'done')
                 print(f"[yt-dlp] Download completed: {message_id}")
+                duration = (datetime.now() - download_start_time).total_seconds()
+                metrics.record_download_completed(source, final_total_bytes, duration)
             else:
                 # Check if this is a Cloudflare 403 error - try browser fallback
                 print(f"[yt-dlp] Download failed, attempting browser fallback for: {url}")
@@ -445,6 +459,8 @@ class YtdlpDownloader:
                     )
                     self.emit_status(message_id, 'done')
                     print(f"[yt-dlp] Browser fallback succeeded: {message_id}")
+                    duration = (datetime.now() - download_start_time).total_seconds()
+                    metrics.record_download_completed(source, final_total_bytes, duration)
                 else:
                     # Both methods failed
                     error_msg = browser_result.get('error', 'Download failed (yt-dlp and browser fallback)')
@@ -456,6 +472,7 @@ class YtdlpDownloader:
                     )
                     self.emit_status(message_id, 'failed', error_msg)
                     print(f"[yt-dlp] Download failed (including browser fallback): {message_id}")
+                    metrics.record_download_failed(source, 'ytdlp_and_browser')
 
         except asyncio.CancelledError:
             print(f"[yt-dlp] Download cancelled: {message_id}")
@@ -469,6 +486,7 @@ class YtdlpDownloader:
 
             db.update_download_by_message_id(message_id, status='stopped', speed=0)
             self.emit_status(message_id, 'stopped')
+            metrics.record_download_stopped(source)
         except Exception as e:
             print(f"[yt-dlp] Download error: {e}")
             import traceback
@@ -480,6 +498,7 @@ class YtdlpDownloader:
                 error=str(e)
             )
             self.emit_status(message_id, 'failed', str(e))
+            metrics.record_download_failed(source, 'exception')
         finally:
             self.processes.pop(message_id, None)
             self.download_tasks.pop(message_id, None)

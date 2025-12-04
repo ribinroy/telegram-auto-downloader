@@ -7,11 +7,12 @@ import asyncio
 from datetime import datetime, timedelta
 from pathlib import Path
 from functools import wraps
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, request, send_from_directory, Response
 from flask_cors import CORS
 from flask_socketio import SocketIO
 from backend.config import WEB_PORT, WEB_HOST
 from backend.database import get_db
+from backend import metrics
 
 # JWT secret key
 JWT_SECRET = os.environ.get('JWT_SECRET', 'telegram-downloader-secret-key-change-in-prod')
@@ -207,6 +208,43 @@ class WebApp:
         # Also emit updated stats
         self.emit_stats()
 
+    def _update_prometheus_metrics(self):
+        """Update Prometheus metrics from current database state"""
+        db = get_db()
+        all_downloads = db.get_all_downloads()
+
+        # Count by status
+        status_counts = {}
+        speed_by_source = {}
+        total_speed = 0
+        pending_bytes = 0
+        active_count = 0
+
+        for d in all_downloads:
+            status = d.get('status', 'unknown')
+            source = d.get('downloaded_from', 'unknown')
+
+            # Count by status
+            status_counts[status] = status_counts.get(status, 0) + 1
+
+            # Active downloads speed
+            if status == 'downloading':
+                active_count += 1
+                speed = d.get('speed', 0) or 0
+                total_speed += speed
+                speed_by_source[source] = speed_by_source.get(source, 0) + speed
+
+                # Pending bytes
+                total_bytes = d.get('total_bytes', 0) or 0
+                downloaded_bytes = d.get('downloaded_bytes', 0) or 0
+                pending_bytes += max(0, total_bytes - downloaded_bytes)
+
+        # Update metrics
+        metrics.update_db_stats(status_counts)
+        metrics.update_speed(total_speed, speed_by_source)
+        metrics.update_pending_bytes(pending_bytes)
+        metrics.update_queue_size(active_count)
+
     def setup_routes(self):
         """Setup Flask API routes"""
 
@@ -279,6 +317,13 @@ class WebApp:
         @token_required
         def get_stats():
             return jsonify(self.get_stats())
+
+        @self.app.route("/metrics", methods=["GET"])
+        def prometheus_metrics():
+            """Prometheus metrics endpoint (no auth required for scraping)"""
+            # Update database stats before returning metrics
+            self._update_prometheus_metrics()
+            return Response(metrics.get_metrics(), mimetype=metrics.get_content_type())
 
         @self.app.route("/api/retry", methods=["POST"])
         @token_required
