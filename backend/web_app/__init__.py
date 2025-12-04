@@ -895,6 +895,78 @@ class WebApp:
                 response.headers['Content-Length'] = file_size
                 return response
 
+        # Telegram Authentication API (for Docker/first-time setup)
+        @self.app.route("/api/telegram/auth/status", methods=["GET"])
+        def telegram_auth_status():
+            """Check Telegram authentication status"""
+            from backend.telegram_auth import get_auth_handler
+            handler = get_auth_handler()
+            result = handler.check_auth()
+            return jsonify(result)
+
+        @self.app.route("/api/telegram/auth/send-code", methods=["POST"])
+        def telegram_send_code():
+            """Send verification code to phone number"""
+            data = request.json
+            phone = data.get("phone")
+
+            if not phone:
+                return jsonify({"error": "Phone number is required"}), 400
+
+            from backend.telegram_auth import get_auth_handler
+            handler = get_auth_handler()
+            result = handler.send_code(phone)
+
+            if not result.get('success'):
+                return jsonify(result), 400
+
+            return jsonify(result)
+
+        @self.app.route("/api/telegram/auth/verify-code", methods=["POST"])
+        def telegram_verify_code():
+            """Verify the code sent to phone"""
+            data = request.json
+            code = data.get("code")
+
+            if not code:
+                return jsonify({"error": "Verification code is required"}), 400
+
+            from backend.telegram_auth import get_auth_handler
+            handler = get_auth_handler()
+            result = handler.verify_code(code)
+
+            if not result.get('success'):
+                return jsonify(result), 400
+
+            return jsonify(result)
+
+        @self.app.route("/api/telegram/auth/verify-password", methods=["POST"])
+        def telegram_verify_password():
+            """Verify 2FA password"""
+            data = request.json
+            password = data.get("password")
+
+            if not password:
+                return jsonify({"error": "Password is required"}), 400
+
+            from backend.telegram_auth import get_auth_handler
+            handler = get_auth_handler()
+            result = handler.verify_password(password)
+
+            if not result.get('success'):
+                return jsonify(result), 400
+
+            return jsonify(result)
+
+        @self.app.route("/api/telegram/auth/logout", methods=["POST"])
+        @token_required
+        def telegram_logout():
+            """Logout from Telegram"""
+            from backend.telegram_auth import get_auth_handler
+            handler = get_auth_handler()
+            result = handler.logout()
+            return jsonify(result)
+
         # Serve frontend
         @self.app.route('/')
         def serve_index():
