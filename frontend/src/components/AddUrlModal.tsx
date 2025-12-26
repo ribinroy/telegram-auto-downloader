@@ -40,7 +40,9 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
   const [checkResult, setCheckResult] = useState<UrlCheckResult | null>(null);
   const [selectedFormat, setSelectedFormat] = useState<VideoFormat | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [customFilename, setCustomFilename] = useState('');
   const hasAutoChecked = useRef(false);
+  const filenameInputRef = useRef<HTMLInputElement>(null);
 
   const doCheck = async (urlToCheck: string) => {
     if (!urlToCheck.trim()) return;
@@ -55,7 +57,8 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
       setCheckResult(result);
       if (!result.supported) {
         setError(result.error || 'URL not supported');
-      } else if (result.formats && result.formats.length > 0) {
+      }
+      if (result.formats && result.formats.length > 0) {
         // Try to get the default quality from mapping
         const source = getSourceFromUrl(urlToCheck);
         let defaultFormat: VideoFormat | null = null;
@@ -125,6 +128,13 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
     }
   }, [isOpen, initialUrl]);
 
+  // Focus filename input when URL is supported
+  useEffect(() => {
+    if (checkResult?.supported && filenameInputRef.current) {
+      filenameInputRef.current.focus();
+    }
+  }, [checkResult?.supported]);
+
   const handleDownload = async () => {
     if (!url.trim() || !checkResult?.supported) return;
 
@@ -136,7 +146,7 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
       await downloadUrl({
         url: url.trim(),
         format_id: selectedFormat?.format_id,
-        title: checkResult.title,
+        title: customFilename.trim() || checkResult.title,
         ext: selectedFormat?.ext || checkResult.ext,
         filesize: selectedFormat?.filesize || checkResult.filesize,
         resolution: selectedFormat?.resolution,
@@ -152,6 +162,7 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
     setSelectedFormat(null);
     setError(null);
     setChecking(false);
+    setCustomFilename('');
     setDownloading(false);
     onClose();
   };
@@ -286,6 +297,24 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
             </div>
           )}
         </div>
+
+        {/* Custom Filename Input */}
+        {checkResult?.supported && (
+          <div className="px-4 pb-4">
+            <label className="block text-sm text-slate-400 mb-2">
+              Filename
+            </label>
+            <input
+              ref={filenameInputRef}
+              type="text"
+              value={customFilename}
+              onChange={(e) => setCustomFilename(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder={checkResult?.title || 'Enter custom filename...'}
+              className="w-full bg-slate-900 border border-slate-600 rounded-lg py-2.5 px-3 text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 transition-colors"
+            />
+          </div>
+        )}
 
         {/* Footer */}
         <div className="flex gap-3 p-4 border-t border-slate-700">

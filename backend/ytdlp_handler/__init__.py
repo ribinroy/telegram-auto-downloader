@@ -294,7 +294,7 @@ class YtdlpDownloader:
             traceback.print_exc()
             return {'error': f'Browser fallback failed: {str(e)}'}
 
-    async def download(self, url: str, message_id: str, format_id: str = None):
+    async def download(self, url: str, message_id: str, format_id: str = None, custom_title: str = None):
         """Download video using yt-dlp with progress tracking"""
         import sys
         db = get_db()
@@ -328,7 +328,13 @@ class YtdlpDownloader:
             output_dir = DOWNLOAD_DIR / "Videos"
             output_dir.mkdir(parents=True, exist_ok=True)
 
-        output_template = str(output_dir / "%(title)s.%(ext)s")
+        # Use custom title if provided, otherwise use yt-dlp's title
+        if custom_title:
+            # Sanitize custom title for filename (remove invalid chars)
+            safe_title = re.sub(r'[<>:"/\\|?*]', '', custom_title)
+            output_template = str(output_dir / f"{safe_title}.%(ext)s")
+        else:
+            output_template = str(output_dir / "%(title)s.%(ext)s")
 
         try:
             print(f"[yt-dlp] Output dir: {output_dir}")
@@ -549,7 +555,7 @@ class YtdlpDownloader:
         print(f"[yt-dlp] Scheduling download task for {message_id} (format: {format_id})", flush=True)
         sys.stdout.flush()
         future = asyncio.run_coroutine_threadsafe(
-            self.download(url, message_id, format_id),
+            self.download(url, message_id, format_id, title),
             loop
         )
 

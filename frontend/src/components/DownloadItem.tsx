@@ -329,7 +329,7 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
               {!isTelegram && download.status === 'downloading' && (
                 <div className="group relative">
                   <button
-                    onClick={() => setConfirmAction('stop')}
+                    onClick={() => download.message_id && onStop(download.message_id)}
                     className="p-2 bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-400 rounded-lg transition-colors"
                   >
                     <Pause className="w-4 h-4" />
