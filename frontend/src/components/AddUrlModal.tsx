@@ -195,13 +195,13 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
   const formats = checkResult?.formats || [];
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-3 sm:p-4">
       <div className="bg-slate-800 rounded-xl w-full max-w-lg border border-slate-700 shadow-xl max-h-[90vh] flex flex-col">
         {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-slate-700">
+        <div className="flex items-center justify-between p-3 sm:p-4 border-b border-slate-700">
           <div className="flex items-center gap-2">
             <Link className="w-5 h-5 text-cyan-400" />
-            <h2 className="text-lg font-semibold text-white">Add URL Download</h2>
+            <h2 className="text-base sm:text-lg font-semibold text-white">Add URL Download</h2>
           </div>
           <button
             onClick={handleClose}
@@ -212,10 +212,10 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
         </div>
 
         {/* Content */}
-        <div className="p-4 space-y-4 overflow-y-auto flex-1">
+        <div className="p-3 sm:p-4 space-y-3 sm:space-y-4 overflow-y-auto flex-1">
           {/* URL Input */}
           <div>
-            <label className="block text-sm text-slate-400 mb-2">
+            <label className="block text-xs sm:text-sm text-slate-400 mb-1.5 sm:mb-2">
               Video URL (YouTube, Twitter, etc.)
             </label>
             <input
@@ -229,7 +229,7 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
               }}
               onKeyDown={handleKeyDown}
               placeholder="https://youtube.com/watch?v=..."
-              className="w-full bg-slate-900 border border-slate-600 rounded-lg py-2.5 px-3 text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 transition-colors"
+              className="w-full bg-slate-900 border border-slate-600 rounded-lg py-2 sm:py-2.5 px-3 text-sm sm:text-base text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 transition-colors"
               autoFocus
             />
           </div>
@@ -244,12 +244,12 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
 
           {/* Video Info */}
           {checkResult?.supported && (
-            <div className="p-3 bg-green-500/10 border border-green-500/30 rounded-lg space-y-3">
+            <div className="p-2.5 sm:p-3 bg-green-500/10 border border-green-500/30 rounded-lg space-y-2 sm:space-y-3">
               <div className="flex items-center gap-2">
-                <CheckCircle className="w-5 h-5 text-green-400" />
-                <span className="text-sm text-green-400 font-medium">URL supported</span>
+                <CheckCircle className="w-4 h-4 sm:w-5 sm:h-5 text-green-400" />
+                <span className="text-xs sm:text-sm text-green-400 font-medium">URL supported</span>
               </div>
-              <div className="space-y-1 text-sm">
+              <div className="space-y-1 text-xs sm:text-sm">
                 <p className="text-white font-medium truncate" title={checkResult.title}>
                   {checkResult.title}
                 </p>
@@ -266,12 +266,12 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
               {/* Format Selection */}
               {formats.length > 0 && (
                 <div className="pt-2 border-t border-green-500/20">
-                  <p className="text-sm text-slate-400 mb-2">Quality:</p>
-                  <div className="space-y-1.5 max-h-40 overflow-y-auto">
+                  <p className="text-xs sm:text-sm text-slate-400 mb-2">Quality:</p>
+                  <div className="space-y-1.5 max-h-32 sm:max-h-40 overflow-y-auto">
                     {formats.map((format) => (
                       <label
                         key={format.format_id}
-                        className={`flex items-center gap-3 p-2 rounded-lg cursor-pointer transition-colors ${
+                        className={`flex items-center gap-2 sm:gap-3 p-1.5 sm:p-2 rounded-lg cursor-pointer transition-colors ${
                           selectedFormat?.format_id === format.format_id
                             ? 'bg-cyan-500/20 border border-cyan-500/50'
                             : 'bg-slate-700/30 border border-transparent hover:bg-slate-700/50'
@@ -285,7 +285,7 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
                           onChange={() => setSelectedFormat(format)}
                           className="w-4 h-4 text-cyan-500 bg-slate-700 border-slate-600 focus:ring-cyan-500 focus:ring-offset-0"
                         />
-                        <span className="flex-1 text-sm text-white">{format.label}</span>
+                        <span className="flex-1 text-xs sm:text-sm text-white">{format.label}</span>
                         {format.filesize && (
                           <span className="text-xs text-slate-400">{formatBytes(format.filesize)}</span>
                         )}
@@ -300,8 +300,8 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
 
         {/* Custom Filename Input */}
         {checkResult?.supported && (
-          <div className="px-4 pb-4">
-            <label className="block text-sm text-slate-400 mb-2">
+          <div className="px-3 sm:px-4 pb-3 sm:pb-4">
+            <label className="block text-xs sm:text-sm text-slate-400 mb-1.5 sm:mb-2">
               Filename
             </label>
             <input
@@ -311,16 +311,16 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
               onChange={(e) => setCustomFilename(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder={checkResult?.title || 'Enter custom filename...'}
-              className="w-full bg-slate-900 border border-slate-600 rounded-lg py-2.5 px-3 text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 transition-colors"
+              className="w-full bg-slate-900 border border-slate-600 rounded-lg py-2 sm:py-2.5 px-3 text-sm sm:text-base text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 transition-colors"
             />
           </div>
         )}
 
         {/* Footer */}
-        <div className="flex gap-3 p-4 border-t border-slate-700">
+        <div className="flex gap-2 sm:gap-3 p-3 sm:p-4 border-t border-slate-700">
           <button
             onClick={handleClose}
-            className="flex-1 py-2.5 px-4 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors"
+            className="flex-1 py-2 sm:py-2.5 px-3 sm:px-4 bg-slate-700 hover:bg-slate-600 text-white text-sm sm:text-base rounded-lg transition-colors"
           >
             Cancel
           </button>
@@ -328,17 +328,20 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
             <button
               onClick={handleDownload}
               disabled={downloading}
-              className="flex-1 py-2.5 px-4 bg-cyan-600 hover:bg-cyan-500 disabled:bg-cyan-800 disabled:cursor-not-allowed text-white rounded-lg transition-colors flex items-center justify-center gap-2"
+              className="flex-1 py-2 sm:py-2.5 px-3 sm:px-4 bg-cyan-600 hover:bg-cyan-500 disabled:bg-cyan-800 disabled:cursor-not-allowed text-white text-sm sm:text-base rounded-lg transition-colors flex items-center justify-center gap-2"
             >
               {downloading ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  Starting...
+                  <span className="hidden sm:inline">Starting...</span>
                 </>
               ) : (
                 <>
                   <Download className="w-4 h-4" />
-                  Download {selectedFormat?.resolution && selectedFormat.resolution !== 'best' ? `(${selectedFormat.resolution})` : ''}
+                  <span>Download</span>
+                  {selectedFormat?.resolution && selectedFormat.resolution !== 'best' && (
+                    <span className="hidden sm:inline">({selectedFormat.resolution})</span>
+                  )}
                 </>
               )}
             </button>
@@ -346,12 +349,12 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
             <button
               onClick={handleCheckClick}
               disabled={!url.trim() || checking}
-              className="flex-1 py-2.5 px-4 bg-cyan-600 hover:bg-cyan-500 disabled:bg-cyan-800 disabled:cursor-not-allowed text-white rounded-lg transition-colors flex items-center justify-center gap-2"
+              className="flex-1 py-2 sm:py-2.5 px-3 sm:px-4 bg-cyan-600 hover:bg-cyan-500 disabled:bg-cyan-800 disabled:cursor-not-allowed text-white text-sm sm:text-base rounded-lg transition-colors flex items-center justify-center gap-2"
             >
               {checking ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  Checking...
+                  <span className="hidden sm:inline">Checking...</span>
                 </>
               ) : (
                 'Check URL'

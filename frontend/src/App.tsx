@@ -410,32 +410,34 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
       {/* Fixed Header */}
       <div className="fixed top-0 left-0 right-0 z-40 bg-slate-900/80 backdrop-blur-xl border-b border-slate-700/50">
-        <div className="max-w-7xl mx-auto px-4 py-2">
+        <div className="max-w-7xl mx-auto px-3 sm:px-4 py-2">
           <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="p-3 rounded-xl">
-              <img src="/logo.png" alt="DownLee logo" className="w-8 h-8" />
+          <div className="flex items-center gap-2 sm:gap-3">
+            <div className="p-2 sm:p-3 rounded-xl">
+              <img src="/logo.png" alt="DownLee logo" className="w-6 h-6 sm:w-8 sm:h-8" />
             </div>
           </div>
-          <div className="flex items-center gap-3">
-            {/* Stats - icon only with tooltips */}
-            <div className="group relative flex items-center gap-2 px-3 py-1.5 bg-slate-700/50 rounded-lg cursor-default min-w-[100px]">
+          <div className="flex items-center gap-1.5 sm:gap-3">
+            {/* Total Downloaded - hidden on mobile */}
+            <div className="hidden sm:flex group relative items-center gap-2 px-3 py-1.5 bg-slate-700/50 rounded-lg cursor-default min-w-[100px]">
               <HardDrive className="w-4 h-4 text-green-400" />
               <span className="text-sm text-green-400 tabular-nums">{formatBytes(stats.total_downloaded)}</span>
               <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
                 Downloaded
               </div>
             </div>
-            <div className="group relative flex items-center gap-2 px-3 py-1.5 bg-slate-700/50 rounded-lg cursor-default min-w-[100px]">
-              <Clock className="w-4 h-4 text-yellow-400" />
-              <span className="text-sm text-yellow-400 tabular-nums">{formatBytes(stats.pending_bytes)}</span>
+            {/* Pending - value only on mobile, icon+value on desktop */}
+            <div className="group relative flex items-center gap-1 sm:gap-2 px-2 sm:px-3 py-1.5 bg-slate-700/50 rounded-lg cursor-default sm:min-w-[100px]">
+              <Clock className="hidden sm:block w-4 h-4 text-yellow-400" />
+              <span className="text-xs sm:text-sm text-yellow-400 tabular-nums">{formatBytes(stats.pending_bytes)}</span>
               <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
                 Pending
               </div>
             </div>
-            <div className="group relative flex items-center gap-2 px-3 py-1.5 bg-slate-700/50 rounded-lg cursor-default min-w-[110px]">
-              <Zap className="w-4 h-4 text-purple-400" />
-              <span className="text-sm text-purple-400 tabular-nums">{formatSpeed(stats.total_speed)}</span>
+            {/* Speed - value only on mobile, icon+value on desktop */}
+            <div className="group relative flex items-center gap-1 sm:gap-2 px-2 sm:px-3 py-1.5 bg-slate-700/50 rounded-lg cursor-default sm:min-w-[110px]">
+              <Zap className="hidden sm:block w-4 h-4 text-purple-400" />
+              <span className="text-xs sm:text-sm text-purple-400 tabular-nums">{formatSpeed(stats.total_speed)}</span>
               <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
                 Speed
               </div>
@@ -443,10 +445,10 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
             {/* Connection status - secret click target */}
             <div
               onClick={handleSecretClick}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg min-w-[80px] cursor-default select-none ${connected ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}
+              className={`flex items-center gap-1 sm:gap-2 px-2 sm:px-3 py-1.5 rounded-lg sm:min-w-[80px] cursor-default select-none ${connected ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}
             >
               {connected ? <Wifi className="w-4 h-4" /> : <WifiOff className="w-4 h-4" />}
-              <span className="text-sm">{connected ? 'Live' : 'Offline'}</span>
+              <span className="hidden sm:inline text-sm">{connected ? 'Live' : 'Offline'}</span>
             </div>
             {/* Analytics button - only visible when secured sources are shown */}
             {showSecured && (
@@ -492,31 +494,56 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
       </div>
 
       {/* Main Content - with top padding for fixed header */}
-      <div className="max-w-7xl mx-auto px-4 pt-20 pb-24 w-full">
-        {/* Tabs, Search and Sort - Single Row */}
-        <div className="flex items-center gap-3 mb-6">
-          {/* Tabs */}
-          <div className="flex gap-2">
-            <button
-              onClick={() => setActiveTab('active')}
-              className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                activeTab === 'active'
-                  ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/50'
-                  : 'bg-slate-800/50 text-slate-400 border border-slate-700 hover:bg-slate-700/50'
-              }`}
-            >
-              Active {stats.active_count > 0 && `(${stats.active_count})`}
-            </button>
-            <button
-              onClick={() => setActiveTab('all')}
-              className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                activeTab === 'all'
-                  ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/50'
-                  : 'bg-slate-800/50 text-slate-400 border border-slate-700 hover:bg-slate-700/50'
-              }`}
-            >
-              All ({stats.all_count})
-            </button>
+      <div className="max-w-7xl mx-auto px-3 sm:px-4 pt-16 sm:pt-20 pb-24 w-full">
+        {/* Tabs, Search and Sort - Responsive layout */}
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3 mb-4 sm:mb-6">
+          {/* Top row on mobile: Tabs and Sort */}
+          <div className="flex items-center justify-between sm:justify-start gap-2 sm:gap-3">
+            {/* Tabs */}
+            <div className="flex gap-1.5 sm:gap-2">
+              <button
+                onClick={() => setActiveTab('active')}
+                className={`px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-colors ${
+                  activeTab === 'active'
+                    ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/50'
+                    : 'bg-slate-800/50 text-slate-400 border border-slate-700 hover:bg-slate-700/50'
+                }`}
+              >
+                Active {stats.active_count > 0 && `(${stats.active_count})`}
+              </button>
+              <button
+                onClick={() => setActiveTab('all')}
+                className={`px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-colors ${
+                  activeTab === 'all'
+                    ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/50'
+                    : 'bg-slate-800/50 text-slate-400 border border-slate-700 hover:bg-slate-700/50'
+                }`}
+              >
+                All ({stats.all_count})
+              </button>
+            </div>
+
+            {/* Sort - visible on mobile in top row */}
+            <div className="flex items-center gap-1.5 sm:gap-2 sm:hidden">
+              <select
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value as SortBy)}
+                className="bg-slate-800/50 border border-slate-700 rounded-lg py-1.5 px-2 text-xs text-white focus:outline-none focus:border-cyan-500 transition-colors cursor-pointer"
+              >
+                <option value="created_at">Date</option>
+                <option value="file">Name</option>
+                <option value="status">Status</option>
+                <option value="progress">Progress</option>
+              </select>
+              <select
+                value={sortOrder}
+                onChange={(e) => setSortOrder(e.target.value as SortOrder)}
+                className="bg-slate-800/50 border border-slate-700 rounded-lg py-1.5 px-2 text-xs text-white focus:outline-none focus:border-cyan-500 transition-colors cursor-pointer"
+              >
+                <option value="desc">Desc</option>
+                <option value="asc">Asc</option>
+              </select>
+            </div>
           </div>
 
           {/* Search */}
@@ -525,16 +552,16 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
             <input
               ref={searchRef}
               type="text"
-              placeholder="Search by name, source, or URL..."
+              placeholder="Search..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full bg-slate-800/50 border border-slate-700 rounded-lg py-2 pl-9 pr-20 text-sm text-white placeholder-slate-400 focus:outline-none focus:border-cyan-500 transition-colors"
+              className="w-full bg-slate-800/50 border border-slate-700 rounded-lg py-2 pl-9 pr-16 sm:pr-20 text-sm text-white placeholder-slate-400 focus:outline-none focus:border-cyan-500 transition-colors"
             />
             {/* Clear button and result count */}
             <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
               {debouncedSearch && (
                 <>
-                  <span className="text-xs text-slate-500">
+                  <span className="hidden sm:inline text-xs text-slate-500">
                     {totalResults} result{totalResults !== 1 ? 's' : ''}
                   </span>
                   <button
@@ -548,8 +575,8 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
             </div>
           </div>
 
-          {/* Sort */}
-          <div className="flex items-center gap-2">
+          {/* Sort - hidden on mobile, visible on desktop */}
+          <div className="hidden sm:flex items-center gap-2">
             <select
               value={sortBy}
               onChange={(e) => setSortBy(e.target.value as SortBy)}
@@ -620,12 +647,12 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
       </div>
 
       {/* Floating Add Button */}
-      <div className="group fixed bottom-6 right-6 z-40">
+      <div className="group fixed bottom-4 right-4 sm:bottom-6 sm:right-6 z-40">
         <button
           onClick={() => setAddUrlOpen(true)}
-          className="p-4 bg-gradient-to-br from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white rounded-full shadow-lg shadow-cyan-500/25 transition-all hover:scale-105"
+          className="p-3 sm:p-4 bg-gradient-to-br from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white rounded-full shadow-lg shadow-cyan-500/25 transition-all hover:scale-105"
         >
-          <Plus className="w-6 h-6" />
+          <Plus className="w-5 h-5 sm:w-6 sm:h-6" />
         </button>
         <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
           Add URL download

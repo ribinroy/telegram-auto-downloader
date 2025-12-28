@@ -206,27 +206,90 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
   };
 
   return (
-    <div className="bg-slate-800/30 rounded-xl p-4 border border-slate-700/50 transition-all overflow-visible">
-      <div className="flex items-start gap-4">
-        {/* Source Icon */}
-        <div className="p-2.5 bg-slate-700/50 rounded-lg">
-          {getPlatformIcon(download.downloaded_from || 'telegram')}
-        </div>
-
-        <div className="flex-1 min-w-0">
-          <div className="mb-1 group relative">
-            <h3 className="text-white font-medium truncate">
-              {download.file}
-            </h3>
+    <div className="bg-slate-800/30 rounded-xl p-3 sm:p-4 border border-slate-700/50 transition-all overflow-visible">
+      {/* Mobile layout: stacked */}
+      <div className="flex flex-col sm:flex-row sm:items-start gap-3 sm:gap-4">
+        {/* Top row on mobile: Icon + Title + Status */}
+        <div className="flex items-start gap-3 sm:contents">
+          {/* Source Icon */}
+          <div className="p-2 sm:p-2.5 bg-slate-700/50 rounded-lg shrink-0">
+            {getPlatformIcon(download.downloaded_from || 'telegram')}
           </div>
 
+          {/* Title and info - takes remaining space on mobile */}
+          <div className="flex-1 min-w-0 sm:flex-1">
+            <div className="mb-1 group relative">
+              <h3 className="text-white font-medium text-sm sm:text-base truncate pr-2">
+                {download.file}
+              </h3>
+            </div>
+
+            {/* Mobile: show status badge inline */}
+            <div className="flex items-center gap-2 sm:hidden mb-2">
+              {download.status !== 'downloading' && (
+                <div className="flex items-center gap-1 px-1.5 py-0.5 bg-slate-700/30 rounded">
+                  {getStatusIcon(download.status)}
+                  <span className={`text-xs capitalize ${getStatusColor(download.status)}`}>
+                    {download.status}
+                  </span>
+                </div>
+              )}
+              {download.status === 'downloading' && (
+                <span className="text-xs text-cyan-400">{progressPercent.toFixed(1)}%</span>
+              )}
+            </div>
+
+            {/* Desktop: progress bar and info shown here */}
+            <div className="hidden sm:block">
+              {(download.status === 'downloading' || download.status === 'stopped') && progressPercent > 0 && (
+                <div className="mb-2">
+                  <div className="flex justify-between text-sm text-slate-400 mb-1">
+                    <span>{formatBytes(download.downloaded_bytes)} / {formatBytes(download.total_bytes)}</span>
+                    <span>{progressPercent.toFixed(1)}%</span>
+                  </div>
+                  <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full transition-all duration-300 ${download.status === 'stopped' ? 'bg-yellow-500' : 'progress-shimmer'}`}
+                      style={{ width: `${progressPercent}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              <div className="flex flex-wrap gap-4 text-sm text-slate-400">
+                {download.status === 'downloading' && (
+                  <>
+                    <span>Speed: {formatSpeed(download.speed)}</span>
+                    <span>ETA: {formatTime(download.pending_time)}</span>
+                  </>
+                )}
+                {download.status === 'done' && (
+                  <span>Size: {formatBytes(download.total_bytes)}</span>
+                )}
+                {download.error && (
+                  <div className="group relative">
+                    <span className="text-red-400 truncate">
+                      {download.error}
+                    </span>
+                    <div className="absolute top-full left-0 mt-1 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-normal pointer-events-none z-50 max-w-xs">
+                      {download.error}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Mobile: Progress bar */}
+        <div className="sm:hidden">
           {(download.status === 'downloading' || download.status === 'stopped') && progressPercent > 0 && (
             <div className="mb-2">
-              <div className="flex justify-between text-sm text-slate-400 mb-1">
+              <div className="flex justify-between text-xs text-slate-400 mb-1">
                 <span>{formatBytes(download.downloaded_bytes)} / {formatBytes(download.total_bytes)}</span>
-                <span>{progressPercent.toFixed(1)}%</span>
+                <span>{formatSpeed(download.speed)}</span>
               </div>
-              <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
+              <div className="h-1.5 bg-slate-700 rounded-full overflow-hidden">
                 <div
                   className={`h-full transition-all duration-300 ${download.status === 'stopped' ? 'bg-yellow-500' : 'progress-shimmer'}`}
                   style={{ width: `${progressPercent}%` }}
@@ -234,31 +297,20 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
               </div>
             </div>
           )}
-
-          <div className="flex flex-wrap gap-4 text-sm text-slate-400">
-            {download.status === 'downloading' && (
-              <>
-                <span>Speed: {formatSpeed(download.speed)}</span>
-                <span>ETA: {formatTime(download.pending_time)}</span>
-              </>
-            )}
-            {download.status === 'done' && (
-              <span>Size: {formatBytes(download.total_bytes)}</span>
-            )}
-            {download.error && (
-              <div className="group relative">
-                <span className="text-red-400 truncate">
-                  {download.error}
-                </span>
-                <div className="absolute top-full left-0 mt-1 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-normal pointer-events-none z-50 max-w-xs">
-                  {download.error}
-                </div>
-              </div>
-            )}
-          </div>
+          {download.status === 'done' && (
+            <div className="text-xs text-slate-400 mb-2">
+              Size: {formatBytes(download.total_bytes)}
+            </div>
+          )}
+          {download.error && (
+            <div className="text-xs text-red-400 truncate mb-2">
+              {download.error}
+            </div>
+          )}
         </div>
 
-        <div className="flex flex-col items-end gap-2">
+        {/* Desktop: Right side content */}
+        <div className="hidden sm:flex flex-col items-end gap-2">
           <div className="flex items-center gap-3">
             {/* Status indicator - hide when downloading */}
             {download.status !== 'downloading' && (
@@ -395,6 +447,93 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
                 </div>
               </Tooltip>
             )}
+          </div>
+        </div>
+
+        {/* Mobile: Bottom row with actions */}
+        <div className="flex sm:hidden items-center justify-between">
+          {/* Left: meta info */}
+          <div className="flex items-center gap-3 text-xs text-slate-500">
+            {download.url && (
+              <a
+                href={download.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-1 text-cyan-400"
+              >
+                <ExternalLink className="w-3 h-3" />
+              </a>
+            )}
+            <span>#{download.id}</span>
+            {download.created_at && (
+              <div className="flex items-center gap-1">
+                <Calendar className="w-3 h-3" />
+                <ReactTimeAgo date={new Date(download.created_at)} locale="en-US" timeStyle="twitter" />
+              </div>
+            )}
+          </div>
+
+          {/* Right: action buttons */}
+          <div className="flex items-center gap-1.5">
+            {/* View button for completed downloads */}
+            {download.status === 'done' && (
+              <button
+                onClick={handleViewClick}
+                disabled={checkingVideo}
+                className={`p-1.5 rounded-lg transition-colors ${
+                  localFileDeleted
+                    ? 'bg-slate-700/30 text-slate-500'
+                    : 'bg-cyan-500/20 text-cyan-400'
+                }`}
+              >
+                {checkingVideo ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Eye className="w-4 h-4" />
+                )}
+              </button>
+            )}
+            {/* Resume/Retry button */}
+            {!isTelegram && (download.status === 'failed' || download.status === 'stopped') && (
+              <button
+                onClick={() => onRetry(download.id)}
+                className="p-1.5 bg-green-500/20 text-green-400 rounded-lg"
+              >
+                <Play className="w-4 h-4" />
+              </button>
+            )}
+            {isTelegram && download.status === 'failed' && (
+              <button
+                onClick={() => onRetry(download.id)}
+                className="p-1.5 bg-green-500/20 text-green-400 rounded-lg"
+              >
+                <RefreshCw className="w-4 h-4" />
+              </button>
+            )}
+            {/* Pause/Stop button */}
+            {!isTelegram && download.status === 'downloading' && (
+              <button
+                onClick={() => download.message_id && onStop(download.message_id)}
+                className="p-1.5 bg-yellow-500/20 text-yellow-400 rounded-lg"
+              >
+                <Pause className="w-4 h-4" />
+              </button>
+            )}
+            {isTelegram && download.status === 'downloading' && (
+              <button
+                onClick={() => setConfirmAction('stop')}
+                className="p-1.5 bg-yellow-500/20 text-yellow-400 rounded-lg"
+              >
+                <Square className="w-4 h-4" />
+              </button>
+            )}
+            {/* Delete button */}
+            <button
+              onClick={() => setConfirmAction('delete')}
+              className="p-1.5 bg-red-500/20 text-red-400 rounded-lg"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
           </div>
         </div>
       </div>
