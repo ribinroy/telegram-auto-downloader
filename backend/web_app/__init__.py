@@ -111,16 +111,16 @@ class WebApp:
             mapping_by_id = {m['id']: m for m in all_mappings}
             excluded_sources = [mapping_by_id[mid]['downloaded_from'] for mid in exclude_mapping_ids if mid in mapping_by_id]
 
-        query = search.lower()
+        query = search.lower().strip()
         if query:
             filtered_list = []
             for d in all_downloads:
                 # Check filename
-                file_name = d.get("file", "").lower()
+                file_name = (d.get("file") or "").lower()
                 # Check downloaded_from source
-                downloaded_from = d.get("downloaded_from", "").lower()
+                downloaded_from = (d.get("downloaded_from") or "").lower()
                 # Check URL
-                url = d.get("url", "").lower()
+                url = (d.get("url") or "").lower()
 
                 # Exact substring match first
                 if query in file_name or query in downloaded_from or query in url:
@@ -132,6 +132,7 @@ class WebApp:
                 searchable_text = f"{file_name} {downloaded_from} {url}"
                 if all(word in searchable_text for word in query_words):
                     filtered_list.append(d)
+            print(f"[Search] query='{query}', found={len(filtered_list)} results")
         else:
             filtered_list = all_downloads
 
