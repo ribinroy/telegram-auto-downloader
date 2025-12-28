@@ -221,7 +221,7 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
             </h3>
           </div>
 
-          {download.status === 'downloading' && (
+          {(download.status === 'downloading' || download.status === 'stopped') && progressPercent > 0 && (
             <div className="mb-2">
               <div className="flex justify-between text-sm text-slate-400 mb-1">
                 <span>{formatBytes(download.downloaded_bytes)} / {formatBytes(download.total_bytes)}</span>
@@ -229,7 +229,7 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
               </div>
               <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
                 <div
-                  className="h-full bg-gradient-to-r from-cyan-500 to-blue-500 transition-all duration-300"
+                  className={`h-full transition-all duration-300 ${download.status === 'stopped' ? 'bg-yellow-500' : 'bg-gradient-to-r from-cyan-500 to-blue-500'}`}
                   style={{ width: `${progressPercent}%` }}
                 />
               </div>
@@ -329,7 +329,7 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
               {!isTelegram && download.status === 'downloading' && (
                 <div className="group relative">
                   <button
-                    onClick={() => setConfirmAction('stop')}
+                    onClick={() => download.message_id && onStop(download.message_id)}
                     className="p-2 bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-400 rounded-lg transition-colors"
                   >
                     <Pause className="w-4 h-4" />

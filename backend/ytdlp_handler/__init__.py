@@ -294,7 +294,7 @@ class YtdlpDownloader:
             traceback.print_exc()
             return {'error': f'Browser fallback failed: {str(e)}'}
 
-    async def download(self, url: str, message_id: str, format_id: str = None):
+    async def download(self, url: str, message_id: str, format_id: str = None, custom_title: str = None):
         """Download video using yt-dlp with progress tracking"""
         import sys
         db = get_db()
@@ -328,7 +328,16 @@ class YtdlpDownloader:
             output_dir = DOWNLOAD_DIR / "Videos"
             output_dir.mkdir(parents=True, exist_ok=True)
 
-        output_template = str(output_dir / "%(title)s.%(ext)s")
+        # Use custom title if provided, otherwise use yt-dlp's title
+        print(f"[yt-dlp] custom_title parameter: {custom_title}")
+        if custom_title:
+            # Sanitize custom title for filename (remove invalid chars)
+            safe_title = re.sub(r'[<>:"/\\|?*]', '', custom_title)
+            output_template = str(output_dir / f"{safe_title}.%(ext)s")
+            print(f"[yt-dlp] Using custom title, output_template: {output_template}")
+        else:
+            output_template = str(output_dir / "%(title)s.%(ext)s")
+            print(f"[yt-dlp] No custom title, using yt-dlp title")
 
         try:
             print(f"[yt-dlp] Output dir: {output_dir}")
@@ -520,11 +529,10 @@ class YtdlpDownloader:
         message_id = generate_uuid()
         domain = self.get_domain(url)
 
-        # Create initial filename from title, append resolution if provided
-        if resolution and resolution != 'best':
-            filename = f"{title}-{resolution}.{ext or 'mp4'}"
-        else:
-            filename = f"{title}.{ext or 'mp4'}"
+        # Create filename from title (without extension for yt-dlp)
+        # yt-dlp will add the extension automatically
+        filename_base = title
+        filename = f"{title}.{ext or 'mp4'}"
 
         # Add to database
         new_download = db.add_download(
@@ -549,7 +557,7 @@ class YtdlpDownloader:
         print(f"[yt-dlp] Scheduling download task for {message_id} (format: {format_id})", flush=True)
         sys.stdout.flush()
         future = asyncio.run_coroutine_threadsafe(
-            self.download(url, message_id, format_id),
+            self.download(url, message_id, format_id, filename_base),
             loop
         )
 

@@ -340,6 +340,18 @@ class WebApp:
                         message_id = download.get("message_id")
                         url = download.get("url")
 
+                        # Extract custom title from filename (remove extension)
+                        custom_title = None
+                        if download.get("file"):
+                            # Remove extension to get the title
+                            filename = download["file"]
+                            print(f"[Retry] filename from db: {filename}")
+                            if '.' in filename:
+                                custom_title = filename.rsplit('.', 1)[0]
+                            else:
+                                custom_title = filename
+                            print(f"[Retry] custom_title extracted: {custom_title}")
+
                         # Update status but keep progress (yt-dlp will resume)
                         db.update_download_by_id(
                             download_id,
@@ -352,7 +364,7 @@ class WebApp:
 
                         # Start the download task (yt-dlp -c flag will resume)
                         future = asyncio.run_coroutine_threadsafe(
-                            self.ytdlp_downloader.download(url, message_id),
+                            self.ytdlp_downloader.download(url, message_id, None, custom_title),
                             self.event_loop
                         )
                         self.download_tasks[message_id] = future
