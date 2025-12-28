@@ -90,7 +90,6 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
   const [activeTab, setActiveTab] = useState<TabType>('all');
   const [sortBy, setSortBy] = useState<SortBy>('created_at');
   const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
-  const listRef = useRef<HTMLDivElement>(null);
 
   // Debounce search input
   useEffect(() => {
@@ -274,21 +273,20 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
     loadStats();
   }, [loadSecuredMappingIds, loadStats]);
 
-  // Handle scroll to load more
+  // Handle scroll to load more (window scroll)
   useEffect(() => {
-    const listElement = listRef.current;
-    if (!listElement) return;
-
     const handleScroll = () => {
-      const { scrollTop, scrollHeight, clientHeight } = listElement;
-      // Load more when user is within 200px of the bottom
-      if (scrollHeight - scrollTop - clientHeight < 200) {
+      const scrollTop = window.scrollY;
+      const scrollHeight = document.documentElement.scrollHeight;
+      const clientHeight = window.innerHeight;
+      // Load more when user is within 300px of the bottom
+      if (scrollHeight - scrollTop - clientHeight < 300) {
         loadMore();
       }
     };
 
-    listElement.addEventListener('scroll', handleScroll);
-    return () => listElement.removeEventListener('scroll', handleScroll);
+    window.addEventListener('scroll', handleScroll);
+    return () => window.removeEventListener('scroll', handleScroll);
   }, [loadMore]);
 
   // Setup WebSocket for real-time updates
@@ -385,8 +383,8 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
   }
 
   return (
-    <div className="h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex flex-col overflow-hidden">
-      <div className="max-w-7xl mx-auto px-4 pt-1 pb-0 w-full flex flex-col flex-1 min-h-0">
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
+      <div className="max-w-7xl mx-auto px-4 pt-1 pb-24 w-full">
         {/* Header */}
         <div className="flex items-center justify-between mb-1">
           <div className="flex items-center gap-3">
@@ -551,16 +549,16 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
           </div>
         )}
 
-        {/* Downloads List - Full Height */}
+        {/* Downloads List */}
         {loading ? (
-          <div className="flex-1 flex items-center justify-center text-slate-400">
+          <div className="min-h-[50vh] flex items-center justify-center text-slate-400">
             <div className="text-center">
               <Loader2 className="w-12 h-12 mx-auto mb-4 animate-spin text-cyan-500" />
               <p>Loading downloads...</p>
             </div>
           </div>
         ) : downloads.length === 0 ? (
-          <div className="flex-1 flex items-center justify-center text-slate-400">
+          <div className="min-h-[50vh] flex items-center justify-center text-slate-400">
             <div className="text-center">
               <Download className="w-12 h-12 mx-auto mb-4 opacity-50" />
               <p>{activeTab === 'active' ? 'No active downloads' : 'No downloads yet'}</p>
@@ -572,7 +570,7 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
             </div>
           </div>
         ) : (
-          <div ref={listRef} className="flex-1 min-h-0 overflow-auto space-y-3 pb-12">
+          <div className="space-y-3">
             {downloads.map((download) => (
               <DownloadItem
                 key={download.id}
