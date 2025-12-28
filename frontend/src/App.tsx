@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Search, Download, Wifi, WifiOff, Loader2, HardDrive, Clock, Zap, LogOut, Settings, Plus, BarChart3 } from 'lucide-react';
+import { Search, Download, Wifi, WifiOff, Loader2, HardDrive, Clock, Zap, LogOut, Settings, Plus, BarChart3, X } from 'lucide-react';
 import { formatBytes, formatSpeed } from './utils/format';
 import { fetchDownloads, fetchStats, retryDownload, stopDownload, deleteDownload, verifyToken, clearToken, getToken, fetchSecuredMappingIds, type SortBy, type SortOrder } from './api';
 import { connectSocket, disconnectSocket, type ProgressUpdate, type StatusUpdate, type DeletedUpdate } from './api/socket';
@@ -8,6 +8,7 @@ import { LoginPage } from './components/LoginPage';
 import { SettingsDialog } from './components/SettingsDialog';
 import { AddUrlModal } from './components/AddUrlModal';
 import { AnalyticsPage } from './components/AnalyticsPage';
+import { ToastContainer, useToast } from './components/Toast';
 import type { Download as DownloadType, Stats } from './types';
 
 type TabType = 'active' | 'all';
@@ -60,12 +61,15 @@ const PAGE_SIZE = 30;
 function MainApp({ onLogout }: { onLogout: () => void }) {
   const [currentPage, setCurrentPage] = useState<'downloads' | 'analytics'>('downloads');
   const [downloads, setDownloads] = useState<DownloadType[]>([]);
+  const [totalResults, setTotalResults] = useState(0);
   const [securedMappingIds, setSecuredMappingIds] = useState<number[]>([]);
   const [showSecured, setShowSecured] = useState(false);
   const [secretClickCount, setSecretClickCount] = useState(0);
   const secretClickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [addUrlOpen, setAddUrlOpen] = useState(false);
+  const { toasts, addToast, dismissToast } = useToast();
+  const downloadsRef = useRef<Map<string, DownloadType>>(new Map());
   const [stats, setStats] = useState<Stats>({
     total_downloaded: 0,
     total_size: 0,
@@ -121,27 +125,61 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
 
   // Handle status changes
   const handleStatus = useCallback((data: StatusUpdate) => {
+    // Show toast notification for status changes (outside of setDownloads to avoid state update during render)
+    const download = downloadsRef.current.get(data.message_id);
+    if (download) {
+      if (data.status === 'done') {
+        addToast({
+          type: 'success',
+          title: 'Download Complete',
+          message: download.file,
+          duration: 5000,
+        });
+      } else if (data.status === 'failed') {
+        addToast({
+          type: 'error',
+          title: 'Download Failed',
+          message: download.file,
+          duration: 6000,
+        });
+      }
+    }
+
     setDownloads(prev => {
       const updated = prev.map(d =>
         d.message_id === data.message_id
           ? { ...d, status: data.status, error: data.error || null, speed: 0 }
           : d
       );
+
       // If on active tab and status changed to done, remove it
       if (activeTab === 'active' && data.status === 'done') {
         return updated.filter(d => d.message_id !== data.message_id);
       }
       return updated;
     });
-  }, [activeTab]);
+  }, [activeTab, addToast]);
 
   // Handle new downloads
   const handleNewDownload = useCallback((data: DownloadType) => {
+    // Track the download for notifications
+    if (data.message_id) {
+      downloadsRef.current.set(data.message_id, data);
+    }
+
+    // Show toast for new download
+    addToast({
+      type: 'info',
+      title: 'Download Started',
+      message: data.file,
+      duration: 3000,
+    });
+
     // Only add if matches current filter
     if (activeTab === 'all' || data.status !== 'done') {
       setDownloads(prev => [data, ...prev]);
     }
-  }, [activeTab]);
+  }, [activeTab, addToast]);
 
   // Handle deleted downloads
   const handleDeleted = useCallback((data: DeletedUpdate) => {
@@ -174,9 +212,19 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
       });
       if (reset) {
         setDownloads(data.downloads);
+        // Update downloads ref for notifications
+        downloadsRef.current.clear();
+        data.downloads.forEach((d: DownloadType) => {
+          if (d.message_id) downloadsRef.current.set(d.message_id, d);
+        });
       } else {
         setDownloads(prev => [...prev, ...data.downloads]);
+        // Add new downloads to ref
+        data.downloads.forEach((d: DownloadType) => {
+          if (d.message_id) downloadsRef.current.set(d.message_id, d);
+        });
       }
+      setTotalResults(data.total);
       setHasMore(data.has_more);
       setError(null);
     } catch (err) {
@@ -450,11 +498,27 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
             <input
               ref={searchRef}
               type="text"
-              placeholder="Search..."
+              placeholder="Search by name, source, or URL..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full bg-slate-800/50 border border-slate-700 rounded-lg py-2 pl-9 pr-3 text-sm text-white placeholder-slate-400 focus:outline-none focus:border-cyan-500 transition-colors"
+              className="w-full bg-slate-800/50 border border-slate-700 rounded-lg py-2 pl-9 pr-20 text-sm text-white placeholder-slate-400 focus:outline-none focus:border-cyan-500 transition-colors"
             />
+            {/* Clear button and result count */}
+            <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
+              {debouncedSearch && (
+                <>
+                  <span className="text-xs text-slate-500">
+                    {totalResults} result{totalResults !== 1 ? 's' : ''}
+                  </span>
+                  <button
+                    onClick={() => setSearch('')}
+                    className="p-0.5 hover:bg-slate-700/50 rounded transition-colors"
+                  >
+                    <X className="w-4 h-4 text-slate-400 hover:text-white" />
+                  </button>
+                </>
+              )}
+            </div>
           </div>
 
           {/* Sort */}
@@ -561,6 +625,9 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
         }}
         initialUrl={pastedUrl}
       />
+
+      {/* Toast Notifications */}
+      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
 }
