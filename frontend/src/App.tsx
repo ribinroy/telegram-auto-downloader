@@ -318,7 +318,13 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
     await deleteDownload(message_id);
   };
 
-  // Secret click handler for showing secured downloads
+  // Toggle secured downloads visibility
+  const toggleSecured = useCallback(() => {
+    setShowSecured(prev => !prev);
+    setSecretClickCount(0);
+  }, []);
+
+  // Secret click handler for showing secured downloads (3 clicks)
   const handleSecretClick = () => {
     // Clear existing timer
     if (secretClickTimer.current) {
@@ -328,9 +334,8 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
     const newCount = secretClickCount + 1;
     setSecretClickCount(newCount);
 
-    if (newCount >= 4) {
-      setShowSecured(prev => !prev);
-      setSecretClickCount(0);
+    if (newCount >= 3) {
+      toggleSecured();
     } else {
       // Reset count after 1 second of no clicks
       secretClickTimer.current = setTimeout(() => {
@@ -338,6 +343,19 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
       }, 1000);
     }
   };
+
+  // Keyboard shortcut: Ctrl+X to toggle secured downloads
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.key === 'x') {
+        e.preventDefault();
+        toggleSecured();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [toggleSecured]);
 
   const searchRef = useRef<HTMLInputElement>(null);
   const [pastedUrl, setPastedUrl] = useState<string | null>(null);
