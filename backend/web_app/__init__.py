@@ -112,7 +112,28 @@ class WebApp:
             excluded_sources = [mapping_by_id[mid]['downloaded_from'] for mid in exclude_mapping_ids if mid in mapping_by_id]
 
         query = search.lower()
-        filtered_list = [d for d in all_downloads if query in d.get("file", "").lower()] if query else all_downloads
+        if query:
+            filtered_list = []
+            for d in all_downloads:
+                # Check filename
+                file_name = d.get("file", "").lower()
+                # Check downloaded_from source
+                downloaded_from = d.get("downloaded_from", "").lower()
+                # Check URL
+                url = d.get("url", "").lower()
+
+                # Exact substring match first
+                if query in file_name or query in downloaded_from or query in url:
+                    filtered_list.append(d)
+                    continue
+
+                # Fuzzy search: check if all query words appear in any field
+                query_words = query.split()
+                searchable_text = f"{file_name} {downloaded_from} {url}"
+                if all(word in searchable_text for word in query_words):
+                    filtered_list.append(d)
+        else:
+            filtered_list = all_downloads
 
         # Filter out excluded sources
         if excluded_sources:
