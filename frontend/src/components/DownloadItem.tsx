@@ -7,7 +7,6 @@ import {
   XCircle,
   StopCircle,
   Calendar,
-  ArrowDown,
   Send,
   Pause,
   Play,
@@ -145,7 +144,7 @@ function getPlatformIcon(source: string) {
 function getStatusIcon(status: Download['status']) {
   switch (status) {
     case 'downloading':
-      return <ArrowDown className="w-4 h-4 text-cyan-400 animate-bounce" />;
+      return null; // Hidden when downloading
     case 'done':
       return <CheckCircle className="w-4 h-4 text-green-400" />;
     case 'failed':
@@ -229,7 +228,7 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
               </div>
               <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
                 <div
-                  className={`h-full transition-all duration-300 ${download.status === 'stopped' ? 'bg-yellow-500' : 'bg-gradient-to-r from-cyan-500 to-blue-500'}`}
+                  className={`h-full transition-all duration-300 ${download.status === 'stopped' ? 'bg-yellow-500' : 'progress-shimmer'}`}
                   style={{ width: `${progressPercent}%` }}
                 />
               </div>
@@ -261,15 +260,15 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
 
         <div className="flex flex-col items-end gap-2">
           <div className="flex items-center gap-3">
-            {/* Status indicator */}
-            <div className={`flex items-center gap-1.5 px-2 py-1 bg-slate-700/30 rounded-lg ${download.status === 'downloading' ? 'aspect-square justify-center' : ''}`}>
-              {getStatusIcon(download.status)}
-              {download.status !== 'downloading' && (
+            {/* Status indicator - hide when downloading */}
+            {download.status !== 'downloading' && (
+              <div className="flex items-center gap-1.5 px-2 py-1 bg-slate-700/30 rounded-lg">
+                {getStatusIcon(download.status)}
                 <span className={`text-sm capitalize ${getStatusColor(download.status)}`}>
                   {download.status}
                 </span>
-              )}
-            </div>
+              </div>
+            )}
 
             {/* View button for completed downloads */}
             {download.status === 'done' && (
