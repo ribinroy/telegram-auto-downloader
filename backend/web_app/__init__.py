@@ -132,7 +132,6 @@ class WebApp:
                 searchable_text = f"{file_name} {downloaded_from} {url}"
                 if all(word in searchable_text for word in query_words):
                     filtered_list.append(d)
-            print(f"[Search] query='{query}', found={len(filtered_list)} results")
         else:
             filtered_list = all_downloads
 
