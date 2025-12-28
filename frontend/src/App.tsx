@@ -412,26 +412,28 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
             </div>
           </div>
           <div className="flex items-center gap-1.5 sm:gap-3">
-            {/* Stats - icon only on mobile, with values on larger screens */}
-            <div className="group relative flex items-center gap-1 sm:gap-2 px-2 sm:px-3 py-1.5 bg-slate-700/50 rounded-lg cursor-default sm:min-w-[100px]">
+            {/* Total Downloaded - hidden on mobile */}
+            <div className="hidden sm:flex group relative items-center gap-2 px-3 py-1.5 bg-slate-700/50 rounded-lg cursor-default min-w-[100px]">
               <HardDrive className="w-4 h-4 text-green-400" />
-              <span className="hidden sm:inline text-sm text-green-400 tabular-nums">{formatBytes(stats.total_downloaded)}</span>
+              <span className="text-sm text-green-400 tabular-nums">{formatBytes(stats.total_downloaded)}</span>
               <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
-                Downloaded: {formatBytes(stats.total_downloaded)}
+                Downloaded
               </div>
             </div>
+            {/* Pending - value only on mobile, icon+value on desktop */}
             <div className="group relative flex items-center gap-1 sm:gap-2 px-2 sm:px-3 py-1.5 bg-slate-700/50 rounded-lg cursor-default sm:min-w-[100px]">
-              <Clock className="w-4 h-4 text-yellow-400" />
-              <span className="hidden sm:inline text-sm text-yellow-400 tabular-nums">{formatBytes(stats.pending_bytes)}</span>
+              <Clock className="hidden sm:block w-4 h-4 text-yellow-400" />
+              <span className="text-xs sm:text-sm text-yellow-400 tabular-nums">{formatBytes(stats.pending_bytes)}</span>
               <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
-                Pending: {formatBytes(stats.pending_bytes)}
+                Pending
               </div>
             </div>
+            {/* Speed - value only on mobile, icon+value on desktop */}
             <div className="group relative flex items-center gap-1 sm:gap-2 px-2 sm:px-3 py-1.5 bg-slate-700/50 rounded-lg cursor-default sm:min-w-[110px]">
-              <Zap className="w-4 h-4 text-purple-400" />
-              <span className="hidden sm:inline text-sm text-purple-400 tabular-nums">{formatSpeed(stats.total_speed)}</span>
+              <Zap className="hidden sm:block w-4 h-4 text-purple-400" />
+              <span className="text-xs sm:text-sm text-purple-400 tabular-nums">{formatSpeed(stats.total_speed)}</span>
               <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
-                Speed: {formatSpeed(stats.total_speed)}
+                Speed
               </div>
             </div>
             {/* Connection status - secret click target */}
