@@ -98,10 +98,10 @@ export function AnalyticsPage({ onBack }: AnalyticsPageProps) {
 
   return (
     <div className="h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex flex-col overflow-hidden">
-      <div className="max-w-7xl mx-auto px-4 py-6 w-full flex flex-col flex-1 min-h-0">
+      <div className="max-w-7xl mx-auto px-3 sm:px-4 py-4 sm:py-6 w-full flex flex-col flex-1 min-h-0">
         {/* Header */}
-        <div className="flex items-center justify-between mb-6">
-          <div className="flex items-center gap-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-0 mb-4 sm:mb-6">
+          <div className="flex items-center gap-3 sm:gap-4">
             <button
               onClick={onBack}
               className="p-2 bg-slate-700/50 hover:bg-slate-600/50 text-slate-400 hover:text-white rounded-lg transition-colors"
@@ -109,27 +109,27 @@ export function AnalyticsPage({ onBack }: AnalyticsPageProps) {
               <ArrowLeft className="w-5 h-5" />
             </button>
             <div>
-              <h1 className="text-2xl font-bold text-white">Analytics</h1>
-              <p className="text-slate-400 text-sm">Download statistics and trends</p>
+              <h1 className="text-xl sm:text-2xl font-bold text-white">Analytics</h1>
+              <p className="text-slate-400 text-xs sm:text-sm">Download statistics and trends</p>
             </div>
           </div>
 
           {/* Period selector */}
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3 ml-11 sm:ml-0">
             <select
               value={days}
               onChange={(e) => setDays(Number(e.target.value))}
-              className="bg-slate-700/50 border border-slate-600 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-cyan-500"
+              className="bg-slate-700/50 border border-slate-600 rounded-lg py-1.5 sm:py-2 px-2 sm:px-3 text-xs sm:text-sm text-white focus:outline-none focus:border-cyan-500"
             >
-              <option value={7}>Last 7 days</option>
-              <option value={14}>Last 14 days</option>
-              <option value={30}>Last 30 days</option>
-              <option value={90}>Last 90 days</option>
+              <option value={7}>7 days</option>
+              <option value={14}>14 days</option>
+              <option value={30}>30 days</option>
+              <option value={90}>90 days</option>
             </select>
             <select
               value={groupBy}
               onChange={(e) => setGroupBy(e.target.value as 'day' | 'hour')}
-              className="bg-slate-700/50 border border-slate-600 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-cyan-500"
+              className="bg-slate-700/50 border border-slate-600 rounded-lg py-1.5 sm:py-2 px-2 sm:px-3 text-xs sm:text-sm text-white focus:outline-none focus:border-cyan-500"
             >
               <option value="day">By Day</option>
               <option value="hour">By Hour</option>
@@ -146,53 +146,53 @@ export function AnalyticsPage({ onBack }: AnalyticsPageProps) {
             {error}
           </div>
         ) : data ? (
-          <div className="flex-1 min-h-0 overflow-auto space-y-6 pb-4">
+          <div className="flex-1 min-h-0 overflow-auto space-y-4 sm:space-y-6 pb-4">
             {/* Summary Cards */}
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-              <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-4">
-                <div className="flex items-center gap-2 text-slate-400 text-sm mb-1">
-                  <Download className="w-4 h-4" />
-                  Total Downloads
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 sm:gap-4">
+              <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-3 sm:p-4">
+                <div className="flex items-center gap-1.5 sm:gap-2 text-slate-400 text-xs sm:text-sm mb-1">
+                  <Download className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                  <span className="truncate">Downloads</span>
                 </div>
-                <div className="text-2xl font-bold text-white">{data.summary.total_downloads}</div>
+                <div className="text-lg sm:text-2xl font-bold text-white">{data.summary.total_downloads}</div>
               </div>
-              <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-4">
-                <div className="flex items-center gap-2 text-slate-400 text-sm mb-1">
-                  <HardDrive className="w-4 h-4" />
-                  Total Size
+              <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-3 sm:p-4">
+                <div className="flex items-center gap-1.5 sm:gap-2 text-slate-400 text-xs sm:text-sm mb-1">
+                  <HardDrive className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                  <span className="truncate">Total Size</span>
                 </div>
-                <div className="text-2xl font-bold text-white">{formatBytes(data.summary.total_size)}</div>
+                <div className="text-lg sm:text-2xl font-bold text-white">{formatBytes(data.summary.total_size)}</div>
               </div>
-              <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-4">
-                <div className="flex items-center gap-2 text-slate-400 text-sm mb-1">
-                  <CheckCircle className="w-4 h-4 text-green-400" />
-                  Completed
+              <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-3 sm:p-4">
+                <div className="flex items-center gap-1.5 sm:gap-2 text-slate-400 text-xs sm:text-sm mb-1">
+                  <CheckCircle className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-green-400" />
+                  <span className="truncate">Completed</span>
                 </div>
-                <div className="text-2xl font-bold text-green-400">{data.summary.completed}</div>
+                <div className="text-lg sm:text-2xl font-bold text-green-400">{data.summary.completed}</div>
               </div>
-              <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-4">
-                <div className="flex items-center gap-2 text-slate-400 text-sm mb-1">
-                  <XCircle className="w-4 h-4 text-red-400" />
-                  Failed
+              <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-3 sm:p-4">
+                <div className="flex items-center gap-1.5 sm:gap-2 text-slate-400 text-xs sm:text-sm mb-1">
+                  <XCircle className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-red-400" />
+                  <span className="truncate">Failed</span>
                 </div>
-                <div className="text-2xl font-bold text-red-400">{data.summary.failed}</div>
+                <div className="text-lg sm:text-2xl font-bold text-red-400">{data.summary.failed}</div>
               </div>
-              <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-4">
-                <div className="flex items-center gap-2 text-slate-400 text-sm mb-1">
-                  <TrendingUp className="w-4 h-4 text-cyan-400" />
-                  Success Rate
+              <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-3 sm:p-4 col-span-2 sm:col-span-1">
+                <div className="flex items-center gap-1.5 sm:gap-2 text-slate-400 text-xs sm:text-sm mb-1">
+                  <TrendingUp className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-cyan-400" />
+                  <span className="truncate">Success Rate</span>
                 </div>
-                <div className="text-2xl font-bold text-cyan-400">{data.summary.success_rate}%</div>
+                <div className="text-lg sm:text-2xl font-bold text-cyan-400">{data.summary.success_rate}%</div>
               </div>
             </div>
 
             {/* Downloads Over Time Chart */}
-            <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-4">
-              <div className="flex items-center gap-2 text-white font-medium mb-4">
-                <Calendar className="w-5 h-5 text-cyan-400" />
+            <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-3 sm:p-4">
+              <div className="flex items-center gap-2 text-white text-sm sm:text-base font-medium mb-3 sm:mb-4">
+                <Calendar className="w-4 h-4 sm:w-5 sm:h-5 text-cyan-400" />
                 Downloads Over Time
               </div>
-              <div className="h-64">
+              <div className="h-48 sm:h-64">
                 <ResponsiveContainer width="100%" height="100%">
                   <AreaChart data={data.time_series}>
                     <defs>
@@ -241,14 +241,14 @@ export function AnalyticsPage({ onBack }: AnalyticsPageProps) {
             </div>
 
             {/* Two Column Layout */}
-            <div className="grid md:grid-cols-2 gap-6">
+            <div className="grid md:grid-cols-2 gap-4 sm:gap-6">
               {/* Downloads by Source */}
-              <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-4">
-                <div className="flex items-center gap-2 text-white font-medium mb-4">
-                  <Download className="w-5 h-5 text-purple-400" />
+              <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-3 sm:p-4">
+                <div className="flex items-center gap-2 text-white text-sm sm:text-base font-medium mb-3 sm:mb-4">
+                  <Download className="w-4 h-4 sm:w-5 sm:h-5 text-purple-400" />
                   Downloads by Source
                 </div>
-                <div className="h-64">
+                <div className="h-48 sm:h-64">
                   <ResponsiveContainer width="100%" height="100%">
                     <PieChart>
                       <Pie
@@ -282,12 +282,12 @@ export function AnalyticsPage({ onBack }: AnalyticsPageProps) {
               </div>
 
               {/* Downloads by Status */}
-              <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-4">
-                <div className="flex items-center gap-2 text-white font-medium mb-4">
-                  <CheckCircle className="w-5 h-5 text-green-400" />
+              <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-3 sm:p-4">
+                <div className="flex items-center gap-2 text-white text-sm sm:text-base font-medium mb-3 sm:mb-4">
+                  <CheckCircle className="w-4 h-4 sm:w-5 sm:h-5 text-green-400" />
                   Downloads by Status
                 </div>
-                <div className="h-64">
+                <div className="h-48 sm:h-64">
                   <ResponsiveContainer width="100%" height="100%">
                     <PieChart>
                       <Pie
@@ -322,12 +322,12 @@ export function AnalyticsPage({ onBack }: AnalyticsPageProps) {
             </div>
 
             {/* Hourly Distribution */}
-            <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-4">
-              <div className="flex items-center gap-2 text-white font-medium mb-4">
-                <Clock className="w-5 h-5 text-amber-400" />
+            <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-3 sm:p-4">
+              <div className="flex items-center gap-2 text-white text-sm sm:text-base font-medium mb-3 sm:mb-4">
+                <Clock className="w-4 h-4 sm:w-5 sm:h-5 text-amber-400" />
                 Hourly Distribution (All Time)
               </div>
-              <div className="h-48">
+              <div className="h-36 sm:h-48">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={data.hourly_distribution}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
@@ -359,36 +359,36 @@ export function AnalyticsPage({ onBack }: AnalyticsPageProps) {
             </div>
 
             {/* Top Sources Table */}
-            <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-4">
-              <div className="flex items-center gap-2 text-white font-medium mb-4">
-                <TrendingUp className="w-5 h-5 text-cyan-400" />
+            <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-3 sm:p-4">
+              <div className="flex items-center gap-2 text-white text-sm sm:text-base font-medium mb-3 sm:mb-4">
+                <TrendingUp className="w-4 h-4 sm:w-5 sm:h-5 text-cyan-400" />
                 Top Sources
               </div>
-              <div className="overflow-x-auto">
-                <table className="w-full">
+              <div className="overflow-x-auto -mx-3 sm:mx-0 px-3 sm:px-0">
+                <table className="w-full min-w-[400px]">
                   <thead>
-                    <tr className="text-slate-400 text-sm border-b border-slate-700">
-                      <th className="text-left py-2 px-3">Source</th>
-                      <th className="text-right py-2 px-3">Downloads</th>
-                      <th className="text-right py-2 px-3">Total Size</th>
-                      <th className="text-right py-2 px-3">Avg Size</th>
+                    <tr className="text-slate-400 text-xs sm:text-sm border-b border-slate-700">
+                      <th className="text-left py-2 px-2 sm:px-3">Source</th>
+                      <th className="text-right py-2 px-2 sm:px-3">Downloads</th>
+                      <th className="text-right py-2 px-2 sm:px-3">Total Size</th>
+                      <th className="text-right py-2 px-2 sm:px-3 hidden sm:table-cell">Avg Size</th>
                     </tr>
                   </thead>
                   <tbody>
                     {data.by_source.slice(0, 10).map((source, index) => (
-                      <tr key={source.source} className="text-slate-300 border-b border-slate-700/50">
-                        <td className="py-2 px-3">
+                      <tr key={source.source} className="text-slate-300 text-xs sm:text-sm border-b border-slate-700/50">
+                        <td className="py-2 px-2 sm:px-3">
                           <div className="flex items-center gap-2">
                             <div
-                              className="w-3 h-3 rounded-full"
+                              className="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full shrink-0"
                               style={{ backgroundColor: COLORS[index % COLORS.length] }}
                             />
-                            {source.source}
+                            <span className="truncate">{source.source}</span>
                           </div>
                         </td>
-                        <td className="text-right py-2 px-3">{source.count}</td>
-                        <td className="text-right py-2 px-3">{formatBytes(source.size)}</td>
-                        <td className="text-right py-2 px-3">
+                        <td className="text-right py-2 px-2 sm:px-3">{source.count}</td>
+                        <td className="text-right py-2 px-2 sm:px-3">{formatBytes(source.size)}</td>
+                        <td className="text-right py-2 px-2 sm:px-3 hidden sm:table-cell">
                           {formatBytes(source.count > 0 ? Math.round(source.size / source.count) : 0)}
                         </td>
                       </tr>

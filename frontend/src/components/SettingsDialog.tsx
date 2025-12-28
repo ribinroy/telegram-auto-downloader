@@ -259,7 +259,7 @@ export function SettingsDialog({ isOpen, onClose, showMappings = false }: Settin
       />
 
       {/* Dialog */}
-      <div className="relative bg-slate-800 rounded-xl border border-slate-700 shadow-2xl w-full max-w-lg mx-4 max-h-[90vh] flex flex-col">
+      <div className="relative bg-slate-800 rounded-xl border border-slate-700 shadow-2xl w-full max-w-lg mx-3 sm:mx-4 max-h-[90vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-slate-700">
           <h2 className="text-lg font-semibold text-white">Settings</h2>
@@ -272,46 +272,46 @@ export function SettingsDialog({ isOpen, onClose, showMappings = false }: Settin
         </div>
 
         {/* Tabs */}
-        <div className="flex border-b border-slate-700">
+        <div className="flex border-b border-slate-700 overflow-x-auto">
           <button
             onClick={() => setActiveTab('password')}
-            className={`flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors ${
+            className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2.5 sm:py-3 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap ${
               activeTab === 'password'
                 ? 'text-cyan-400 border-b-2 border-cyan-400'
                 : 'text-slate-400 hover:text-white'
             }`}
           >
             <Key className="w-4 h-4" />
-            Password
+            <span className="hidden xs:inline">Password</span>
           </button>
           {showMappings && (
             <button
               onClick={() => setActiveTab('mappings')}
-              className={`flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors ${
+              className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2.5 sm:py-3 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap ${
                 activeTab === 'mappings'
                   ? 'text-cyan-400 border-b-2 border-cyan-400'
                   : 'text-slate-400 hover:text-white'
               }`}
             >
               <FolderCog className="w-4 h-4" />
-              Mappings
+              <span className="hidden xs:inline">Mappings</span>
             </button>
           )}
           <button
             onClick={() => setActiveTab('cookies')}
-            className={`flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors ${
+            className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2.5 sm:py-3 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap ${
               activeTab === 'cookies'
                 ? 'text-cyan-400 border-b-2 border-cyan-400'
                 : 'text-slate-400 hover:text-white'
             }`}
           >
             <Cookie className="w-4 h-4" />
-            Cookies
+            <span className="hidden xs:inline">Cookies</span>
           </button>
         </div>
 
         {/* Content */}
-        <div className="p-4 overflow-y-auto flex-1">
+        <div className="p-3 sm:p-4 overflow-y-auto flex-1">
           {activeTab === 'password' && (
             <>
               {/* Success message */}
