@@ -206,7 +206,7 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
   };
 
   return (
-    <div className="bg-slate-800/30 rounded-xl p-4 border border-slate-700/50 hover:border-slate-600 transition-all overflow-visible">
+    <div className="bg-slate-800/30 rounded-xl p-4 border border-slate-700/50 transition-all overflow-visible">
       <div className="flex items-start gap-4">
         {/* Source Icon */}
         <div className="p-2.5 bg-slate-700/50 rounded-lg">
