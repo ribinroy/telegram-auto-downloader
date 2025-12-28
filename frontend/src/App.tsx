@@ -384,9 +384,10 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
-      <div className="max-w-7xl mx-auto px-4 pt-1 pb-24 w-full">
-        {/* Header */}
-        <div className="flex items-center justify-between mb-1">
+      {/* Fixed Header */}
+      <div className="fixed top-0 left-0 right-0 z-40 bg-slate-900/80 backdrop-blur-xl border-b border-slate-700/50">
+        <div className="max-w-7xl mx-auto px-4 py-2">
+          <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="p-3 rounded-xl">
               <img src="/logo.png" alt="DownLee logo" className="w-8 h-8" />
@@ -462,8 +463,12 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
               </div>
             </div>
           </div>
+          </div>
         </div>
+      </div>
 
+      {/* Main Content - with top padding for fixed header */}
+      <div className="max-w-7xl mx-auto px-4 pt-20 pb-24 w-full">
         {/* Tabs, Search and Sort - Single Row */}
         <div className="flex items-center gap-3 mb-6">
           {/* Tabs */}
