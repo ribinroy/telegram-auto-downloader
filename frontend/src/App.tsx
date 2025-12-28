@@ -63,6 +63,7 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
   const [downloads, setDownloads] = useState<DownloadType[]>([]);
   const [totalResults, setTotalResults] = useState(0);
   const [securedMappingIds, setSecuredMappingIds] = useState<number[]>([]);
+  const [securedMappingIdsLoaded, setSecuredMappingIdsLoaded] = useState(false);
   const [showSecured, setShowSecured] = useState(false);
   const [secretClickCount, setSecretClickCount] = useState(0);
   const secretClickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -248,6 +249,8 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
       setSecuredMappingIds(ids);
     } catch (err) {
       console.error('Failed to fetch secured mapping IDs');
+    } finally {
+      setSecuredMappingIdsLoaded(true);
     }
   }, []);
 
@@ -262,10 +265,13 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
   }, []);
 
   // Load initial data on mount and when search/tab/sort changes
+  // Only fetch downloads after securedMappingIds have been loaded
   useEffect(() => {
-    loadDownloads(true);
+    if (securedMappingIdsLoaded) {
+      loadDownloads(true);
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedSearch, activeTab, sortBy, sortOrder, showSecured, securedMappingIds]);
+  }, [debouncedSearch, activeTab, sortBy, sortOrder, showSecured, securedMappingIds, securedMappingIdsLoaded]);
 
   // Load secured mapping IDs and stats on mount
   useEffect(() => {
