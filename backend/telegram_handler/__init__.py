@@ -247,10 +247,26 @@ class TelegramDownloader:
         task = asyncio.create_task(self.safe_download(event, str(path), entry))
         self.download_tasks[event.id] = task  # Use message_id as key
 
+    async def send_startup_greeting(self):
+        """Send a greeting message to the chat when service starts"""
+        try:
+            hour = datetime.now().hour
+            if 5 <= hour < 12:
+                greeting = "Good Morning"
+            elif 12 <= hour < 17:
+                greeting = "Good Afternoon"
+            else:
+                greeting = "Good Night"
+
+            await self.client.send_message(self.chat_id, f"{greeting}, reporting for duty 🫡")
+        except Exception as e:
+            logging.error(f"Failed to send startup greeting: {e}")
+
     def start(self):
         """Start the Telegram client"""
         print("🚀 DownLee running...")
         self.client.start()
+        self.client.loop.run_until_complete(self.send_startup_greeting())
         self.client.run_until_disconnected()
 
     def stop(self):
