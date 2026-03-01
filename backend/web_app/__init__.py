@@ -660,6 +660,7 @@ class WebApp:
             # Group by time period
             downloads_by_time = defaultdict(lambda: {'count': 0, 'size': 0})
             downloads_by_source = defaultdict(lambda: {'count': 0, 'size': 0})
+            downloads_by_author = defaultdict(lambda: {'count': 0, 'size': 0})
             downloads_by_status = defaultdict(int)
             hourly_distribution = defaultdict(int)  # Downloads by hour of day (0-23)
 
@@ -681,6 +682,11 @@ class WebApp:
                 # By source
                 downloads_by_source[source]['count'] += 1
                 downloads_by_source[source]['size'] += size
+
+                # By author
+                author = d.get('author') or 'unknown'
+                downloads_by_author[author]['count'] += 1
+                downloads_by_author[author]['size'] += size
 
                 # By status
                 downloads_by_status[status] += 1
@@ -729,6 +735,12 @@ class WebApp:
                 for h in range(24)
             ]
 
+            # Sort authors by count
+            author_data = [
+                {'author': author, 'count': data['count'], 'size': data['size']}
+                for author, data in sorted(downloads_by_author.items(), key=lambda x: -x[1]['count'])
+            ]
+
             # Summary stats
             total_downloads = len(recent_downloads)
             total_size = sum(d.get('total_bytes', 0) or 0 for d in recent_downloads)
@@ -738,6 +750,7 @@ class WebApp:
             return jsonify({
                 'time_series': time_data,
                 'by_source': source_data,
+                'by_author': author_data,
                 'by_status': dict(downloads_by_status),
                 'hourly_distribution': hourly_data,
                 'summary': {

@@ -81,6 +81,12 @@ export interface SourceData {
   size: number;
 }
 
+export interface AuthorData {
+  author: string;
+  count: number;
+  size: number;
+}
+
 export interface HourlyData {
   hour: number;
   count: number;
@@ -97,6 +103,7 @@ export interface AnalyticsSummary {
 export interface AnalyticsData {
   time_series: TimeSeriesPoint[];
   by_source: SourceData[];
+  by_author: AuthorData[];
   by_status: Record<string, number>;
   hourly_distribution: HourlyData[];
   summary: AnalyticsSummary;

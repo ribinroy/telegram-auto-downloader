@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { ArrowLeft, Loader2, Download, CheckCircle, XCircle, TrendingUp, HardDrive, Calendar, Clock } from 'lucide-react';
+import { ArrowLeft, Loader2, Download, CheckCircle, XCircle, TrendingUp, HardDrive, Calendar, Clock, User } from 'lucide-react';
 import { fetchAnalytics } from '../api';
 import { formatBytes } from '../utils/format';
 import type { AnalyticsData } from '../types';
@@ -87,6 +87,16 @@ export function AnalyticsPage({ onBack }: AnalyticsPageProps) {
       name: status.charAt(0).toUpperCase() + status.slice(1),
       value: count
     }));
+  };
+
+  // Prepare author data for bar chart
+  const getAuthorChartData = () => {
+    if (!data) return [];
+    return data.by_author.map(a => {
+      const colonIdx = a.author.lastIndexOf(':');
+      const name = colonIdx > 0 && colonIdx < a.author.length - 1 ? a.author.substring(0, colonIdx) : a.author;
+      return { name, count: a.count, size: a.size, fullAuthor: a.author };
+    });
   };
 
   const STATUS_COLORS: Record<string, string> = {
@@ -320,6 +330,54 @@ export function AnalyticsPage({ onBack }: AnalyticsPageProps) {
                 </div>
               </div>
             </div>
+
+            {/* Downloads by Author */}
+            {data.by_author && data.by_author.length > 0 && (
+              <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-3 sm:p-4">
+                <div className="flex items-center gap-2 text-white text-sm sm:text-base font-medium mb-3 sm:mb-4">
+                  <User className="w-4 h-4 sm:w-5 sm:h-5 text-emerald-400" />
+                  Downloads by Author
+                </div>
+                <div className="h-48 sm:h-64">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={getAuthorChartData()} layout="vertical">
+                      <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                      <XAxis
+                        type="number"
+                        stroke="#64748b"
+                        tick={{ fill: '#94a3b8', fontSize: 12 }}
+                        allowDecimals={false}
+                      />
+                      <YAxis
+                        type="category"
+                        dataKey="name"
+                        stroke="#64748b"
+                        tick={{ fill: '#94a3b8', fontSize: 12 }}
+                        width={100}
+                      />
+                      <Tooltip
+                        contentStyle={{
+                          backgroundColor: '#1e293b',
+                          border: '1px solid #334155',
+                          borderRadius: '8px',
+                          color: '#fff'
+                        }}
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                        formatter={(value: number, _name: string, props: any) => [
+                          `${value} downloads (${formatBytes(props?.payload?.size ?? 0)})`,
+                          props?.payload?.fullAuthor ?? ''
+                        ]}
+                      />
+                      <Bar dataKey="count" radius={[0, 4, 4, 0]}>
+                        {getAuthorChartData().map((_, index) => (
+                          <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            )}
 
             {/* Hourly Distribution */}
             <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-3 sm:p-4">
