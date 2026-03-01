@@ -281,6 +281,7 @@ export function AnalyticsPage({ onBack }: AnalyticsPageProps) {
                           borderRadius: '8px',
                           color: '#fff'
                         }}
+                        itemStyle={{ color: '#fff' }}
                       />
                       <Legend
                         wrapperStyle={{ color: '#94a3b8', fontSize: '11px' }}
@@ -320,6 +321,7 @@ export function AnalyticsPage({ onBack }: AnalyticsPageProps) {
                           borderRadius: '8px',
                           color: '#fff'
                         }}
+                        itemStyle={{ color: '#fff' }}
                       />
                       <Legend
                         wrapperStyle={{ color: '#94a3b8', fontSize: '11px' }}
@@ -359,6 +361,7 @@ export function AnalyticsPage({ onBack }: AnalyticsPageProps) {
                           borderRadius: '8px',
                           color: '#fff'
                         }}
+                        itemStyle={{ color: '#fff' }}
                       />
                       <Legend
                         wrapperStyle={{ color: '#94a3b8', fontSize: '11px' }}
