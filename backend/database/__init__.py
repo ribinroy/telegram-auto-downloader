@@ -32,7 +32,7 @@ class Download(Base):
     downloaded_bytes = Column(BigInteger, default=0)
     total_bytes = Column(BigInteger, default=0)
     pending_time = Column(Float, nullable=True)
-    is_deleted = Column(Boolean, default=False)
+    deleted_at = Column(DateTime, nullable=True, default=None)
     downloaded_from = Column(String(100), default='telegram')  # 'telegram' or domain name
     url = Column(Text, nullable=True)  # Source URL for yt-dlp downloads
     file_deleted = Column(Boolean, default=False)  # True if physical file was deleted from disk
@@ -56,7 +56,8 @@ class Download(Base):
             'downloaded_from': self.downloaded_from or 'telegram',
             'url': self.url,
             'file_deleted': self.file_deleted or False,
-            'author': self.author
+            'author': self.author,
+            'deleted_at': f"{self.deleted_at.isoformat()}Z" if self.deleted_at else None
         }
 
 
@@ -155,6 +156,15 @@ class DatabaseManager:
             # Add author column if it doesn't exist
             if 'author' not in columns:
                 conn.execute(text('ALTER TABLE downloads ADD COLUMN author VARCHAR(200)'))
+                conn.commit()
+
+            # Migrate is_deleted boolean to deleted_at datetime
+            if 'is_deleted' in columns and 'deleted_at' not in columns:
+                conn.execute(text('ALTER TABLE downloads ADD COLUMN deleted_at DATETIME'))
+                conn.execute(text("UPDATE downloads SET deleted_at = CURRENT_TIMESTAMP WHERE is_deleted = 1"))
+                conn.commit()
+            elif 'deleted_at' not in columns:
+                conn.execute(text('ALTER TABLE downloads ADD COLUMN deleted_at DATETIME'))
                 conn.commit()
 
     def get_session(self):
@@ -265,7 +275,7 @@ class DatabaseManager:
         session = self.get_session()
         try:
             downloads = session.query(Download).filter(
-                (Download.is_deleted == False) | (Download.is_deleted == None)
+                Download.deleted_at == None
             ).order_by(Download.updated_at.desc()).all()
             return [d.to_dict() for d in downloads]
         finally:
@@ -277,8 +287,9 @@ class DatabaseManager:
         try:
             download = session.query(Download).filter_by(file=file).first()
             if download:
-                download.is_deleted = True
-                download.updated_at = datetime.utcnow()
+                now = datetime.utcnow()
+                download.deleted_at = now
+                download.updated_at = now
                 session.commit()
                 return True
             return False
@@ -291,8 +302,9 @@ class DatabaseManager:
         try:
             download = session.query(Download).filter_by(id=download_id).first()
             if download:
-                download.is_deleted = True
-                download.updated_at = datetime.utcnow()
+                now = datetime.utcnow()
+                download.deleted_at = now
+                download.updated_at = now
                 session.commit()
                 return True
             return False
@@ -306,8 +318,9 @@ class DatabaseManager:
             msg_id = str(message_id) if message_id is not None else None
             download = session.query(Download).filter_by(message_id=msg_id).first()
             if download:
-                download.is_deleted = True
-                download.updated_at = datetime.utcnow()
+                now = datetime.utcnow()
+                download.deleted_at = now
+                download.updated_at = now
                 session.commit()
                 return True
             return False

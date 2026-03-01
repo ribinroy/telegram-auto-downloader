@@ -14,6 +14,7 @@ export interface Download {
   downloaded_from: string;  // 'telegram' or domain name
   url: string | null;  // Source URL for yt-dlp downloads
   file_deleted: boolean;  // True if physical file was deleted from disk
+  author: string | null;  // username:id for telegram, username for downlee
 }
 
 export interface VideoFormat {

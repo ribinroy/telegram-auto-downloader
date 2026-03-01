@@ -12,7 +12,8 @@ import {
   Play,
   Eye,
   Loader2,
-  ExternalLink
+  ExternalLink,
+  User
 } from 'lucide-react';
 import ReactTimeAgo from 'react-time-ago';
 import type { Download } from '../types';
@@ -433,6 +434,14 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
                 </a>
               </Tooltip>
             )}
+            {download.author && (
+              <Tooltip content="Author">
+                <div className="flex items-center gap-1 cursor-default">
+                  <User className="w-3 h-3" />
+                  <span>{download.author}</span>
+                </div>
+              </Tooltip>
+            )}
             <Tooltip content="Database ID">
               <div className="flex items-center gap-1 cursor-default">
                 <span className="text-slate-600">#</span>
@@ -463,6 +472,12 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
               >
                 <ExternalLink className="w-3 h-3" />
               </a>
+            )}
+            {download.author && (
+              <div className="flex items-center gap-1">
+                <User className="w-3 h-3" />
+                <span className="truncate max-w-[80px]">{download.author}</span>
+              </div>
             )}
             <span>#{download.id}</span>
             {download.created_at && (
