@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { ArrowLeft, Loader2, Download, CheckCircle, XCircle, TrendingUp, HardDrive, Calendar, Clock } from 'lucide-react';
+import { ArrowLeft, Loader2, Download, CheckCircle, XCircle, TrendingUp, HardDrive, Calendar, Clock, User } from 'lucide-react';
 import { fetchAnalytics } from '../api';
 import { formatBytes } from '../utils/format';
 import type { AnalyticsData } from '../types';
@@ -31,16 +31,17 @@ export function AnalyticsPage({ onBack }: AnalyticsPageProps) {
   const [error, setError] = useState<string | null>(null);
   const [days, setDays] = useState(30);
   const [groupBy, setGroupBy] = useState<'day' | 'hour'>('day');
+  const [includeDeleted, setIncludeDeleted] = useState(false);
 
   useEffect(() => {
     loadAnalytics();
-  }, [days, groupBy]);
+  }, [days, groupBy, includeDeleted]);
 
   const loadAnalytics = async () => {
     setLoading(true);
     setError(null);
     try {
-      const result = await fetchAnalytics(days, groupBy);
+      const result = await fetchAnalytics(days, groupBy, includeDeleted);
       setData(result);
     } catch (err) {
       setError('Failed to load analytics');
@@ -89,6 +90,16 @@ export function AnalyticsPage({ onBack }: AnalyticsPageProps) {
     }));
   };
 
+  // Prepare author data for bar chart
+  const getAuthorChartData = () => {
+    if (!data) return [];
+    return data.by_author.map(a => {
+      const colonIdx = a.author.lastIndexOf(':');
+      const name = colonIdx > 0 && colonIdx < a.author.length - 1 ? a.author.substring(0, colonIdx) : a.author;
+      return { name, count: a.count, size: a.size, fullAuthor: a.author };
+    });
+  };
+
   const STATUS_COLORS: Record<string, string> = {
     'Done': '#10b981',
     'Downloading': '#06b6d4',
@@ -121,10 +132,11 @@ export function AnalyticsPage({ onBack }: AnalyticsPageProps) {
               onChange={(e) => setDays(Number(e.target.value))}
               className="bg-slate-700/50 border border-slate-600 rounded-lg py-1.5 sm:py-2 px-2 sm:px-3 text-xs sm:text-sm text-white focus:outline-none focus:border-cyan-500"
             >
-              <option value={7}>7 days</option>
-              <option value={14}>14 days</option>
-              <option value={30}>30 days</option>
+              <option value={1}>1 day</option>
+              <option value={7}>1 week</option>
+              <option value={30}>1 month</option>
               <option value={90}>90 days</option>
+              <option value={0}>All time</option>
             </select>
             <select
               value={groupBy}
@@ -134,6 +146,15 @@ export function AnalyticsPage({ onBack }: AnalyticsPageProps) {
               <option value="day">By Day</option>
               <option value="hour">By Hour</option>
             </select>
+            <label className="flex items-center gap-1.5 text-xs sm:text-sm text-slate-400 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={includeDeleted}
+                onChange={(e) => setIncludeDeleted(e.target.checked)}
+                className="w-3.5 h-3.5 rounded border-slate-600 bg-slate-700 text-cyan-500 focus:ring-cyan-500 focus:ring-offset-0 cursor-pointer"
+              />
+              Deleted
+            </label>
           </div>
         </div>
 
@@ -240,13 +261,13 @@ export function AnalyticsPage({ onBack }: AnalyticsPageProps) {
               </div>
             </div>
 
-            {/* Two Column Layout */}
-            <div className="grid md:grid-cols-2 gap-4 sm:gap-6">
+            {/* Three Column Layout: Source, Status, Author */}
+            <div className="grid md:grid-cols-3 gap-4 sm:gap-6">
               {/* Downloads by Source */}
               <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-3 sm:p-4">
                 <div className="flex items-center gap-2 text-white text-sm sm:text-base font-medium mb-3 sm:mb-4">
                   <Download className="w-4 h-4 sm:w-5 sm:h-5 text-purple-400" />
-                  Downloads by Source
+                  By Source
                 </div>
                 <div className="h-48 sm:h-64">
                   <ResponsiveContainer width="100%" height="100%">
@@ -255,8 +276,8 @@ export function AnalyticsPage({ onBack }: AnalyticsPageProps) {
                         data={getSourceChartData()}
                         cx="50%"
                         cy="50%"
-                        innerRadius={50}
-                        outerRadius={80}
+                        innerRadius={40}
+                        outerRadius={70}
                         paddingAngle={2}
                         dataKey="value"
                       >
@@ -271,9 +292,10 @@ export function AnalyticsPage({ onBack }: AnalyticsPageProps) {
                           borderRadius: '8px',
                           color: '#fff'
                         }}
+                        itemStyle={{ color: '#fff' }}
                       />
                       <Legend
-                        wrapperStyle={{ color: '#94a3b8', fontSize: '12px' }}
+                        wrapperStyle={{ color: '#94a3b8', fontSize: '11px' }}
                         formatter={(value) => <span style={{ color: '#94a3b8' }}>{value}</span>}
                       />
                     </PieChart>
@@ -285,7 +307,7 @@ export function AnalyticsPage({ onBack }: AnalyticsPageProps) {
               <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-3 sm:p-4">
                 <div className="flex items-center gap-2 text-white text-sm sm:text-base font-medium mb-3 sm:mb-4">
                   <CheckCircle className="w-4 h-4 sm:w-5 sm:h-5 text-green-400" />
-                  Downloads by Status
+                  By Status
                 </div>
                 <div className="h-48 sm:h-64">
                   <ResponsiveContainer width="100%" height="100%">
@@ -294,8 +316,8 @@ export function AnalyticsPage({ onBack }: AnalyticsPageProps) {
                         data={getStatusChartData()}
                         cx="50%"
                         cy="50%"
-                        innerRadius={50}
-                        outerRadius={80}
+                        innerRadius={40}
+                        outerRadius={70}
                         paddingAngle={2}
                         dataKey="value"
                       >
@@ -310,9 +332,50 @@ export function AnalyticsPage({ onBack }: AnalyticsPageProps) {
                           borderRadius: '8px',
                           color: '#fff'
                         }}
+                        itemStyle={{ color: '#fff' }}
                       />
                       <Legend
-                        wrapperStyle={{ color: '#94a3b8', fontSize: '12px' }}
+                        wrapperStyle={{ color: '#94a3b8', fontSize: '11px' }}
+                        formatter={(value) => <span style={{ color: '#94a3b8' }}>{value}</span>}
+                      />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+
+              {/* Downloads by Author */}
+              <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-3 sm:p-4">
+                <div className="flex items-center gap-2 text-white text-sm sm:text-base font-medium mb-3 sm:mb-4">
+                  <User className="w-4 h-4 sm:w-5 sm:h-5 text-emerald-400" />
+                  By Author
+                </div>
+                <div className="h-48 sm:h-64">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={getAuthorChartData().map(a => ({ name: a.name, value: a.count }))}
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={40}
+                        outerRadius={70}
+                        paddingAngle={2}
+                        dataKey="value"
+                      >
+                        {getAuthorChartData().map((_, index) => (
+                          <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                        ))}
+                      </Pie>
+                      <Tooltip
+                        contentStyle={{
+                          backgroundColor: '#1e293b',
+                          border: '1px solid #334155',
+                          borderRadius: '8px',
+                          color: '#fff'
+                        }}
+                        itemStyle={{ color: '#fff' }}
+                      />
+                      <Legend
+                        wrapperStyle={{ color: '#94a3b8', fontSize: '11px' }}
                         formatter={(value) => <span style={{ color: '#94a3b8' }}>{value}</span>}
                       />
                     </PieChart>
@@ -325,7 +388,7 @@ export function AnalyticsPage({ onBack }: AnalyticsPageProps) {
             <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-3 sm:p-4">
               <div className="flex items-center gap-2 text-white text-sm sm:text-base font-medium mb-3 sm:mb-4">
                 <Clock className="w-4 h-4 sm:w-5 sm:h-5 text-amber-400" />
-                Hourly Distribution (All Time)
+                Hourly Distribution{days === 0 ? ' (All Time)' : ` (${days === 1 ? '1 day' : days === 7 ? '1 week' : days === 30 ? '1 month' : `${days} days`})`}
               </div>
               <div className="h-36 sm:h-48">
                 <ResponsiveContainer width="100%" height="100%">

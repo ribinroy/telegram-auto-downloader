@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Search, Download, Wifi, WifiOff, Loader2, HardDrive, Clock, Zap, LogOut, Settings, Plus, BarChart3, X } from 'lucide-react';
 import { formatBytes, formatSpeed } from './utils/format';
-import { fetchDownloads, fetchStats, retryDownload, stopDownload, deleteDownload, verifyToken, clearToken, getToken, fetchSecuredMappingIds, type SortBy, type SortOrder } from './api';
+import { fetchDownloads, fetchStats, fetchAuthors, retryDownload, stopDownload, deleteDownload, verifyToken, clearToken, getToken, fetchSecuredMappingIds, type SortBy, type SortOrder } from './api';
 import { connectSocket, disconnectSocket, type ProgressUpdate, type StatusUpdate, type DeletedUpdate } from './api/socket';
 import { DownloadItem } from './components/DownloadItem';
 import { LoginPage } from './components/LoginPage';
@@ -91,6 +91,8 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
   const [activeTab, setActiveTab] = useState<TabType>('all');
   const [sortBy, setSortBy] = useState<SortBy>('created_at');
   const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
+  const [authors, setAuthors] = useState<string[]>([]);
+  const [selectedAuthor, setSelectedAuthor] = useState<string>('');
 
   // Debounce search input
   useEffect(() => {
@@ -209,6 +211,7 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
         limit: PAGE_SIZE,
         offset,
         excludeMappingIds: excludeIds,
+        author: selectedAuthor || undefined,
       });
       if (reset) {
         setDownloads(data.downloads);
@@ -233,7 +236,7 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
       setLoading(false);
       setLoadingMore(false);
     }
-  }, [debouncedSearch, activeTab, sortBy, sortOrder, showSecured, securedMappingIds, downloads.length]);
+  }, [debouncedSearch, activeTab, sortBy, sortOrder, showSecured, securedMappingIds, selectedAuthor, downloads.length]);
 
   // Load more downloads when scrolling to bottom
   const loadMore = useCallback(() => {
@@ -271,13 +274,24 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
       loadDownloads(true);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedSearch, activeTab, sortBy, sortOrder, showSecured, securedMappingIds, securedMappingIdsLoaded]);
+  }, [debouncedSearch, activeTab, sortBy, sortOrder, showSecured, securedMappingIds, securedMappingIdsLoaded, selectedAuthor]);
 
-  // Load secured mapping IDs and stats on mount
+  // Load authors
+  const loadAuthors = useCallback(async () => {
+    try {
+      const data = await fetchAuthors();
+      setAuthors(data);
+    } catch (err) {
+      console.error('Failed to fetch authors');
+    }
+  }, []);
+
+  // Load secured mapping IDs, stats, and authors on mount
   useEffect(() => {
     loadSecuredMappingIds();
     loadStats();
-  }, [loadSecuredMappingIds, loadStats]);
+    loadAuthors();
+  }, [loadSecuredMappingIds, loadStats, loadAuthors]);
 
   // Handle scroll to load more (window scroll)
   useEffect(() => {
@@ -523,8 +537,22 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
               </button>
             </div>
 
-            {/* Sort - visible on mobile in top row */}
+            {/* Sort and Author filter - visible on mobile in top row */}
             <div className="flex items-center gap-1.5 sm:gap-2 sm:hidden">
+              {authors.length > 1 && (
+                <select
+                  value={selectedAuthor}
+                  onChange={(e) => setSelectedAuthor(e.target.value)}
+                  className="bg-slate-800/50 border border-slate-700 rounded-lg py-1.5 px-2 text-xs text-white focus:outline-none focus:border-cyan-500 transition-colors cursor-pointer"
+                >
+                  <option value="">All authors</option>
+                  {authors.map(a => {
+                    const colonIdx = a.lastIndexOf(':');
+                    const label = colonIdx > 0 && colonIdx < a.length - 1 ? a.substring(0, colonIdx) : a;
+                    return <option key={a} value={a}>{label}</option>;
+                  })}
+                </select>
+              )}
               <select
                 value={sortBy}
                 onChange={(e) => setSortBy(e.target.value as SortBy)}
@@ -575,8 +603,22 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
             </div>
           </div>
 
-          {/* Sort - hidden on mobile, visible on desktop */}
+          {/* Author filter, Sort - hidden on mobile, visible on desktop */}
           <div className="hidden sm:flex items-center gap-2">
+            {authors.length > 1 && (
+              <select
+                value={selectedAuthor}
+                onChange={(e) => setSelectedAuthor(e.target.value)}
+                className="bg-slate-800/50 border border-slate-700 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-cyan-500 transition-colors cursor-pointer"
+              >
+                <option value="">All authors</option>
+                {authors.map(a => {
+                  const colonIdx = a.lastIndexOf(':');
+                  const label = colonIdx > 0 && colonIdx < a.length - 1 ? a.substring(0, colonIdx) : a;
+                  return <option key={a} value={a}>{label}</option>;
+                })}
+              </select>
+            )}
             <select
               value={sortBy}
               onChange={(e) => setSortBy(e.target.value as SortBy)}

@@ -73,6 +73,7 @@ export interface FetchDownloadsOptions {
   limit?: number;
   offset?: number;
   excludeMappingIds?: number[];
+  author?: string;
 }
 
 export async function fetchDownloads(options: FetchDownloadsOptions = {}): Promise<DownloadsResponse> {
@@ -84,6 +85,7 @@ export async function fetchDownloads(options: FetchDownloadsOptions = {}): Promi
     limit = 30,
     offset = 0,
     excludeMappingIds,
+    author,
   } = options;
 
   const params = new URLSearchParams();
@@ -96,9 +98,19 @@ export async function fetchDownloads(options: FetchDownloadsOptions = {}): Promi
   if (excludeMappingIds && excludeMappingIds.length > 0) {
     params.set('exclude_mapping_ids', excludeMappingIds.join(','));
   }
+  if (author) params.set('author', author);
 
   const url = `${API_BASE}/api/downloads?${params.toString()}`;
   const response = await fetch(url, { headers: getAuthHeaders() });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  return response.json();
+}
+
+export async function fetchAuthors(): Promise<string[]> {
+  const response = await fetch(`${API_BASE}/api/authors`, { headers: getAuthHeaders() });
   if (response.status === 401) {
     clearToken();
     window.location.reload();
@@ -295,10 +307,11 @@ export async function saveCookies(cookies: string): Promise<{ status?: string; e
 }
 
 // Analytics API
-export async function fetchAnalytics(days: number = 30, groupBy: 'day' | 'hour' = 'day'): Promise<AnalyticsData> {
+export async function fetchAnalytics(days: number = 30, groupBy: 'day' | 'hour' = 'day', includeDeleted: boolean = false): Promise<AnalyticsData> {
   const params = new URLSearchParams();
   params.set('days', days.toString());
   params.set('group_by', groupBy);
+  if (includeDeleted) params.set('include_deleted', 'true');
 
   const response = await fetch(`${API_BASE}/api/analytics?${params.toString()}`, {
     headers: getAuthHeaders(),

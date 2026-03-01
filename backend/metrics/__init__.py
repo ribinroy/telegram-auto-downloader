@@ -102,6 +102,13 @@ db_downloads_count = Gauge(
     ['status']
 )
 
+# Per-author stats
+db_downloads_by_author = Gauge(
+    'downlee_db_downloads_by_author',
+    'Total downloads in database by author',
+    ['author', 'status']
+)
+
 
 def get_metrics():
     """Generate Prometheus metrics output"""
@@ -167,14 +174,18 @@ def update_pending_bytes(pending: int):
     bytes_pending.set(pending)
 
 
-def update_db_stats(stats_by_status: dict):
+def update_db_stats(stats_by_status: dict, stats_by_author: dict = None):
     """Update database statistics
 
     Args:
         stats_by_status: Dict of {status: count}
+        stats_by_author: Dict of {(author, status): count}
     """
     for status, count in stats_by_status.items():
         db_downloads_count.labels(status=status).set(count)
+    if stats_by_author:
+        for (author, status), count in stats_by_author.items():
+            db_downloads_by_author.labels(author=author, status=status).set(count)
 
 
 def update_queue_size(size: int):

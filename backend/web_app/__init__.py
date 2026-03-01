@@ -89,7 +89,7 @@ class WebApp:
             print("Client disconnected")
 
     def get_downloads_data(self, search='', filter_type='all', sort_by='created_at', sort_order='desc',
-                           limit=30, offset=0, exclude_mapping_ids=None):
+                           limit=30, offset=0, exclude_mapping_ids=None, author=None):
         """Get downloads data (paginated)
 
         Args:
@@ -100,6 +100,7 @@ class WebApp:
             limit: Number of items to return (default 30)
             offset: Number of items to skip (default 0)
             exclude_mapping_ids: List of mapping IDs to exclude from results
+            author: Filter by specific author
         """
         db = get_db()
         all_downloads = db.get_all_downloads()
@@ -121,15 +122,17 @@ class WebApp:
                 downloaded_from = (d.get("downloaded_from") or "").lower()
                 # Check URL
                 url = (d.get("url") or "").lower()
+                # Check author
+                author = (d.get("author") or "").lower()
 
                 # Exact substring match first
-                if query in file_name or query in downloaded_from or query in url:
+                if query in file_name or query in downloaded_from or query in url or query in author:
                     filtered_list.append(d)
                     continue
 
                 # Fuzzy search: check if all query words appear in any field
                 query_words = query.split()
-                searchable_text = f"{file_name} {downloaded_from} {url}"
+                searchable_text = f"{file_name} {downloaded_from} {url} {author}"
                 if all(word in searchable_text for word in query_words):
                     filtered_list.append(d)
         else:
@@ -138,6 +141,10 @@ class WebApp:
         # Filter out excluded sources
         if excluded_sources:
             filtered_list = [d for d in filtered_list if d.get("downloaded_from") not in excluded_sources]
+
+        # Filter by author
+        if author:
+            filtered_list = [d for d in filtered_list if d.get("author") == author]
 
         # Apply filter_type
         if filter_type == 'active':
@@ -236,6 +243,7 @@ class WebApp:
 
         # Count by status
         status_counts = {}
+        author_status_counts = {}
         speed_by_source = {}
         total_speed = 0
         pending_bytes = 0
@@ -244,9 +252,14 @@ class WebApp:
         for d in all_downloads:
             status = d.get('status', 'unknown')
             source = d.get('downloaded_from', 'unknown')
+            author = d.get('author') or 'unknown'
 
             # Count by status
             status_counts[status] = status_counts.get(status, 0) + 1
+
+            # Count by author + status
+            key = (author, status)
+            author_status_counts[key] = author_status_counts.get(key, 0) + 1
 
             # Active downloads speed
             if status == 'downloading':
@@ -261,7 +274,7 @@ class WebApp:
                 pending_bytes += max(0, total_bytes - downloaded_bytes)
 
         # Update metrics
-        metrics.update_db_stats(status_counts)
+        metrics.update_db_stats(status_counts, author_status_counts)
         metrics.update_speed(total_speed, speed_by_source)
         metrics.update_pending_bytes(pending_bytes)
         metrics.update_queue_size(active_count)
@@ -332,7 +345,17 @@ class WebApp:
             # Parse exclude_mapping_ids as comma-separated list of integers
             exclude_ids_str = request.args.get("exclude_mapping_ids", "")
             exclude_mapping_ids = [int(x) for x in exclude_ids_str.split(",") if x.strip().isdigit()] if exclude_ids_str else None
-            return jsonify(self.get_downloads_data(search, filter_type, sort_by, sort_order, limit, offset, exclude_mapping_ids))
+            author = request.args.get("author", "").strip() or None
+            return jsonify(self.get_downloads_data(search, filter_type, sort_by, sort_order, limit, offset, exclude_mapping_ids, author))
+
+        @self.app.route("/api/authors", methods=["GET"])
+        @token_required
+        def get_authors():
+            """Get distinct author values"""
+            db = get_db()
+            all_downloads = db.get_all_downloads()
+            authors = sorted(set(d.get("author") for d in all_downloads if d.get("author")))
+            return jsonify(authors)
 
         @self.app.route("/api/stats", methods=["GET"])
         @token_required
@@ -503,13 +526,17 @@ class WebApp:
             if not self.event_loop:
                 return jsonify({"error": "Event loop not available"}), 500
 
+            # Get the logged-in user's username as the author
+            author = request.user.get('username') if hasattr(request, 'user') else None
+
             result = self.ytdlp_downloader.start_download(
                 url, self.event_loop,
                 format_id=format_id,
                 title=title,
                 ext=ext,
                 filesize=filesize,
-                resolution=resolution
+                resolution=resolution,
+                author=author
             )
 
             if 'error' in result:
@@ -612,9 +639,10 @@ class WebApp:
         def get_analytics():
             """Get download analytics data for charts"""
             db = get_db()
-            all_downloads = db.get_all_downloads()
+            include_deleted = request.args.get("include_deleted", "false").lower() == "true"
+            all_downloads = db.get_all_downloads(include_deleted=include_deleted)
 
-            # Get date range from query params (default: last 30 days)
+            # Get date range from query params (default: last 30 days, 0 = all time)
             days = int(request.args.get("days", 30))
             group_by = request.args.get("group_by", "day")  # 'day' or 'hour'
 
@@ -622,7 +650,7 @@ class WebApp:
             from collections import defaultdict
 
             now = datetime.utcnow()
-            cutoff = now - timedelta(days=days)
+            cutoff = now - timedelta(days=days) if days > 0 else None
 
             # Filter downloads within date range
             recent_downloads = []
@@ -631,14 +659,16 @@ class WebApp:
                 if created:
                     try:
                         dt = datetime.fromisoformat(created.replace('Z', '+00:00')) if isinstance(created, str) else created
-                        if dt.replace(tzinfo=None) >= cutoff:
-                            recent_downloads.append({**d, '_dt': dt.replace(tzinfo=None)})
+                        dt_naive = dt.replace(tzinfo=None)
+                        if cutoff is None or dt_naive >= cutoff:
+                            recent_downloads.append({**d, '_dt': dt_naive})
                     except:
                         pass
 
             # Group by time period
             downloads_by_time = defaultdict(lambda: {'count': 0, 'size': 0})
             downloads_by_source = defaultdict(lambda: {'count': 0, 'size': 0})
+            downloads_by_author = defaultdict(lambda: {'count': 0, 'size': 0})
             downloads_by_status = defaultdict(int)
             hourly_distribution = defaultdict(int)  # Downloads by hour of day (0-23)
 
@@ -661,6 +691,11 @@ class WebApp:
                 downloads_by_source[source]['count'] += 1
                 downloads_by_source[source]['size'] += size
 
+                # By author
+                author = d.get('author') or 'unknown'
+                downloads_by_author[author]['count'] += 1
+                downloads_by_author[author]['size'] += size
+
                 # By status
                 downloads_by_status[status] += 1
 
@@ -681,8 +716,12 @@ class WebApp:
             # Fill in missing dates/hours
             if group_by == 'day' and time_labels:
                 filled_data = []
-                current = cutoff.date()
+                if cutoff is not None:
+                    start_date = cutoff.date()
+                else:
+                    start_date = datetime.strptime(time_labels[0], '%Y-%m-%d').date()
                 end = now.date()
+                current = start_date
                 while current <= end:
                     key = current.strftime('%Y-%m-%d')
                     if key in downloads_by_time:
@@ -708,6 +747,12 @@ class WebApp:
                 for h in range(24)
             ]
 
+            # Sort authors by count
+            author_data = [
+                {'author': author, 'count': data['count'], 'size': data['size']}
+                for author, data in sorted(downloads_by_author.items(), key=lambda x: -x[1]['count'])
+            ]
+
             # Summary stats
             total_downloads = len(recent_downloads)
             total_size = sum(d.get('total_bytes', 0) or 0 for d in recent_downloads)
@@ -717,6 +762,7 @@ class WebApp:
             return jsonify({
                 'time_series': time_data,
                 'by_source': source_data,
+                'by_author': author_data,
                 'by_status': dict(downloads_by_status),
                 'hourly_distribution': hourly_data,
                 'summary': {

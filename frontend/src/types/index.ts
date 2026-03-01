@@ -14,6 +14,7 @@ export interface Download {
   downloaded_from: string;  // 'telegram' or domain name
   url: string | null;  // Source URL for yt-dlp downloads
   file_deleted: boolean;  // True if physical file was deleted from disk
+  author: string | null;  // username:id for telegram, username for downlee
 }
 
 export interface VideoFormat {
@@ -80,6 +81,12 @@ export interface SourceData {
   size: number;
 }
 
+export interface AuthorData {
+  author: string;
+  count: number;
+  size: number;
+}
+
 export interface HourlyData {
   hour: number;
   count: number;
@@ -96,6 +103,7 @@ export interface AnalyticsSummary {
 export interface AnalyticsData {
   time_series: TimeSeriesPoint[];
   by_source: SourceData[];
+  by_author: AuthorData[];
   by_status: Record<string, number>;
   hourly_distribution: HourlyData[];
   summary: AnalyticsSummary;
