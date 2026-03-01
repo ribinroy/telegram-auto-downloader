@@ -641,7 +641,7 @@ class WebApp:
             db = get_db()
             all_downloads = db.get_all_downloads()
 
-            # Get date range from query params (default: last 30 days)
+            # Get date range from query params (default: last 30 days, 0 = all time)
             days = int(request.args.get("days", 30))
             group_by = request.args.get("group_by", "day")  # 'day' or 'hour'
 
@@ -649,7 +649,7 @@ class WebApp:
             from collections import defaultdict
 
             now = datetime.utcnow()
-            cutoff = now - timedelta(days=days)
+            cutoff = now - timedelta(days=days) if days > 0 else None
 
             # Filter downloads within date range
             recent_downloads = []
@@ -658,8 +658,9 @@ class WebApp:
                 if created:
                     try:
                         dt = datetime.fromisoformat(created.replace('Z', '+00:00')) if isinstance(created, str) else created
-                        if dt.replace(tzinfo=None) >= cutoff:
-                            recent_downloads.append({**d, '_dt': dt.replace(tzinfo=None)})
+                        dt_naive = dt.replace(tzinfo=None)
+                        if cutoff is None or dt_naive >= cutoff:
+                            recent_downloads.append({**d, '_dt': dt_naive})
                     except:
                         pass
 
@@ -714,8 +715,12 @@ class WebApp:
             # Fill in missing dates/hours
             if group_by == 'day' and time_labels:
                 filled_data = []
-                current = cutoff.date()
+                if cutoff is not None:
+                    start_date = cutoff.date()
+                else:
+                    start_date = datetime.strptime(time_labels[0], '%Y-%m-%d').date()
                 end = now.date()
+                current = start_date
                 while current <= end:
                     key = current.strftime('%Y-%m-%d')
                     if key in downloads_by_time:

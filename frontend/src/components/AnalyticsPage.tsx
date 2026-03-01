@@ -131,10 +131,11 @@ export function AnalyticsPage({ onBack }: AnalyticsPageProps) {
               onChange={(e) => setDays(Number(e.target.value))}
               className="bg-slate-700/50 border border-slate-600 rounded-lg py-1.5 sm:py-2 px-2 sm:px-3 text-xs sm:text-sm text-white focus:outline-none focus:border-cyan-500"
             >
-              <option value={7}>7 days</option>
-              <option value={14}>14 days</option>
-              <option value={30}>30 days</option>
+              <option value={1}>1 day</option>
+              <option value={7}>1 week</option>
+              <option value={30}>1 month</option>
               <option value={90}>90 days</option>
+              <option value={0}>All time</option>
             </select>
             <select
               value={groupBy}
@@ -377,7 +378,7 @@ export function AnalyticsPage({ onBack }: AnalyticsPageProps) {
             <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-3 sm:p-4">
               <div className="flex items-center gap-2 text-white text-sm sm:text-base font-medium mb-3 sm:mb-4">
                 <Clock className="w-4 h-4 sm:w-5 sm:h-5 text-amber-400" />
-                Hourly Distribution (All Time)
+                Hourly Distribution{days === 0 ? ' (All Time)' : ` (${days === 1 ? '1 day' : days === 7 ? '1 week' : days === 30 ? '1 month' : `${days} days`})`}
               </div>
               <div className="h-36 sm:h-48">
                 <ResponsiveContainer width="100%" height="100%">
