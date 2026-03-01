@@ -168,6 +168,16 @@ function getStatusColor(status: Download['status']) {
   }
 }
 
+function parseAuthor(author: string | null): { displayName: string; tooltip: string } {
+  if (!author) return { displayName: '', tooltip: '' };
+  const colonIdx = author.lastIndexOf(':');
+  if (colonIdx > 0 && colonIdx < author.length - 1) {
+    const name = author.substring(0, colonIdx);
+    return { displayName: name, tooltip: author };
+  }
+  return { displayName: author, tooltip: author };
+}
+
 export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadItemProps) {
   const [confirmAction, setConfirmAction] = useState<'stop' | 'delete' | null>(null);
   const [videoPlayerOpen, setVideoPlayerOpen] = useState(false);
@@ -434,14 +444,17 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
                 </a>
               </Tooltip>
             )}
-            {download.author && (
-              <Tooltip content="Author">
-                <div className="flex items-center gap-1 cursor-default">
-                  <User className="w-3 h-3" />
-                  <span>{download.author}</span>
-                </div>
-              </Tooltip>
-            )}
+            {download.author && (() => {
+              const { displayName, tooltip } = parseAuthor(download.author);
+              return (
+                <Tooltip content={tooltip}>
+                  <div className="flex items-center gap-1 cursor-default">
+                    <User className="w-3 h-3" />
+                    <span>{displayName}</span>
+                  </div>
+                </Tooltip>
+              );
+            })()}
             <Tooltip content="Database ID">
               <div className="flex items-center gap-1 cursor-default">
                 <span className="text-slate-600">#</span>
@@ -473,12 +486,17 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
                 <ExternalLink className="w-3 h-3" />
               </a>
             )}
-            {download.author && (
-              <div className="flex items-center gap-1">
-                <User className="w-3 h-3" />
-                <span className="truncate max-w-[80px]">{download.author}</span>
-              </div>
-            )}
+            {download.author && (() => {
+              const { displayName, tooltip } = parseAuthor(download.author);
+              return (
+                <Tooltip content={tooltip}>
+                  <div className="flex items-center gap-1">
+                    <User className="w-3 h-3" />
+                    <span className="truncate max-w-[80px]">{displayName}</span>
+                  </div>
+                </Tooltip>
+              );
+            })()}
             <span>#{download.id}</span>
             {download.created_at && (
               <div className="flex items-center gap-1">
