@@ -503,13 +503,17 @@ class WebApp:
             if not self.event_loop:
                 return jsonify({"error": "Event loop not available"}), 500
 
+            # Get the logged-in user's username as the author
+            author = request.user.get('username') if hasattr(request, 'user') else None
+
             result = self.ytdlp_downloader.start_download(
                 url, self.event_loop,
                 format_id=format_id,
                 title=title,
                 ext=ext,
                 filesize=filesize,
-                resolution=resolution
+                resolution=resolution,
+                author=author
             )
 
             if 'error' in result:

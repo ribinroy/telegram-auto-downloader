@@ -512,7 +512,7 @@ class YtdlpDownloader:
             self.processes.pop(message_id, None)
             self.download_tasks.pop(message_id, None)
 
-    def start_download(self, url: str, loop, format_id: str = None, title: str = None, ext: str = None, filesize: int = None, resolution: str = None) -> dict:
+    def start_download(self, url: str, loop, format_id: str = None, title: str = None, ext: str = None, filesize: int = None, resolution: str = None, author: str = None) -> dict:
         """Start a new download and return the download info"""
         db = get_db()
 
@@ -546,7 +546,8 @@ class YtdlpDownloader:
             pending_time=None,
             message_id=message_id,
             downloaded_from=domain,
-            url=url
+            url=url,
+            author=author
         )
 
         # Emit new download event

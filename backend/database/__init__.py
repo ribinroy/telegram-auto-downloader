@@ -36,6 +36,7 @@ class Download(Base):
     downloaded_from = Column(String(100), default='telegram')  # 'telegram' or domain name
     url = Column(Text, nullable=True)  # Source URL for yt-dlp downloads
     file_deleted = Column(Boolean, default=False)  # True if physical file was deleted from disk
+    author = Column(String(200), nullable=True)  # username:id for telegram, username for downlee
 
     def to_dict(self):
         """Convert model to dictionary"""
@@ -54,7 +55,8 @@ class Download(Base):
             'pending_time': self.pending_time,
             'downloaded_from': self.downloaded_from or 'telegram',
             'url': self.url,
-            'file_deleted': self.file_deleted or False
+            'file_deleted': self.file_deleted or False,
+            'author': self.author
         }
 
 
@@ -150,6 +152,11 @@ class DatabaseManager:
                 conn.execute(text('ALTER TABLE downloads ADD COLUMN file_deleted BOOLEAN DEFAULT FALSE'))
                 conn.commit()
 
+            # Add author column if it doesn't exist
+            if 'author' not in columns:
+                conn.execute(text('ALTER TABLE downloads ADD COLUMN author VARCHAR(200)'))
+                conn.commit()
+
     def get_session(self):
         """Get a new database session"""
         return self.Session()
@@ -160,7 +167,7 @@ class DatabaseManager:
 
     def add_download(self, file, status='downloading', progress=0, speed=0,
                      error=None, downloaded_bytes=0, total_bytes=0, pending_time=None,
-                     message_id=None, downloaded_from='telegram', url=None):
+                     message_id=None, downloaded_from='telegram', url=None, author=None):
         """Add a new download entry"""
         session = self.get_session()
         try:
@@ -180,7 +187,8 @@ class DatabaseManager:
                 total_bytes=total_bytes,
                 pending_time=pending_time,
                 downloaded_from=downloaded_from,
-                url=url
+                url=url,
+                author=author
             )
             session.add(download)
             session.commit()

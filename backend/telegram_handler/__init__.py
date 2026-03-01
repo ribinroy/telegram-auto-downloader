@@ -220,6 +220,19 @@ class TelegramDownloader:
 
         db = get_db()
 
+        # Extract author info (username:id) from the sender
+        author = None
+        try:
+            sender = await event.get_sender()
+            if sender:
+                username = getattr(sender, 'username', None) or getattr(sender, 'first_name', None) or ''
+                sender_id = getattr(sender, 'id', '')
+                author = f"{username}:{sender_id}" if username else str(sender_id)
+            elif event.message.post_author:
+                author = event.message.post_author
+        except Exception as e:
+            logging.error(f"Failed to get sender info: {e}")
+
         # Add to database with Telegram message ID
         new_download = db.add_download(
             file=filename,
@@ -230,7 +243,8 @@ class TelegramDownloader:
             downloaded_bytes=0,
             total_bytes=0,
             pending_time=None,
-            message_id=event.id
+            message_id=event.id,
+            author=author
         )
 
         # Emit new download event
@@ -256,7 +270,7 @@ class TelegramDownloader:
             elif 12 <= hour < 17:
                 greeting = "Good Afternoon"
             else:
-                greeting = "Good Night"
+                greeting = "Good Evening"
 
             await self.client.send_message(self.chat_id, f"{greeting}, reporting for duty 🫡")
         except Exception as e:
