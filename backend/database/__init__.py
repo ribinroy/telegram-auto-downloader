@@ -274,13 +274,14 @@ class DatabaseManager:
         finally:
             self.close_session()
 
-    def get_all_downloads(self):
-        """Get all non-deleted downloads ordered by updated_at descending"""
+    def get_all_downloads(self, include_deleted=False):
+        """Get all downloads ordered by updated_at descending"""
         session = self.get_session()
         try:
-            downloads = session.query(Download).filter(
-                Download.deleted_at == None
-            ).order_by(Download.updated_at.desc()).all()
+            query = session.query(Download)
+            if not include_deleted:
+                query = query.filter(Download.deleted_at == None)
+            downloads = query.order_by(Download.updated_at.desc()).all()
             return [d.to_dict() for d in downloads]
         finally:
             self.close_session()
