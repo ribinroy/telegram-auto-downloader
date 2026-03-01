@@ -89,7 +89,7 @@ class WebApp:
             print("Client disconnected")
 
     def get_downloads_data(self, search='', filter_type='all', sort_by='created_at', sort_order='desc',
-                           limit=30, offset=0, exclude_mapping_ids=None):
+                           limit=30, offset=0, exclude_mapping_ids=None, author=None):
         """Get downloads data (paginated)
 
         Args:
@@ -100,6 +100,7 @@ class WebApp:
             limit: Number of items to return (default 30)
             offset: Number of items to skip (default 0)
             exclude_mapping_ids: List of mapping IDs to exclude from results
+            author: Filter by specific author
         """
         db = get_db()
         all_downloads = db.get_all_downloads()
@@ -140,6 +141,10 @@ class WebApp:
         # Filter out excluded sources
         if excluded_sources:
             filtered_list = [d for d in filtered_list if d.get("downloaded_from") not in excluded_sources]
+
+        # Filter by author
+        if author:
+            filtered_list = [d for d in filtered_list if d.get("author") == author]
 
         # Apply filter_type
         if filter_type == 'active':
@@ -334,7 +339,17 @@ class WebApp:
             # Parse exclude_mapping_ids as comma-separated list of integers
             exclude_ids_str = request.args.get("exclude_mapping_ids", "")
             exclude_mapping_ids = [int(x) for x in exclude_ids_str.split(",") if x.strip().isdigit()] if exclude_ids_str else None
-            return jsonify(self.get_downloads_data(search, filter_type, sort_by, sort_order, limit, offset, exclude_mapping_ids))
+            author = request.args.get("author", "").strip() or None
+            return jsonify(self.get_downloads_data(search, filter_type, sort_by, sort_order, limit, offset, exclude_mapping_ids, author))
+
+        @self.app.route("/api/authors", methods=["GET"])
+        @token_required
+        def get_authors():
+            """Get distinct author values"""
+            db = get_db()
+            all_downloads = db.get_all_downloads()
+            authors = sorted(set(d.get("author") for d in all_downloads if d.get("author")))
+            return jsonify(authors)
 
         @self.app.route("/api/stats", methods=["GET"])
         @token_required
