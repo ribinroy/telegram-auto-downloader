@@ -250,13 +250,13 @@ export function AnalyticsPage({ onBack }: AnalyticsPageProps) {
               </div>
             </div>
 
-            {/* Two Column Layout */}
-            <div className="grid md:grid-cols-2 gap-4 sm:gap-6">
+            {/* Three Column Layout: Source, Status, Author */}
+            <div className="grid md:grid-cols-3 gap-4 sm:gap-6">
               {/* Downloads by Source */}
               <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-3 sm:p-4">
                 <div className="flex items-center gap-2 text-white text-sm sm:text-base font-medium mb-3 sm:mb-4">
                   <Download className="w-4 h-4 sm:w-5 sm:h-5 text-purple-400" />
-                  Downloads by Source
+                  By Source
                 </div>
                 <div className="h-48 sm:h-64">
                   <ResponsiveContainer width="100%" height="100%">
@@ -265,8 +265,8 @@ export function AnalyticsPage({ onBack }: AnalyticsPageProps) {
                         data={getSourceChartData()}
                         cx="50%"
                         cy="50%"
-                        innerRadius={50}
-                        outerRadius={80}
+                        innerRadius={40}
+                        outerRadius={70}
                         paddingAngle={2}
                         dataKey="value"
                       >
@@ -283,7 +283,7 @@ export function AnalyticsPage({ onBack }: AnalyticsPageProps) {
                         }}
                       />
                       <Legend
-                        wrapperStyle={{ color: '#94a3b8', fontSize: '12px' }}
+                        wrapperStyle={{ color: '#94a3b8', fontSize: '11px' }}
                         formatter={(value) => <span style={{ color: '#94a3b8' }}>{value}</span>}
                       />
                     </PieChart>
@@ -295,7 +295,7 @@ export function AnalyticsPage({ onBack }: AnalyticsPageProps) {
               <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-3 sm:p-4">
                 <div className="flex items-center gap-2 text-white text-sm sm:text-base font-medium mb-3 sm:mb-4">
                   <CheckCircle className="w-4 h-4 sm:w-5 sm:h-5 text-green-400" />
-                  Downloads by Status
+                  By Status
                 </div>
                 <div className="h-48 sm:h-64">
                   <ResponsiveContainer width="100%" height="100%">
@@ -304,8 +304,8 @@ export function AnalyticsPage({ onBack }: AnalyticsPageProps) {
                         data={getStatusChartData()}
                         cx="50%"
                         cy="50%"
-                        innerRadius={50}
-                        outerRadius={80}
+                        innerRadius={40}
+                        outerRadius={70}
                         paddingAngle={2}
                         dataKey="value"
                       >
@@ -322,39 +322,36 @@ export function AnalyticsPage({ onBack }: AnalyticsPageProps) {
                         }}
                       />
                       <Legend
-                        wrapperStyle={{ color: '#94a3b8', fontSize: '12px' }}
+                        wrapperStyle={{ color: '#94a3b8', fontSize: '11px' }}
                         formatter={(value) => <span style={{ color: '#94a3b8' }}>{value}</span>}
                       />
                     </PieChart>
                   </ResponsiveContainer>
                 </div>
               </div>
-            </div>
 
-            {/* Downloads by Author */}
-            {data.by_author && data.by_author.length > 0 && (
+              {/* Downloads by Author */}
               <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-3 sm:p-4">
                 <div className="flex items-center gap-2 text-white text-sm sm:text-base font-medium mb-3 sm:mb-4">
                   <User className="w-4 h-4 sm:w-5 sm:h-5 text-emerald-400" />
-                  Downloads by Author
+                  By Author
                 </div>
                 <div className="h-48 sm:h-64">
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={getAuthorChartData()} layout="vertical">
-                      <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                      <XAxis
-                        type="number"
-                        stroke="#64748b"
-                        tick={{ fill: '#94a3b8', fontSize: 12 }}
-                        allowDecimals={false}
-                      />
-                      <YAxis
-                        type="category"
-                        dataKey="name"
-                        stroke="#64748b"
-                        tick={{ fill: '#94a3b8', fontSize: 12 }}
-                        width={100}
-                      />
+                    <PieChart>
+                      <Pie
+                        data={getAuthorChartData().map(a => ({ name: a.name, value: a.count }))}
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={40}
+                        outerRadius={70}
+                        paddingAngle={2}
+                        dataKey="value"
+                      >
+                        {getAuthorChartData().map((_, index) => (
+                          <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                        ))}
+                      </Pie>
                       <Tooltip
                         contentStyle={{
                           backgroundColor: '#1e293b',
@@ -362,22 +359,16 @@ export function AnalyticsPage({ onBack }: AnalyticsPageProps) {
                           borderRadius: '8px',
                           color: '#fff'
                         }}
-                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                        formatter={(value: number, _name: string, props: any) => [
-                          `${value} downloads (${formatBytes(props?.payload?.size ?? 0)})`,
-                          props?.payload?.fullAuthor ?? ''
-                        ]}
                       />
-                      <Bar dataKey="count" radius={[0, 4, 4, 0]}>
-                        {getAuthorChartData().map((_, index) => (
-                          <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                        ))}
-                      </Bar>
-                    </BarChart>
+                      <Legend
+                        wrapperStyle={{ color: '#94a3b8', fontSize: '11px' }}
+                        formatter={(value) => <span style={{ color: '#94a3b8' }}>{value}</span>}
+                      />
+                    </PieChart>
                   </ResponsiveContainer>
                 </div>
               </div>
-            )}
+            </div>
 
             {/* Hourly Distribution */}
             <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-3 sm:p-4">
