@@ -121,15 +121,17 @@ class WebApp:
                 downloaded_from = (d.get("downloaded_from") or "").lower()
                 # Check URL
                 url = (d.get("url") or "").lower()
+                # Check author
+                author = (d.get("author") or "").lower()
 
                 # Exact substring match first
-                if query in file_name or query in downloaded_from or query in url:
+                if query in file_name or query in downloaded_from or query in url or query in author:
                     filtered_list.append(d)
                     continue
 
                 # Fuzzy search: check if all query words appear in any field
                 query_words = query.split()
-                searchable_text = f"{file_name} {downloaded_from} {url}"
+                searchable_text = f"{file_name} {downloaded_from} {url} {author}"
                 if all(word in searchable_text for word in query_words):
                     filtered_list.append(d)
         else:
