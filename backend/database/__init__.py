@@ -158,13 +158,17 @@ class DatabaseManager:
                 conn.execute(text('ALTER TABLE downloads ADD COLUMN author VARCHAR(200)'))
                 conn.commit()
 
-            # Migrate is_deleted boolean to deleted_at datetime
+            # Migrate is_deleted boolean to deleted_at timestamp
             if 'is_deleted' in columns and 'deleted_at' not in columns:
-                conn.execute(text('ALTER TABLE downloads ADD COLUMN deleted_at DATETIME'))
-                conn.execute(text("UPDATE downloads SET deleted_at = CURRENT_TIMESTAMP WHERE is_deleted = 1"))
+                conn.execute(text('ALTER TABLE downloads ADD COLUMN deleted_at TIMESTAMP'))
+                conn.execute(text("UPDATE downloads SET deleted_at = CURRENT_TIMESTAMP WHERE is_deleted = TRUE"))
+                conn.execute(text('ALTER TABLE downloads DROP COLUMN is_deleted'))
+                conn.commit()
+            elif 'is_deleted' in columns:
+                conn.execute(text('ALTER TABLE downloads DROP COLUMN is_deleted'))
                 conn.commit()
             elif 'deleted_at' not in columns:
-                conn.execute(text('ALTER TABLE downloads ADD COLUMN deleted_at DATETIME'))
+                conn.execute(text('ALTER TABLE downloads ADD COLUMN deleted_at TIMESTAMP'))
                 conn.commit()
 
     def get_session(self):
