@@ -243,6 +243,7 @@ class WebApp:
 
         # Count by status
         status_counts = {}
+        author_status_counts = {}
         speed_by_source = {}
         total_speed = 0
         pending_bytes = 0
@@ -251,9 +252,14 @@ class WebApp:
         for d in all_downloads:
             status = d.get('status', 'unknown')
             source = d.get('downloaded_from', 'unknown')
+            author = d.get('author') or 'unknown'
 
             # Count by status
             status_counts[status] = status_counts.get(status, 0) + 1
+
+            # Count by author + status
+            key = (author, status)
+            author_status_counts[key] = author_status_counts.get(key, 0) + 1
 
             # Active downloads speed
             if status == 'downloading':
@@ -268,7 +274,7 @@ class WebApp:
                 pending_bytes += max(0, total_bytes - downloaded_bytes)
 
         # Update metrics
-        metrics.update_db_stats(status_counts)
+        metrics.update_db_stats(status_counts, author_status_counts)
         metrics.update_speed(total_speed, speed_by_source)
         metrics.update_pending_bytes(pending_bytes)
         metrics.update_queue_size(active_count)
