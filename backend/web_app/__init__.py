@@ -639,7 +639,8 @@ class WebApp:
         def get_analytics():
             """Get download analytics data for charts"""
             db = get_db()
-            all_downloads = db.get_all_downloads()
+            include_deleted = request.args.get("include_deleted", "false").lower() == "true"
+            all_downloads = db.get_all_downloads(include_deleted=include_deleted)
 
             # Get date range from query params (default: last 30 days, 0 = all time)
             days = int(request.args.get("days", 30))

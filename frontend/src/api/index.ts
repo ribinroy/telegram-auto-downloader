@@ -307,10 +307,11 @@ export async function saveCookies(cookies: string): Promise<{ status?: string; e
 }
 
 // Analytics API
-export async function fetchAnalytics(days: number = 30, groupBy: 'day' | 'hour' = 'day'): Promise<AnalyticsData> {
+export async function fetchAnalytics(days: number = 30, groupBy: 'day' | 'hour' = 'day', includeDeleted: boolean = false): Promise<AnalyticsData> {
   const params = new URLSearchParams();
   params.set('days', days.toString());
   params.set('group_by', groupBy);
+  if (includeDeleted) params.set('include_deleted', 'true');
 
   const response = await fetch(`${API_BASE}/api/analytics?${params.toString()}`, {
     headers: getAuthHeaders(),

@@ -31,16 +31,17 @@ export function AnalyticsPage({ onBack }: AnalyticsPageProps) {
   const [error, setError] = useState<string | null>(null);
   const [days, setDays] = useState(30);
   const [groupBy, setGroupBy] = useState<'day' | 'hour'>('day');
+  const [includeDeleted, setIncludeDeleted] = useState(false);
 
   useEffect(() => {
     loadAnalytics();
-  }, [days, groupBy]);
+  }, [days, groupBy, includeDeleted]);
 
   const loadAnalytics = async () => {
     setLoading(true);
     setError(null);
     try {
-      const result = await fetchAnalytics(days, groupBy);
+      const result = await fetchAnalytics(days, groupBy, includeDeleted);
       setData(result);
     } catch (err) {
       setError('Failed to load analytics');
@@ -145,6 +146,15 @@ export function AnalyticsPage({ onBack }: AnalyticsPageProps) {
               <option value="day">By Day</option>
               <option value="hour">By Hour</option>
             </select>
+            <label className="flex items-center gap-1.5 text-xs sm:text-sm text-slate-400 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={includeDeleted}
+                onChange={(e) => setIncludeDeleted(e.target.checked)}
+                className="w-3.5 h-3.5 rounded border-slate-600 bg-slate-700 text-cyan-500 focus:ring-cyan-500 focus:ring-offset-0 cursor-pointer"
+              />
+              Deleted
+            </label>
           </div>
         </div>
 
