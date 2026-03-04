@@ -212,13 +212,27 @@ class TelegramDownloader:
 
         kind = get_media_folder(event.file.mime_type)
 
-        folder = DOWNLOAD_DIR / kind
-        folder.mkdir(exist_ok=True)
+        db = get_db()
+
+        # Check for custom folder mapping for "telegram" source
+        folder = None
+        mapping = db.get_download_type_map('telegram')
+        if mapping and mapping.get('folder'):
+            from pathlib import Path
+            custom_folder = Path(mapping['folder'])
+            try:
+                if custom_folder.exists() or custom_folder.parent.exists():
+                    custom_folder.mkdir(parents=True, exist_ok=True)
+                    folder = custom_folder
+            except (OSError, PermissionError) as e:
+                logging.error(f"Custom folder not accessible: {e}, falling back to default")
+
+        if folder is None:
+            folder = DOWNLOAD_DIR / kind
+            folder.mkdir(exist_ok=True)
 
         filename = event.file.name or f"{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         path = folder / filename
-
-        db = get_db()
 
         # Extract author info (username:id) from the sender
         author = None
