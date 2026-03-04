@@ -1,5 +1,9 @@
-import { useEffect, useRef } from 'react';
-import { X } from 'lucide-react';
+import { useEffect, useRef, useState, lazy, Suspense } from 'react';
+import { X, Globe } from 'lucide-react';
+
+const VRVideoPlayer = lazy(() =>
+  import('./VRVideoPlayer').then((m) => ({ default: m.VRVideoPlayer }))
+);
 
 interface VideoPlayerModalProps {
   isOpen: boolean;
@@ -10,6 +14,7 @@ interface VideoPlayerModalProps {
 
 export function VideoPlayerModal({ isOpen, onClose, videoUrl, title }: VideoPlayerModalProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const [vrMode, setVrMode] = useState(false);
 
   // Handle escape key
   useEffect(() => {
@@ -37,6 +42,13 @@ export function VideoPlayerModal({ isOpen, onClose, videoUrl, title }: VideoPlay
     }
   }, [isOpen]);
 
+  // Reset VR mode when modal closes
+  useEffect(() => {
+    if (!isOpen) {
+      setVrMode(false);
+    }
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
   return (
@@ -54,33 +66,60 @@ export function VideoPlayerModal({ isOpen, onClose, videoUrl, title }: VideoPlay
           <h3 className="text-white font-medium truncate pr-4" title={title}>
             {title}
           </h3>
-          <button
-            onClick={onClose}
-            className="p-2 bg-slate-800/80 hover:bg-slate-700 text-slate-400 hover:text-white rounded-lg transition-colors"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setVrMode(!vrMode)}
+              className={`p-2 rounded-lg transition-colors ${
+                vrMode
+                  ? 'bg-cyan-500/30 text-cyan-400'
+                  : 'bg-slate-800/80 hover:bg-slate-700 text-slate-400 hover:text-white'
+              }`}
+              title={vrMode ? 'Switch to flat view' : 'Switch to 360° view'}
+            >
+              <Globe className="w-5 h-5" />
+            </button>
+            <button
+              onClick={onClose}
+              className="p-2 bg-slate-800/80 hover:bg-slate-700 text-slate-400 hover:text-white rounded-lg transition-colors"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         {/* Video Player */}
         <div className="relative bg-black rounded-xl overflow-hidden shadow-2xl">
-          <video
-            ref={videoRef}
-            src={videoUrl}
-            controls
-            autoPlay
-            playsInline
-            className="w-full max-h-[80vh]"
-            controlsList="nodownload"
-            onError={(e) => {
-              const video = e.currentTarget;
-              console.error('Video error:', video.error?.message, video.error?.code);
-            }}
-            onLoadedMetadata={() => console.log('Video metadata loaded')}
-            onCanPlay={() => console.log('Video can play')}
-          >
-            Your browser does not support the video tag.
-          </video>
+          {vrMode ? (
+            <div className="w-full" style={{ height: '70vh' }}>
+              <Suspense
+                fallback={
+                  <div className="w-full h-full flex items-center justify-center text-slate-400">
+                    Loading 360° player...
+                  </div>
+                }
+              >
+                <VRVideoPlayer videoUrl={videoUrl} autoPlay />
+              </Suspense>
+            </div>
+          ) : (
+            <video
+              ref={videoRef}
+              src={videoUrl}
+              controls
+              autoPlay
+              playsInline
+              className="w-full max-h-[80vh]"
+              controlsList="nodownload"
+              onError={(e) => {
+                const video = e.currentTarget;
+                console.error('Video error:', video.error?.message, video.error?.code);
+              }}
+              onLoadedMetadata={() => console.log('Video metadata loaded')}
+              onCanPlay={() => console.log('Video can play')}
+            >
+              Your browser does not support the video tag.
+            </video>
+          )}
         </div>
       </div>
     </div>
