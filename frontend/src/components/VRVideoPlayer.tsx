@@ -149,6 +149,23 @@ export function VRVideoPlayer({ videoUrl, autoPlay = true }: VRVideoPlayerProps)
     video.currentTime = parseFloat(e.target.value);
   }, []);
 
+  // Arrow key seeking
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const video = videoRef.current;
+      if (!video) return;
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        video.currentTime = Math.max(0, video.currentTime - 5);
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        video.currentTime = Math.min(video.duration || 0, video.currentTime + 5);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
   const formatTime = (seconds: number) => {
     const m = Math.floor(seconds / 60);
     const s = Math.floor(seconds % 60);
