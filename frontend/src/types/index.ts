@@ -35,6 +35,7 @@ export interface Download {
   file_deleted: boolean;  // True if physical file was deleted from disk
   author: string | null;  // username:id for telegram, username for downlee
   file_meta: FileMeta | null;  // Video/audio metadata for video files
+  thumb_count: number;  // Number of thumbnail images available
 }
 
 export interface VideoFormat {

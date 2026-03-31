@@ -170,6 +170,16 @@ class WebApp:
         paginated_list = filtered_list[offset:offset + limit]
         has_more = (offset + limit) < total_count
 
+        # Attach thumbnail counts to paginated results
+        from backend.file_meta import get_thumbs_dir
+        thumbs_base = get_thumbs_dir()
+        for d in paginated_list:
+            thumb_dir = thumbs_base / str(d.get('id'))
+            if thumb_dir.exists():
+                d['thumb_count'] = len([f for f in thumb_dir.iterdir() if f.suffix == '.jpg'])
+            else:
+                d['thumb_count'] = 0
+
         return {
             "downloads": paginated_list,
             "has_more": has_more,

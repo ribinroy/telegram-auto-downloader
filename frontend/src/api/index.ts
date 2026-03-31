@@ -353,11 +353,3 @@ export function getThumbUrl(downloadId: number, filename: string): string {
   return `${API_BASE}/api/thumbs/${downloadId}/${filename}?token=${token}`;
 }
 
-export async function fetchThumbs(downloadId: number): Promise<string[]> {
-  const response = await fetch(`${API_BASE}/api/thumbs/${downloadId}`, {
-    headers: getAuthHeaders(),
-  });
-  if (!response.ok) return [];
-  const data = await response.json();
-  return data.thumbs || [];
-}

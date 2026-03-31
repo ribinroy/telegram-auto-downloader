@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
   Square,
   Trash2,
@@ -21,7 +21,7 @@ import { formatBytes, formatTime, formatSpeed } from '../utils/format';
 import { ConfirmDialog } from './ConfirmDialog';
 import { VideoPlayerModal } from './VideoPlayerModal';
 import { Tooltip } from './Tooltip';
-import { checkVideoFile, getVideoStreamUrl, fetchThumbs, getThumbUrl } from '../api';
+import { checkVideoFile, getVideoStreamUrl, getThumbUrl } from '../api';
 
 interface DownloadItemProps {
   download: Download;
@@ -206,23 +206,18 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [checkingVideo, setCheckingVideo] = useState(false);
   const [localFileDeleted, setLocalFileDeleted] = useState(download.file_deleted);
-  const [thumbUrls, setThumbUrls] = useState<string[]>([]);
   const [thumbIndex, setThumbIndex] = useState(0);
   const progressPercent = download.progress || 0;
 
   const isTelegram = download.downloaded_from === 'telegram';
-  const isVideo = download.file_meta?.video != null;
 
-  // Fetch thumbnails for video downloads
-  useEffect(() => {
-    if (!isVideo || download.status !== 'done') return;
-    let cancelled = false;
-    fetchThumbs(download.id).then(names => {
-      if (cancelled || names.length === 0) return;
-      setThumbUrls(names.map(n => getThumbUrl(download.id, n)));
-    });
-    return () => { cancelled = true; };
-  }, [download.id, download.status, isVideo]);
+  // Build thumb URLs from thumb_count
+  const thumbUrls = useMemo(() => {
+    if (!download.thumb_count) return [];
+    return Array.from({ length: download.thumb_count }, (_, i) =>
+      getThumbUrl(download.id, `${i + 1}.jpg`)
+    );
+  }, [download.id, download.thumb_count]);
 
   // Carousel through thumbnails
   useEffect(() => {
