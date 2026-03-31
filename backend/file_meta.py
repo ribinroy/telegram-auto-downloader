@@ -8,6 +8,7 @@ is extracted automatically once a video download completes.
 import asyncio
 import json
 import logging
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -21,21 +22,26 @@ VIDEO_EXTENSIONS = {'.mp4', '.mkv', '.webm', '.avi', '.mov', '.m4v', '.flv', '.w
 POLL_INTERVAL = 2  # seconds between probe attempts
 MIN_BYTES_FOR_PROBE = 1 * 1024 * 1024  # 1MB - minimum downloaded before first probe
 
+# Resolve ffprobe absolute path at import time so it works regardless of service PATH
+FFPROBE_PATH = shutil.which('ffprobe') or '/usr/bin/ffprobe'
+
 
 def probe_video(file_path: str) -> dict | None:
     """Run ffprobe on a video file and return parsed metadata."""
     try:
         result = subprocess.run(
             [
-                'ffprobe', '-v', 'quiet', '-print_format', 'json',
+                FFPROBE_PATH, '-v', 'quiet', '-print_format', 'json',
                 '-show_streams', '-show_format', str(file_path)
             ],
             capture_output=True, text=True, timeout=30
         )
         if result.returncode != 0:
+            print(f"[file_meta] ffprobe exited with code {result.returncode}: {result.stderr[:200]}")
             return None
         return json.loads(result.stdout)
-    except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError):
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError) as e:
+        print(f"[file_meta] ffprobe exception: {e}")
         return None
 
 
