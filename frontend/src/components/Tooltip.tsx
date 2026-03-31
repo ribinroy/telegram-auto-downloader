@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 
 interface TooltipProps {
   children: React.ReactNode;
-  content: string;
+  content: React.ReactNode;
   position?: 'top' | 'bottom';
 }
 
@@ -44,7 +44,7 @@ export function Tooltip({ children, content, position = 'bottom' }: TooltipProps
       {isVisible &&
         createPortal(
           <div
-            className="fixed px-2 py-1 bg-slate-900 text-white text-xs rounded whitespace-nowrap pointer-events-none z-[9999] -translate-x-1/2"
+            className="fixed px-2 py-1 bg-slate-900 text-white text-xs rounded whitespace-pre-line pointer-events-none z-[9999] -translate-x-1/2"
             style={{ top: coords.top, left: coords.left }}
           >
             {content}

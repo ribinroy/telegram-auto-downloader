@@ -251,45 +251,51 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
         <div className="flex items-start gap-3 sm:contents">
           {/* Source Icon + Resolution */}
           <div className="flex flex-col items-center gap-1 shrink-0">
-            <div className="relative w-9 h-9 sm:w-10 sm:h-10 flex items-center justify-center bg-slate-700/50 rounded-lg">
-              {getPlatformIcon(download.downloaded_from || 'telegram')}
+            {(() => {
+              const meta = download.file_meta;
+              const res = getResolutionLabel(download);
+              const audio = getAudioLabel(download);
+              const bitDepth = meta?.video?.bit_depth;
+              const bitLabel = bitDepth && bitDepth > 8 ? `${bitDepth}b` : null;
+              const tooltipLines: string[] = [];
+              if (meta?.video) {
+                tooltipLines.push(`${meta.video.width}x${meta.video.height} · ${meta.video.codec}${bitDepth ? ` · ${bitDepth}bit` : ''}${meta.video.fps ? ` · ${meta.video.fps}fps` : ''}${meta.video.bitrate ? ` · ${(meta.video.bitrate / 1000000).toFixed(1)}Mbps` : ''}`);
+              }
+              if (meta?.audio) {
+                tooltipLines.push(`Audio: ${meta.audio.codec}${meta.audio.channels ? ` · ${meta.audio.channels}ch` : ''}${meta.audio.sample_rate ? ` · ${meta.audio.sample_rate}Hz` : ''}${meta.audio.bitrate ? ` · ${Math.round(meta.audio.bitrate / 1000)}kbps` : ''}`);
+              }
+              if (meta?.duration) {
+                const hrs = Math.floor(meta.duration / 3600);
+                const mins = Math.floor((meta.duration % 3600) / 60);
+                const secs = Math.round(meta.duration % 60);
+                const pad = (n: number) => n.toString().padStart(2, '0');
+                tooltipLines.push(`Duration: ${pad(hrs)}:${pad(mins)}:${pad(secs)}`);
+              }
+              const tooltip = tooltipLines.join('\n');
 
-              {(() => {
-                const res = getResolutionLabel(download);
-                const audio = getAudioLabel(download);
-                const bitDepth = download.file_meta?.video?.bit_depth;
-                const bitLabel = bitDepth && bitDepth > 8 ? `${bitDepth}b` : null;
-                const tooltipParts: string[] = [];
-                if (download.file_meta?.video) tooltipParts.push(`${download.file_meta.video.width}x${download.file_meta.video.height}${bitDepth ? ` ${bitDepth}bit` : ''}`);
-                if (download.file_meta?.audio) tooltipParts.push(`${download.file_meta.audio.codec}${download.file_meta.audio.channels ? ` ${download.file_meta.audio.channels}ch` : ''}`);
-                const tooltip = tooltipParts.join(' · ');
-                return (
-                  <>
+              const icon = (
+                <div className="relative w-9 h-9 sm:w-10 sm:h-10 flex items-center justify-center bg-slate-700/50 rounded-lg cursor-default">
+                    {getPlatformIcon(download.downloaded_from || 'telegram')}
                     {res && (
-                      <Tooltip content={tooltip}>
-                        <span className="absolute -top-1.5 -left-1.5 text-[10px] font-medium text-slate-400 bg-slate-700/80 px-1 py-0.5 rounded cursor-default leading-none">
-                          {res}
-                        </span>
-                      </Tooltip>
+                      <span className="absolute -top-1.5 -left-1.5 text-[10px] font-medium text-slate-400 bg-slate-700/80 px-1 py-0.5 rounded leading-none">
+                        {res}
+                      </span>
                     )}
                     {audio && (
-                      <Tooltip content={tooltip}>
-                        <span className="absolute -top-1.5 -right-1.5 text-[10px] font-medium text-slate-400 bg-slate-700/80 px-1 py-0.5 rounded cursor-default leading-none">
-                          {audio}
-                        </span>
-                      </Tooltip>
+                      <span className="absolute -top-1.5 -right-1.5 text-[10px] font-medium text-slate-400 bg-slate-700/80 px-1 py-0.5 rounded leading-none">
+                        {audio}
+                      </span>
                     )}
                     {bitLabel && (
-                      <Tooltip content={tooltip}>
-                        <span className="absolute -bottom-1.5 -right-1.5 text-[10px] font-medium text-slate-400 bg-slate-700/80 px-1 py-0.5 rounded cursor-default leading-none">
-                          {bitLabel}
-                        </span>
-                      </Tooltip>
+                      <span className="absolute -bottom-1.5 -right-1.5 text-[10px] font-medium text-slate-400 bg-slate-700/80 px-1 py-0.5 rounded leading-none">
+                        {bitLabel}
+                      </span>
                     )}
-                  </>
-                );
-              })()}
-            </div>
+                  </div>
+              );
+
+              return tooltip ? <Tooltip content={tooltip}>{icon}</Tooltip> : icon;
+            })()}
           </div>
 
           {/* Title and info - takes remaining space on mobile */}
