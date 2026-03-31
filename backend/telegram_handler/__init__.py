@@ -155,12 +155,12 @@ class TelegramDownloader:
             "_status_msg_id": None
         }
 
-        task = asyncio.create_task(self.safe_download(msg, str(path), entry))
+        task = asyncio.create_task(self.safe_download(msg, str(path), entry, is_restart=True))
         self.download_tasks[message_id] = task
         logging.info(f"Restarted download for message_id={message_id}")
         return True
 
-    async def safe_download(self, event, path, entry):
+    async def safe_download(self, event, path, entry, is_restart=False):
         """Downloads the media safely with live progress using chunk-based iteration."""
         db = get_db()
         message_id = entry["message_id"]
@@ -169,13 +169,14 @@ class TelegramDownloader:
         # Record download started
         metrics.record_download_started('telegram')
 
-        # Send initial "Downloading" message
-        try:
-            msg = await event.reply("⬇️ Status: Downloading")
-            entry["_status_msg_id"] = msg.id
-        except Exception as e:
-            logging.error(f"Failed to send initial status message: {e}")
-            entry["_status_msg_id"] = None
+        # Send initial "Downloading" message (skip on restart/resume)
+        if not is_restart:
+            try:
+                msg = await event.reply("⬇️ Status: Downloading")
+                entry["_status_msg_id"] = msg.id
+            except Exception as e:
+                logging.error(f"Failed to send initial status message: {e}")
+                entry["_status_msg_id"] = None
 
         try:
             total_bytes = event.file.size or 0
