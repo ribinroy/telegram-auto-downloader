@@ -171,6 +171,11 @@ class TelegramDownloader:
 
         task = asyncio.create_task(self.safe_download(msg, str(path), entry, is_restart=True))
         self.download_tasks[message_id] = task
+
+        # Start background metadata extraction for video files
+        if is_video_file(filename):
+            asyncio.create_task(poll_and_extract_meta(message_id))
+
         logging.info(f"Restarted download for message_id={message_id}")
         return True
 
