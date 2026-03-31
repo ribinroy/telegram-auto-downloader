@@ -18,7 +18,8 @@ logger = logging.getLogger(__name__)
 
 VIDEO_EXTENSIONS = {'.mp4', '.mkv', '.webm', '.avi', '.mov', '.m4v', '.flv', '.wmv'}
 
-POLL_INTERVAL = 10  # seconds between status checks
+POLL_INTERVAL = 2  # seconds between probe attempts
+MIN_BYTES_FOR_PROBE = 1 * 1024 * 1024  # 1MB - minimum downloaded before first probe
 
 
 def probe_video(file_path: str) -> dict | None:
@@ -154,46 +155,64 @@ def extract_and_store_meta(message_id) -> bool:
 
 async def poll_and_extract_meta(message_id):
     """
-    Background task that polls until the download is complete, then extracts
-    and stores video metadata.
+    Background task that probes video metadata as early as possible.
 
+    - Waits until at least 1MB has been downloaded before first probe.
+    - Polls every 2s, attempting ffprobe each time.
     - If file_meta is already populated, exits immediately.
-    - If the download is done, probes the file and stores metadata.
-    - If still downloading, retries every POLL_INTERVAL seconds.
-    - Gives up if the download fails/stops.
+    - Gives up if the download fails/stops without successful probe.
     """
     db = get_db()
     msg_id = str(message_id)
 
+    # Phase 1: wait until at least 1MB is downloaded
     while True:
         download = db.get_download_by_message_id(msg_id)
         if not download:
             logger.warning(f"[file_meta] Download {msg_id} not found, stopping poll")
             return
 
-        # Already has metadata - stop polling
         if download.get('file_meta'):
             logger.info(f"[file_meta] Metadata already exists for {msg_id}, skipping")
             return
 
         filename = download.get('file')
         if not filename or not is_video_file(filename):
-            # Not a video file, nothing to do
             return
 
         status = download.get('status')
-
-        if status == 'done':
-            # Download complete - try to extract metadata
-            if extract_and_store_meta(msg_id):
-                logger.info(f"[file_meta] Successfully extracted metadata for {msg_id}")
-            else:
-                logger.warning(f"[file_meta] Failed to extract metadata for {msg_id} (file may be missing or not a video)")
-            return
+        downloaded_bytes = download.get('downloaded_bytes', 0) or 0
 
         if status in ('failed', 'stopped'):
             logger.info(f"[file_meta] Download {msg_id} is {status}, stopping poll")
             return
 
-        # Still downloading - wait and retry
+        # Once we have 1MB or the download is done, move to probing
+        if downloaded_bytes >= MIN_BYTES_FOR_PROBE or status == 'done':
+            break
+
+        await asyncio.sleep(POLL_INTERVAL)
+
+    # Phase 2: probe every 2s until metadata is extracted
+    while True:
+        download = db.get_download_by_message_id(msg_id)
+        if not download:
+            logger.warning(f"[file_meta] Download {msg_id} not found, stopping poll")
+            return
+
+        if download.get('file_meta'):
+            logger.info(f"[file_meta] Metadata already exists for {msg_id}, skipping")
+            return
+
+        if extract_and_store_meta(msg_id):
+            logger.info(f"[file_meta] Successfully extracted metadata for {msg_id}")
+            return
+
+        status = download.get('status')
+
+        # Download finished but probe still failed - give up
+        if status in ('done', 'failed', 'stopped'):
+            logger.warning(f"[file_meta] Download {msg_id} is {status}, probe failed, giving up")
+            return
+
         await asyncio.sleep(POLL_INTERVAL)
