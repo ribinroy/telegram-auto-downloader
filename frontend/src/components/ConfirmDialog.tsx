@@ -8,6 +8,7 @@ interface ConfirmDialogProps {
   confirmText?: string;
   cancelText?: string;
   extraActionText?: string;
+  extraActionDisabled?: boolean;
   variant?: 'danger' | 'warning' | 'info';
   onConfirm: () => void;
   onCancel: () => void;
@@ -21,6 +22,7 @@ export function ConfirmDialog({
   confirmText = 'Confirm',
   cancelText = 'Cancel',
   extraActionText,
+  extraActionDisabled = false,
   variant = 'danger',
   onConfirm,
   onCancel,
@@ -85,21 +87,26 @@ export function ConfirmDialog({
         <div className="flex flex-wrap gap-3 p-4 border-t border-slate-700">
           <button
             onClick={onCancel}
-            className="py-2.5 px-4 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors whitespace-nowrap"
+            className="flex-1 py-2.5 px-4 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors whitespace-nowrap"
           >
             {cancelText}
           </button>
           <button
             ref={confirmButtonRef}
             onClick={onConfirm}
-            className={`py-2.5 px-4 ${styles.button} text-white rounded-lg transition-colors whitespace-nowrap`}
+            className={`flex-1 py-2.5 px-4 ${styles.button} text-white rounded-lg transition-colors whitespace-nowrap`}
           >
             {confirmText}
           </button>
           {extraActionText && onExtraAction && (
             <button
               onClick={onExtraAction}
-              className="py-2.5 px-4 bg-red-800 hover:bg-red-700 text-white rounded-lg transition-colors whitespace-nowrap"
+              disabled={extraActionDisabled}
+              className={`flex-1 py-2.5 px-4 text-white rounded-lg transition-colors whitespace-nowrap ${
+                extraActionDisabled
+                  ? 'bg-slate-600 opacity-50 cursor-not-allowed'
+                  : 'bg-red-800 hover:bg-red-700'
+              }`}
             >
               {extraActionText}
             </button>
