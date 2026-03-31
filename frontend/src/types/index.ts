@@ -5,6 +5,7 @@ export interface FileMeta {
     height: number;
     bitrate?: number;
     fps?: number;
+    bit_depth?: number;
   };
   audio?: {
     codec: string;

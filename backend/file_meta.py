@@ -65,6 +65,18 @@ def extract_meta(probe_data: dict) -> dict:
                 num, den = r_frame_rate.split('/')
                 if int(den) > 0:
                     meta['video']['fps'] = round(int(num) / int(den), 2)
+            # Extract bit depth from pix_fmt (e.g. yuv420p10le -> 10)
+            pix_fmt = stream.get('pix_fmt', '')
+            bits_raw = stream.get('bits_per_raw_sample')
+            if bits_raw:
+                meta['video']['bit_depth'] = int(bits_raw)
+            elif pix_fmt:
+                import re
+                m = re.search(r'p(\d+)', pix_fmt)
+                if m:
+                    meta['video']['bit_depth'] = int(m.group(1))
+                else:
+                    meta['video']['bit_depth'] = 8
 
         elif codec_type == 'audio' and 'audio' not in meta:
             meta['audio'] = {
