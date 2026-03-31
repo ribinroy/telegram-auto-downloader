@@ -69,7 +69,7 @@ def main():
     # Initialize components
     telegram_downloader = TelegramDownloader(download_tasks)
     ytdlp_downloader = YtdlpDownloader(download_tasks)
-    web_app = WebApp(download_tasks, ytdlp_downloader, loop)
+    web_app = WebApp(download_tasks, ytdlp_downloader, loop, telegram_downloader)
 
     # Start Flask in a separate thread
     flask_thread = threading.Thread(target=web_app.run, daemon=True)

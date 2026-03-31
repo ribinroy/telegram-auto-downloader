@@ -21,7 +21,7 @@ export interface Download {
   id: number;
   message_id: string | null;  // UUID for yt-dlp or Telegram message ID as string
   file: string;
-  status: 'downloading' | 'done' | 'failed' | 'stopped';
+  status: 'downloading' | 'done' | 'failed' | 'stopped' | 'paused';
   progress: number;
   speed: number;
   error: string | null;

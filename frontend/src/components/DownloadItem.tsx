@@ -27,6 +27,8 @@ interface DownloadItemProps {
   download: Download;
   onRetry: (id: number) => void;
   onStop: (message_id: string) => void;
+  onPause: (message_id: string) => void;
+  onResume: (message_id: string) => void;
   onDelete: (message_id: string, deleteFile?: boolean) => void;
 }
 
@@ -174,6 +176,8 @@ function getStatusIcon(status: Download['status']) {
       return <XCircle className="w-4 h-4 text-red-400" />;
     case 'stopped':
       return <StopCircle className="w-4 h-4 text-yellow-400" />;
+    case 'paused':
+      return <Pause className="w-4 h-4 text-amber-400" />;
   }
 }
 
@@ -187,6 +191,8 @@ function getStatusColor(status: Download['status']) {
       return 'text-red-400';
     case 'stopped':
       return 'text-yellow-400';
+    case 'paused':
+      return 'text-amber-400';
   }
 }
 
@@ -200,7 +206,7 @@ function parseAuthor(author: string | null): { displayName: string; tooltip: str
   return { displayName: author, tooltip: author };
 }
 
-export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadItemProps) {
+export function DownloadItem({ download, onRetry, onStop, onPause, onResume, onDelete }: DownloadItemProps) {
   const [confirmAction, setConfirmAction] = useState<'stop' | 'delete' | null>(null);
   const [videoPlayerOpen, setVideoPlayerOpen] = useState(false);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
@@ -452,7 +458,7 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
 
             {/* Desktop: progress bar and info shown here */}
             <div className="hidden sm:block">
-              {(download.status === 'downloading' || download.status === 'stopped') && progressPercent > 0 && (
+              {(download.status === 'downloading' || download.status === 'paused' || download.status === 'stopped') && progressPercent > 0 && (
                 <div className="mb-2">
                   <div className="flex justify-between text-sm text-slate-400 mb-1">
                     <span>{formatBytes(download.downloaded_bytes)} / {formatBytes(download.total_bytes)}</span>
@@ -460,7 +466,7 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
                   </div>
                   <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
                     <div
-                      className={`h-full transition-all duration-300 ${download.status === 'stopped' ? 'bg-yellow-500' : 'progress-shimmer'}`}
+                      className={`h-full transition-all duration-300 ${download.status === 'stopped' ? 'bg-yellow-500' : download.status === 'paused' ? 'bg-amber-400' : 'progress-shimmer'}`}
                       style={{ width: `${progressPercent}%` }}
                     />
                   </div>
@@ -494,7 +500,7 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
 
         {/* Mobile: Progress bar */}
         <div className="sm:hidden">
-          {(download.status === 'downloading' || download.status === 'stopped') && progressPercent > 0 && (
+          {(download.status === 'downloading' || download.status === 'paused' || download.status === 'stopped') && progressPercent > 0 && (
             <div className="mb-2">
               <div className="flex justify-between text-xs text-slate-400 mb-1">
                 <span>{formatBytes(download.downloaded_bytes)} / {formatBytes(download.total_bytes)}</span>
@@ -502,7 +508,7 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
               </div>
               <div className="h-1.5 bg-slate-700 rounded-full overflow-hidden">
                 <div
-                  className={`h-full transition-all duration-300 ${download.status === 'stopped' ? 'bg-yellow-500' : 'progress-shimmer'}`}
+                  className={`h-full transition-all duration-300 ${download.status === 'stopped' ? 'bg-yellow-500' : download.status === 'paused' ? 'bg-amber-400' : 'progress-shimmer'}`}
                   style={{ width: `${progressPercent}%` }}
                 />
               </div>
@@ -601,19 +607,59 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
                   </div>
                 </div>
               )}
-              {/* For telegram: show stop button when downloading */}
+              {/* For telegram: show pause + stop when downloading */}
               {isTelegram && download.status === 'downloading' && (
-                <div className="group relative">
-                  <button
-                    onClick={() => setConfirmAction('stop')}
-                    className="p-2 bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-400 rounded-lg transition-colors"
-                  >
-                    <Square className="w-4 h-4" />
-                  </button>
-                  <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
-                    Stop
+                <>
+                  <div className="group relative">
+                    <button
+                      onClick={() => download.message_id && onPause(download.message_id)}
+                      className="p-2 bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 rounded-lg transition-colors"
+                    >
+                      <Pause className="w-4 h-4" />
+                    </button>
+                    <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
+                      Pause
+                    </div>
                   </div>
-                </div>
+                  <div className="group relative">
+                    <button
+                      onClick={() => setConfirmAction('stop')}
+                      className="p-2 bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-400 rounded-lg transition-colors"
+                    >
+                      <Square className="w-4 h-4" />
+                    </button>
+                    <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
+                      Stop
+                    </div>
+                  </div>
+                </>
+              )}
+              {/* For telegram: show resume + stop when paused */}
+              {isTelegram && download.status === 'paused' && (
+                <>
+                  <div className="group relative">
+                    <button
+                      onClick={() => download.message_id && onResume(download.message_id)}
+                      className="p-2 bg-green-500/20 hover:bg-green-500/30 text-green-400 rounded-lg transition-colors"
+                    >
+                      <Play className="w-4 h-4" />
+                    </button>
+                    <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
+                      Resume
+                    </div>
+                  </div>
+                  <div className="group relative">
+                    <button
+                      onClick={() => setConfirmAction('stop')}
+                      className="p-2 bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-400 rounded-lg transition-colors"
+                    >
+                      <Square className="w-4 h-4" />
+                    </button>
+                    <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
+                      Stop
+                    </div>
+                  </div>
+                </>
               )}
               <div className="group relative">
                 <button
@@ -753,12 +799,36 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
               </button>
             )}
             {isTelegram && download.status === 'downloading' && (
-              <button
-                onClick={() => setConfirmAction('stop')}
-                className="p-1.5 bg-yellow-500/20 text-yellow-400 rounded-lg"
-              >
-                <Square className="w-4 h-4" />
-              </button>
+              <>
+                <button
+                  onClick={() => download.message_id && onPause(download.message_id)}
+                  className="p-1.5 bg-amber-500/20 text-amber-400 rounded-lg"
+                >
+                  <Pause className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => setConfirmAction('stop')}
+                  className="p-1.5 bg-yellow-500/20 text-yellow-400 rounded-lg"
+                >
+                  <Square className="w-4 h-4" />
+                </button>
+              </>
+            )}
+            {isTelegram && download.status === 'paused' && (
+              <>
+                <button
+                  onClick={() => download.message_id && onResume(download.message_id)}
+                  className="p-1.5 bg-green-500/20 text-green-400 rounded-lg"
+                >
+                  <Play className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => setConfirmAction('stop')}
+                  className="p-1.5 bg-yellow-500/20 text-yellow-400 rounded-lg"
+                >
+                  <Square className="w-4 h-4" />
+                </button>
+              </>
             )}
             {/* Delete button */}
             <button
@@ -771,12 +841,12 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
         </div>
       </div>
 
-      {/* Stop/Pause Confirmation Dialog */}
+      {/* Stop Confirmation Dialog */}
       <ConfirmDialog
         isOpen={confirmAction === 'stop'}
         title={isTelegram ? 'Stop Download?' : 'Pause Download?'}
         message={isTelegram
-          ? 'This will stop the download. You can retry later.'
+          ? 'This will stop the download and discard progress.'
           : 'This will pause the download. You can resume later.'
         }
         confirmText={isTelegram ? 'Stop' : 'Pause'}

@@ -143,6 +143,22 @@ export async function stopDownload(message_id: string): Promise<void> {
   });
 }
 
+export async function pauseDownload(message_id: string): Promise<void> {
+  await fetch(`${API_BASE}/api/pause`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ message_id }),
+  });
+}
+
+export async function resumeDownload(message_id: string): Promise<void> {
+  await fetch(`${API_BASE}/api/resume`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ message_id }),
+  });
+}
+
 export async function deleteDownload(message_id: string, delete_file: boolean = false): Promise<void> {
   await fetch(`${API_BASE}/api/delete`, {
     method: 'POST',

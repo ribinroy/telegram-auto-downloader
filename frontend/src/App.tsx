@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Search, Download, Wifi, WifiOff, Loader2, HardDrive, Clock, Zap, LogOut, Settings, Plus, BarChart3, X } from 'lucide-react';
 import { formatBytes, formatSpeed } from './utils/format';
-import { fetchDownloads, fetchStats, fetchAuthors, retryDownload, stopDownload, deleteDownload, verifyToken, clearToken, getToken, fetchSecuredMappingIds, type SortBy, type SortOrder } from './api';
+import { fetchDownloads, fetchStats, fetchAuthors, retryDownload, stopDownload, pauseDownload, resumeDownload, deleteDownload, verifyToken, clearToken, getToken, fetchSecuredMappingIds, type SortBy, type SortOrder } from './api';
 import { connectSocket, disconnectSocket, type ProgressUpdate, type StatusUpdate, type DeletedUpdate, type MetaUpdate } from './api/socket';
 import { DownloadItem } from './components/DownloadItem';
 import { LoginPage } from './components/LoginPage';
@@ -332,6 +332,14 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
     await stopDownload(message_id);
   };
 
+  const handlePause = async (message_id: string) => {
+    await pauseDownload(message_id);
+  };
+
+  const handleResume = async (message_id: string) => {
+    await resumeDownload(message_id);
+  };
+
   const handleDelete = async (message_id: string, deleteFile?: boolean) => {
     await deleteDownload(message_id, deleteFile);
   };
@@ -642,6 +650,8 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
                 download={download}
                 onRetry={handleRetry}
                 onStop={handleStop}
+                onPause={handlePause}
+                onResume={handleResume}
                 onDelete={handleDelete}
               />
             ))}
