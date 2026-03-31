@@ -1,3 +1,21 @@
+export interface FileMeta {
+  video?: {
+    codec: string;
+    width: number;
+    height: number;
+    bitrate?: number;
+    fps?: number;
+  };
+  audio?: {
+    codec: string;
+    channels?: number;
+    sample_rate?: number;
+    bitrate?: number;
+  };
+  duration?: number;
+  format?: string;
+}
+
 export interface Download {
   id: number;
   message_id: string | null;  // UUID for yt-dlp or Telegram message ID as string
@@ -15,6 +33,7 @@ export interface Download {
   url: string | null;  // Source URL for yt-dlp downloads
   file_deleted: boolean;  // True if physical file was deleted from disk
   author: string | null;  // username:id for telegram, username for downlee
+  file_meta: FileMeta | null;  // Video/audio metadata for video files
 }
 
 export interface VideoFormat {

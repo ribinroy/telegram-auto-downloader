@@ -142,6 +142,28 @@ function getPlatformIcon(source: string) {
   );
 }
 
+function getResolutionLabel(download: Download): string | null {
+  const meta = download.file_meta;
+  if (!meta?.video) return null;
+  const { height, width } = meta.video;
+  if (!height) return null;
+  if (height >= 4320 || width >= 7680) return '8K';
+  if (height >= 2160 || width >= 3840) return '4K';
+  if (height >= 1440 || width >= 2560) return '2K';
+  if (height >= 1080 || width >= 1920) return 'FH';
+  if (height >= 720 || width >= 1280) return 'HD';
+  return 'SD';
+}
+
+function getAudioLabel(download: Download): string | null {
+  const channels = download.file_meta?.audio?.channels;
+  if (!channels) return null;
+  if (channels >= 8) return '7.1';
+  if (channels >= 6) return '5.1';
+  if (channels >= 3) return '2.1';
+  return '2.0';
+}
+
 function getStatusIcon(status: Download['status']) {
   switch (status) {
     case 'downloading':
@@ -222,9 +244,25 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
       <div className="flex flex-col sm:flex-row sm:items-start gap-3 sm:gap-4">
         {/* Top row on mobile: Icon + Title + Status */}
         <div className="flex items-start gap-3 sm:contents">
-          {/* Source Icon */}
-          <div className="p-2 sm:p-2.5 bg-slate-700/50 rounded-lg shrink-0">
-            {getPlatformIcon(download.downloaded_from || 'telegram')}
+          {/* Source Icon + Resolution */}
+          <div className="flex items-center gap-1 shrink-0">
+            <div className="p-2 sm:p-2.5 bg-slate-700/50 rounded-lg">
+              {getPlatformIcon(download.downloaded_from || 'telegram')}
+            </div>
+            {getResolutionLabel(download) && download.file_meta?.video && (
+              <Tooltip content={`${download.file_meta.video.width}x${download.file_meta.video.height}`}>
+                <span className="text-[10px] font-medium text-slate-400 bg-slate-700/40 px-1.5 py-0.5 rounded cursor-default">
+                  {getResolutionLabel(download)}
+                </span>
+              </Tooltip>
+            )}
+            {getAudioLabel(download) && download.file_meta?.audio && (
+              <Tooltip content={`${download.file_meta.audio.codec}${download.file_meta.audio.channels ? ` ${download.file_meta.audio.channels}ch` : ''}`}>
+                <span className="text-[10px] font-medium text-slate-400 bg-slate-700/40 px-1.5 py-0.5 rounded cursor-default">
+                  {getAudioLabel(download)}
+                </span>
+              </Tooltip>
+            )}
           </div>
 
           {/* Title and info - takes remaining space on mobile */}
