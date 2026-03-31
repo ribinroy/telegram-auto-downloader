@@ -39,6 +39,7 @@ class Download(Base):
     file_deleted = Column(Boolean, default=False)  # True if physical file was deleted from disk
     author = Column(String(200), nullable=True)  # username:id for telegram, username for downlee
     file_meta = Column(Text, nullable=True)  # JSON metadata: video/audio details for video files
+    thumb_count = Column(Integer, default=0)  # Number of generated thumbnail images
 
     def to_dict(self):
         """Convert model to dictionary"""
@@ -60,7 +61,8 @@ class Download(Base):
             'file_deleted': self.file_deleted or False,
             'author': self.author,
             'deleted_at': f"{self.deleted_at.isoformat()}Z" if self.deleted_at else None,
-            'file_meta': json.loads(self.file_meta) if self.file_meta else None
+            'file_meta': json.loads(self.file_meta) if self.file_meta else None,
+            'thumb_count': self.thumb_count or 0
         }
 
 
@@ -164,6 +166,11 @@ class DatabaseManager:
             # Add file_meta column if it doesn't exist
             if 'file_meta' not in columns:
                 conn.execute(text('ALTER TABLE downloads ADD COLUMN file_meta TEXT'))
+                conn.commit()
+
+            # Add thumb_count column if it doesn't exist
+            if 'thumb_count' not in columns:
+                conn.execute(text('ALTER TABLE downloads ADD COLUMN thumb_count INTEGER DEFAULT 0'))
                 conn.commit()
 
             # Migrate is_deleted boolean to deleted_at timestamp
