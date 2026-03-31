@@ -7,9 +7,11 @@ interface ConfirmDialogProps {
   message: string;
   confirmText?: string;
   cancelText?: string;
+  extraActionText?: string;
   variant?: 'danger' | 'warning' | 'info';
   onConfirm: () => void;
   onCancel: () => void;
+  onExtraAction?: () => void;
 }
 
 export function ConfirmDialog({
@@ -18,9 +20,11 @@ export function ConfirmDialog({
   message,
   confirmText = 'Confirm',
   cancelText = 'Cancel',
+  extraActionText,
   variant = 'danger',
   onConfirm,
   onCancel,
+  onExtraAction,
 }: ConfirmDialogProps) {
   const confirmButtonRef = useRef<HTMLButtonElement>(null);
 
@@ -92,6 +96,14 @@ export function ConfirmDialog({
           >
             {confirmText}
           </button>
+          {extraActionText && onExtraAction && (
+            <button
+              onClick={onExtraAction}
+              className="flex-1 py-2.5 px-4 bg-red-800 hover:bg-red-700 text-white rounded-lg transition-colors"
+            >
+              {extraActionText}
+            </button>
+          )}
         </div>
       </div>
     </div>

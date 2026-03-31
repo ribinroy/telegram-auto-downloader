@@ -27,7 +27,7 @@ interface DownloadItemProps {
   download: Download;
   onRetry: (id: number) => void;
   onStop: (message_id: string) => void;
-  onDelete: (message_id: string) => void;
+  onDelete: (message_id: string, deleteFile?: boolean) => void;
 }
 
 // Known platform colors (using short names without TLD)
@@ -216,7 +216,12 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
   };
 
   const handleDeleteConfirm = () => {
-    if (download.message_id) onDelete(download.message_id);
+    if (download.message_id) onDelete(download.message_id, false);
+    setConfirmAction(null);
+  };
+
+  const handleDeleteWithFile = () => {
+    if (download.message_id) onDelete(download.message_id, true);
     setConfirmAction(null);
   };
 
@@ -249,24 +254,21 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
             <div className="p-2 sm:p-2.5 bg-slate-700/50 rounded-lg">
               {getPlatformIcon(download.downloaded_from || 'telegram')}
             </div>
-            {(getResolutionLabel(download) || getAudioLabel(download)) && (
-              <div className="flex items-center gap-1">
-                {getResolutionLabel(download) && download.file_meta?.video && (
-                  <Tooltip content={`${download.file_meta.video.width}x${download.file_meta.video.height}`}>
-                    <span className="text-[10px] font-medium text-slate-400 bg-slate-700/40 px-1.5 py-0.5 rounded cursor-default">
-                      {getResolutionLabel(download)}
-                    </span>
-                  </Tooltip>
-                )}
-                {getAudioLabel(download) && download.file_meta?.audio && (
-                  <Tooltip content={`${download.file_meta.audio.codec}${download.file_meta.audio.channels ? ` ${download.file_meta.audio.channels}ch` : ''}`}>
-                    <span className="text-[10px] font-medium text-slate-400 bg-slate-700/40 px-1.5 py-0.5 rounded cursor-default">
-                      {getAudioLabel(download)}
-                    </span>
-                  </Tooltip>
-                )}
-              </div>
-            )}
+            {(getResolutionLabel(download) || getAudioLabel(download)) && (() => {
+              const res = getResolutionLabel(download);
+              const audio = getAudioLabel(download);
+              const label = [res, audio].filter(Boolean).join(' | ');
+              const tooltipParts: string[] = [];
+              if (download.file_meta?.video) tooltipParts.push(`${download.file_meta.video.width}x${download.file_meta.video.height}`);
+              if (download.file_meta?.audio) tooltipParts.push(`${download.file_meta.audio.codec}${download.file_meta.audio.channels ? ` ${download.file_meta.audio.channels}ch` : ''}`);
+              return (
+                <Tooltip content={tooltipParts.join(' · ')}>
+                  <span className="text-[10px] font-medium text-slate-400 bg-slate-700/40 px-1.5 py-0.5 rounded cursor-default">
+                    {label}
+                  </span>
+                </Tooltip>
+              );
+            })()}
           </div>
 
           {/* Title and info - takes remaining space on mobile */}
@@ -633,9 +635,11 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
         title="Delete Download?"
         message="This will remove the download from the list. This action cannot be undone."
         confirmText="Delete"
+        extraActionText="Delete + File"
         variant="danger"
         onConfirm={handleDeleteConfirm}
         onCancel={() => setConfirmAction(null)}
+        onExtraAction={handleDeleteWithFile}
       />
 
       {/* Video Player Modal */}

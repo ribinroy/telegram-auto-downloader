@@ -334,8 +334,8 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
     await stopDownload(message_id);
   };
 
-  const handleDelete = async (message_id: string) => {
-    await deleteDownload(message_id);
+  const handleDelete = async (message_id: string, deleteFile?: boolean) => {
+    await deleteDownload(message_id, deleteFile);
   };
 
   // Toggle secured downloads visibility
