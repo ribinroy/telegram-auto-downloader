@@ -194,6 +194,7 @@ def generate_thumbnails(download_id, file_path: str, duration: float) -> bool:
                     FFMPEG_PATH, '-ss', str(timestamp),
                     '-i', str(file_path),
                     '-vframes', '1', '-q:v', '2',
+                    '-vf', "scale='min(900,iw)':-2",
                     '-y', str(out_path)
                 ],
                 capture_output=True, text=True, timeout=30

@@ -221,14 +221,14 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
     );
   }, [download.id, download.thumb_count]);
 
-  // Carousel through thumbnails when preview is visible
+  // Carousel through thumbnails
   useEffect(() => {
-    if (!showThumbs || thumbUrls.length <= 1) return;
+    if (thumbUrls.length <= 1) return;
     const interval = setInterval(() => {
       setThumbIndex(prev => (prev + 1) % thumbUrls.length);
     }, 3000);
     return () => clearInterval(interval);
-  }, [showThumbs, thumbUrls.length]);
+  }, [thumbUrls.length]);
 
   const handleMouseEnter = () => {
     if (thumbUrls.length === 0) return;
