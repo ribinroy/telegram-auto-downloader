@@ -211,6 +211,7 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
   const [thumbBelow, setThumbBelow] = useState(false);
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const itemRef = useRef<HTMLDivElement>(null);
+  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
   const progressPercent = download.progress || 0;
 
   const isTelegram = download.downloaded_from === 'telegram';
@@ -247,6 +248,24 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [showThumbs, thumbUrls.length]);
+
+  const handleThumbTouchStart = (e: React.TouchEvent) => {
+    touchStartRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+  };
+
+  const handleThumbTouchEnd = (e: React.TouchEvent) => {
+    if (!touchStartRef.current || thumbUrls.length <= 1) return;
+    const dx = e.changedTouches[0].clientX - touchStartRef.current.x;
+    const dy = e.changedTouches[0].clientY - touchStartRef.current.y;
+    touchStartRef.current = null;
+    // Only count horizontal swipes (ignore vertical scrolls)
+    if (Math.abs(dx) < 30 || Math.abs(dx) < Math.abs(dy)) return;
+    if (dx < 0) {
+      setThumbIndex(prev => (prev + 1) % thumbUrls.length);
+    } else {
+      setThumbIndex(prev => (prev - 1 + thumbUrls.length) % thumbUrls.length);
+    }
+  };
 
   const handleMouseEnter = () => {
     if (thumbUrls.length === 0) return;
@@ -331,7 +350,11 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
       )}
       {/* Thumbnail tooltip on hover */}
       {showThumbs && thumbUrls.length > 0 && (
-        <div className={`absolute left-1/2 -translate-x-1/2 z-50 rounded-lg overflow-hidden shadow-2xl border border-slate-600/50 pointer-events-none w-[min(600px,90vw)] ${thumbBelow ? 'top-full mt-2' : 'bottom-full mb-2'}`}>
+        <div
+          className={`absolute left-1/2 -translate-x-1/2 z-50 rounded-lg overflow-hidden shadow-2xl border border-slate-600/50 sm:pointer-events-none w-[min(600px,calc(100vw-2rem))] ${thumbBelow ? 'top-full mt-2' : 'bottom-full mb-2'}`}
+          onTouchStart={handleThumbTouchStart}
+          onTouchEnd={handleThumbTouchEnd}
+        >
           <div className="relative aspect-video bg-black">
             {thumbUrls.map((url, i) => (
               <img
