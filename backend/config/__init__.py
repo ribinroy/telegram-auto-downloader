@@ -59,6 +59,10 @@ WEB_HOST = os.getenv('WEB_HOST', '0.0.0.0')
 # Download Configuration
 MAX_RETRIES = int(os.getenv('MAX_RETRIES', '6'))
 
+# Screenshots directory for video thumbnails
+_screenshots_dir_env = os.getenv('SCREENSHOTS_DIR', '').strip().strip('"').strip("'")
+SCREENSHOTS_DIR = Path(_screenshots_dir_env) if _screenshots_dir_env else DOWNLOAD_DIR / '.thumbs'
+
 # Database Configuration
 DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://postgres:password@localhost:5432/telegram_downloader')
 SESSION_FILE = BASE_DIR / "downloader_session"
@@ -68,6 +72,7 @@ LOG_FILE = LOGS_DIR / "telegram_downloader.log"
 # Create necessary directories
 DOWNLOAD_DIR.mkdir(exist_ok=True)
 LOGS_DIR.mkdir(exist_ok=True)
+SCREENSHOTS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Media type folders
 MEDIA_FOLDERS = {

@@ -347,3 +347,9 @@ export function getVideoStreamUrl(downloadId: number): string {
   const token = getToken();
   return `${API_BASE}/api/video/stream/${downloadId}?token=${token}`;
 }
+
+export function getThumbUrl(downloadId: number, filename: string): string {
+  const token = getToken();
+  return `${API_BASE}/api/thumbs/${downloadId}/${filename}?token=${token}`;
+}
+

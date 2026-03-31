@@ -12,7 +12,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from backend.config import DOWNLOAD_DIR
+from backend.config import DOWNLOAD_DIR, SCREENSHOTS_DIR
 from backend.database import get_db
 
 logger = logging.getLogger(__name__)
@@ -22,8 +22,12 @@ VIDEO_EXTENSIONS = {'.mp4', '.mkv', '.webm', '.avi', '.mov', '.m4v', '.flv', '.w
 POLL_INTERVAL = 2  # seconds between probe attempts
 MIN_BYTES_FOR_PROBE = 1 * 1024 * 1024  # 1MB - minimum downloaded before first probe
 
-# Resolve ffprobe absolute path at import time so it works regardless of service PATH
+# Resolve absolute paths at import time so they work regardless of service PATH
 FFPROBE_PATH = shutil.which('ffprobe') or '/usr/bin/ffprobe'
+FFMPEG_PATH = shutil.which('ffmpeg') or '/usr/bin/ffmpeg'
+
+THUMBS_DIR = SCREENSHOTS_DIR
+THUMB_POSITIONS = [0.25, 0.50, 0.75, 0.95]  # Percentages of duration
 
 
 def probe_video(file_path: str) -> dict | None:
@@ -170,6 +174,55 @@ def extract_and_store_meta(message_id) -> bool:
     return True
 
 
+def generate_thumbnails(download_id, file_path: str, duration: float) -> bool:
+    """
+    Extract 4 thumbnail images from a video at 25%, 50%, 75%, 95% of duration.
+    Stores them in THUMBS_DIR/<download_id>/1.jpg .. 4.jpg
+    Returns True if at least one thumbnail was created.
+    """
+    folder_name = str(download_id)
+    thumb_dir = THUMBS_DIR / folder_name
+    thumb_dir.mkdir(parents=True, exist_ok=True)
+
+    created = 0
+    for i, pos in enumerate(THUMB_POSITIONS, 1):
+        timestamp = duration * pos
+        out_path = thumb_dir / f"{i}.jpg"
+        try:
+            result = subprocess.run(
+                [
+                    FFMPEG_PATH, '-ss', str(timestamp),
+                    '-i', str(file_path),
+                    '-vframes', '1', '-q:v', '2',
+                    '-y', str(out_path)
+                ],
+                capture_output=True, text=True, timeout=30
+            )
+            if result.returncode == 0 and out_path.exists():
+                created += 1
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            continue
+
+    if created > 0:
+        print(f"[file_meta] Generated {created} thumbnails for download {folder_name}")
+    else:
+        # Clean up empty folder
+        shutil.rmtree(thumb_dir, ignore_errors=True)
+    return created > 0
+
+
+def delete_thumbnails(download_id):
+    """Delete the thumbnail folder for a download."""
+    thumb_dir = THUMBS_DIR / str(download_id)
+    if thumb_dir.exists():
+        shutil.rmtree(thumb_dir, ignore_errors=True)
+
+
+def get_thumbs_dir() -> Path:
+    """Return the base thumbnails directory."""
+    return THUMBS_DIR
+
+
 async def poll_and_extract_meta(message_id):
     """
     Background task that probes video metadata as early as possible.
@@ -207,20 +260,51 @@ async def poll_and_extract_meta(message_id):
         await asyncio.sleep(POLL_INTERVAL)
 
     # Phase 2: probe every 2s until metadata is extracted
+    meta_stored = False
     while True:
         download = db.get_download_by_message_id(msg_id)
         if not download:
             return
 
         if download.get('file_meta'):
-            return
+            meta_stored = True
+            break
 
         if extract_and_store_meta(msg_id):
-            return
+            meta_stored = True
+            break
 
         status = download.get('status')
 
         if status in ('done', 'failed', 'stopped'):
+            break
+
+        await asyncio.sleep(POLL_INTERVAL)
+
+    if not meta_stored:
+        return
+
+    # Phase 3: wait for download to complete, then generate thumbnails
+    while True:
+        download = db.get_download_by_message_id(msg_id)
+        if not download:
+            return
+
+        status = download.get('status')
+        if status == 'done':
+            break
+        if status in ('failed', 'stopped'):
             return
 
         await asyncio.sleep(POLL_INTERVAL)
+
+    # Generate thumbnails from the completed file
+    file_meta = download.get('file_meta')
+    duration = file_meta.get('duration') if isinstance(file_meta, dict) else None
+    if not duration:
+        return
+
+    filename = download.get('file')
+    file_path = find_file(filename, download.get('downloaded_from'))
+    if file_path:
+        generate_thumbnails(download.get('id'), str(file_path), duration)

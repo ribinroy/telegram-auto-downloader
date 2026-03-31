@@ -170,6 +170,16 @@ class WebApp:
         paginated_list = filtered_list[offset:offset + limit]
         has_more = (offset + limit) < total_count
 
+        # Attach thumbnail counts to paginated results
+        from backend.file_meta import get_thumbs_dir
+        thumbs_base = get_thumbs_dir()
+        for d in paginated_list:
+            thumb_dir = thumbs_base / str(d.get('id'))
+            if thumb_dir.exists():
+                d['thumb_count'] = len([f for f in thumb_dir.iterdir() if f.suffix == '.jpg'])
+            else:
+                d['thumb_count'] = 0
+
         return {
             "downloads": paginated_list,
             "has_more": has_more,
@@ -506,6 +516,12 @@ class WebApp:
                         if file_path.exists():
                             file_path.unlink()
                             break
+
+            # Delete thumbnails (uses download id for folder name)
+            from backend.file_meta import delete_thumbnails
+            dl_for_thumbs = db.get_download_by_message_id(message_id)
+            if dl_for_thumbs and dl_for_thumbs.get('id'):
+                delete_thumbnails(dl_for_thumbs['id'])
 
             # Soft delete from database
             db.delete_download_by_message_id(message_id)
@@ -996,6 +1012,46 @@ class WebApp:
                 response.headers['Accept-Ranges'] = 'bytes'
                 response.headers['Content-Length'] = file_size
                 return response
+
+        # Thumbnail API
+        @self.app.route("/api/thumbs/<int:download_id>", methods=["GET"])
+        @token_required
+        def get_thumbs(download_id):
+            """Get list of available thumbnails for a download"""
+            from backend.file_meta import get_thumbs_dir
+            thumb_dir = get_thumbs_dir() / str(download_id)
+            if not thumb_dir.exists():
+                return jsonify({"thumbs": []})
+            thumbs = sorted([f.name for f in thumb_dir.iterdir() if f.suffix == '.jpg'])
+            return jsonify({"thumbs": thumbs})
+
+        @self.app.route("/api/thumbs/<int:download_id>/<filename>", methods=["GET"])
+        def serve_thumb(download_id, filename):
+            """Serve a thumbnail image"""
+            # Accept token from query param or header
+            token = request.args.get('token')
+            if not token:
+                auth_header = request.headers.get('Authorization')
+                if auth_header and auth_header.startswith('Bearer '):
+                    token = auth_header.split(' ')[1]
+            if not token:
+                return jsonify({'error': 'Token is missing'}), 401
+            try:
+                jwt.decode(token, JWT_SECRET, algorithms=['HS256'])
+            except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
+                return jsonify({'error': 'Invalid token'}), 401
+
+            # Sanitize filename to prevent directory traversal
+            if '/' in filename or '\\' in filename or '..' in filename:
+                return jsonify({'error': 'Invalid filename'}), 400
+
+            from backend.file_meta import get_thumbs_dir
+            thumb_dir = get_thumbs_dir() / str(download_id)
+            thumb_path = thumb_dir / filename
+            if not thumb_path.exists():
+                return jsonify({'error': 'Thumbnail not found'}), 404
+
+            return send_from_directory(str(thumb_dir), filename, mimetype='image/jpeg')
 
         # Serve frontend
         @self.app.route('/')

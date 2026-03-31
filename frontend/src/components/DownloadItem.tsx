@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
   Square,
   Trash2,
@@ -21,7 +21,7 @@ import { formatBytes, formatTime, formatSpeed } from '../utils/format';
 import { ConfirmDialog } from './ConfirmDialog';
 import { VideoPlayerModal } from './VideoPlayerModal';
 import { Tooltip } from './Tooltip';
-import { checkVideoFile, getVideoStreamUrl } from '../api';
+import { checkVideoFile, getVideoStreamUrl, getThumbUrl } from '../api';
 
 interface DownloadItemProps {
   download: Download;
@@ -206,9 +206,27 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [checkingVideo, setCheckingVideo] = useState(false);
   const [localFileDeleted, setLocalFileDeleted] = useState(download.file_deleted);
+  const [thumbIndex, setThumbIndex] = useState(0);
   const progressPercent = download.progress || 0;
 
   const isTelegram = download.downloaded_from === 'telegram';
+
+  // Build thumb URLs from thumb_count
+  const thumbUrls = useMemo(() => {
+    if (!download.thumb_count) return [];
+    return Array.from({ length: download.thumb_count }, (_, i) =>
+      getThumbUrl(download.id, `${i + 1}.jpg`)
+    );
+  }, [download.id, download.thumb_count]);
+
+  // Carousel through thumbnails
+  useEffect(() => {
+    if (thumbUrls.length <= 1) return;
+    const interval = setInterval(() => {
+      setThumbIndex(prev => (prev + 1) % thumbUrls.length);
+    }, 4000);
+    return () => clearInterval(interval);
+  }, [thumbUrls.length]);
 
   const handleStopConfirm = () => {
     if (download.message_id) onStop(download.message_id);
@@ -244,52 +262,77 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
   };
 
   return (
-    <div className="bg-slate-800/30 rounded-xl p-3 sm:p-4 border border-slate-700/50 transition-all overflow-visible">
+    <div className="relative rounded-xl p-3 sm:p-4 border border-slate-700/50 transition-all overflow-visible">
+      {/* Thumbnail background */}
+      {thumbUrls.length > 0 && (
+        <div className="absolute inset-0 rounded-xl overflow-hidden">
+          {thumbUrls.map((url, i) => (
+            <div
+              key={url}
+              className="absolute inset-0 bg-cover bg-center transition-opacity duration-1000"
+              style={{
+                backgroundImage: `url(${url})`,
+                opacity: i === thumbIndex ? 1 : 0,
+              }}
+            />
+          ))}
+          <div className="absolute inset-0 bg-slate-900/80" />
+        </div>
+      )}
+      {!thumbUrls.length && <div className="absolute inset-0 rounded-xl bg-slate-800/30" />}
+      {/* Content */}
+      <div className="relative z-10">
       {/* Mobile layout: stacked */}
       <div className="flex flex-col sm:flex-row sm:items-start gap-3 sm:gap-4">
         {/* Top row on mobile: Icon + Title + Status */}
         <div className="flex items-start gap-3 sm:contents">
           {/* Source Icon + Resolution */}
           <div className="flex flex-col items-center gap-1 shrink-0">
-            <div className="relative w-9 h-9 sm:w-10 sm:h-10 flex items-center justify-center bg-slate-700/50 rounded-lg">
-              {getPlatformIcon(download.downloaded_from || 'telegram')}
+            {(() => {
+              const meta = download.file_meta;
+              const res = getResolutionLabel(download);
+              const audio = getAudioLabel(download);
+              const bitDepth = meta?.video?.bit_depth;
+              const bitLabel = bitDepth && bitDepth > 8 ? `${bitDepth}b` : null;
+              const tooltipLines: string[] = [];
+              if (meta?.video) {
+                tooltipLines.push(`${meta.video.width}x${meta.video.height} · ${meta.video.codec}${bitDepth ? ` · ${bitDepth}bit` : ''}${meta.video.fps ? ` · ${meta.video.fps}fps` : ''}${meta.video.bitrate ? ` · ${(meta.video.bitrate / 1000000).toFixed(1)}Mbps` : ''}`);
+              }
+              if (meta?.audio) {
+                tooltipLines.push(`Audio: ${meta.audio.codec}${meta.audio.channels ? ` · ${meta.audio.channels}ch` : ''}${meta.audio.sample_rate ? ` · ${meta.audio.sample_rate}Hz` : ''}${meta.audio.bitrate ? ` · ${Math.round(meta.audio.bitrate / 1000)}kbps` : ''}`);
+              }
+              if (meta?.duration) {
+                const hrs = Math.floor(meta.duration / 3600);
+                const mins = Math.floor((meta.duration % 3600) / 60);
+                const secs = Math.round(meta.duration % 60);
+                const pad = (n: number) => n.toString().padStart(2, '0');
+                tooltipLines.push(`Duration: ${pad(hrs)}:${pad(mins)}:${pad(secs)}`);
+              }
+              const tooltip = tooltipLines.join('\n');
 
-              {(() => {
-                const res = getResolutionLabel(download);
-                const audio = getAudioLabel(download);
-                const bitDepth = download.file_meta?.video?.bit_depth;
-                const bitLabel = bitDepth && bitDepth > 8 ? `${bitDepth}b` : null;
-                const tooltipParts: string[] = [];
-                if (download.file_meta?.video) tooltipParts.push(`${download.file_meta.video.width}x${download.file_meta.video.height}${bitDepth ? ` ${bitDepth}bit` : ''}`);
-                if (download.file_meta?.audio) tooltipParts.push(`${download.file_meta.audio.codec}${download.file_meta.audio.channels ? ` ${download.file_meta.audio.channels}ch` : ''}`);
-                const tooltip = tooltipParts.join(' · ');
-                return (
-                  <>
+              const icon = (
+                <div className="relative w-9 h-9 sm:w-10 sm:h-10 flex items-center justify-center bg-slate-700/50 rounded-lg cursor-default">
+                    {getPlatformIcon(download.downloaded_from || 'telegram')}
                     {res && (
-                      <Tooltip content={tooltip}>
-                        <span className="absolute -top-1.5 -left-1.5 text-[10px] font-medium text-slate-400 bg-slate-700/80 px-1 py-0.5 rounded cursor-default leading-none">
-                          {res}
-                        </span>
-                      </Tooltip>
+                      <span className="absolute -top-1.5 -left-1.5 text-[10px] font-medium text-slate-400 bg-slate-700/80 px-1 py-0.5 rounded leading-none">
+                        {res}
+                      </span>
                     )}
                     {audio && (
-                      <Tooltip content={tooltip}>
-                        <span className="absolute -top-1.5 -right-1.5 text-[10px] font-medium text-slate-400 bg-slate-700/80 px-1 py-0.5 rounded cursor-default leading-none">
-                          {audio}
-                        </span>
-                      </Tooltip>
+                      <span className="absolute -top-1.5 -right-1.5 text-[10px] font-medium text-slate-400 bg-slate-700/80 px-1 py-0.5 rounded leading-none">
+                        {audio}
+                      </span>
                     )}
                     {bitLabel && (
-                      <Tooltip content={tooltip}>
-                        <span className="absolute -bottom-1.5 -right-1.5 text-[10px] font-medium text-slate-400 bg-slate-700/80 px-1 py-0.5 rounded cursor-default leading-none">
-                          {bitLabel}
-                        </span>
-                      </Tooltip>
+                      <span className="absolute -bottom-1.5 -right-1.5 text-[10px] font-medium text-slate-400 bg-slate-700/80 px-1 py-0.5 rounded leading-none">
+                        {bitLabel}
+                      </span>
                     )}
-                  </>
-                );
-              })()}
-            </div>
+                  </div>
+              );
+
+              return tooltip ? <Tooltip content={tooltip}>{icon}</Tooltip> : icon;
+            })()}
           </div>
 
           {/* Title and info - takes remaining space on mobile */}
@@ -673,6 +716,7 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
           title={download.file}
         />
       )}
+      </div>
     </div>
   );
 }
