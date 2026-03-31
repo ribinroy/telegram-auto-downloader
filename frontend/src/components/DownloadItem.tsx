@@ -224,9 +224,9 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
     );
   }, [download.id, download.thumb_count]);
 
-  // Carousel through thumbnails
+  // Carousel through thumbnails (only when tooltip is NOT open)
   useEffect(() => {
-    if (!showThumbs || thumbUrls.length <= 1) return;
+    if (showThumbs || thumbUrls.length <= 1) return;
     const interval = setInterval(() => {
       setThumbIndex(prev => (prev + 1) % thumbUrls.length);
     }, 3000);
