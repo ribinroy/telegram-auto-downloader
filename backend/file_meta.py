@@ -174,40 +174,45 @@ def extract_and_store_meta(message_id) -> bool:
     return True
 
 
-def generate_thumbnails(download_id, file_path: str, duration: float) -> bool:
+async def generate_thumbnails(download_id, file_path: str, duration: float) -> bool:
     """
-    Extract 4 thumbnail images from a video at 25%, 50%, 75%, 95% of duration.
-    Stores them in THUMBS_DIR/<download_id>/1.jpg .. 4.jpg
+    Extract thumbnail images from a video at each THUMB_POSITIONS percentage.
+    Stores them in THUMBS_DIR/<download_id>/1.jpg .. N.jpg
+    All ffmpeg processes run in parallel for speed.
     Returns True if at least one thumbnail was created.
     """
     folder_name = str(download_id)
     thumb_dir = THUMBS_DIR / folder_name
     thumb_dir.mkdir(parents=True, exist_ok=True)
 
-    created = 0
-    for i, pos in enumerate(THUMB_POSITIONS, 1):
+    async def _extract_one(index: int, pos: float) -> bool:
         timestamp = duration * pos
-        out_path = thumb_dir / f"{i}.jpg"
+        out_path = thumb_dir / f"{index}.jpg"
         try:
-            result = subprocess.run(
-                [
-                    FFMPEG_PATH, '-ss', str(timestamp),
-                    '-i', str(file_path),
-                    '-vframes', '1', '-q:v', '2',
-                    '-vf', "scale='min(900,iw)':-2",
-                    '-y', str(out_path)
-                ],
-                capture_output=True, text=True, timeout=30
+            proc = await asyncio.create_subprocess_exec(
+                FFMPEG_PATH, '-ss', str(timestamp),
+                '-i', str(file_path),
+                '-vframes', '1', '-q:v', '2',
+                '-vf', "scale='min(900,iw)':-2",
+                '-y', str(out_path),
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
             )
-            if result.returncode == 0 and out_path.exists():
-                created += 1
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            continue
+            await asyncio.wait_for(proc.wait(), timeout=30)
+            return proc.returncode == 0 and out_path.exists()
+        except (asyncio.TimeoutError, FileNotFoundError):
+            if proc and proc.returncode is None:
+                proc.kill()
+            return False
+
+    results = await asyncio.gather(
+        *(_extract_one(i, pos) for i, pos in enumerate(THUMB_POSITIONS, 1))
+    )
+    created = sum(results)
 
     if created > 0:
         print(f"[file_meta] Generated {created} thumbnails for download {folder_name}")
     else:
-        # Clean up empty folder
         shutil.rmtree(thumb_dir, ignore_errors=True)
     return created > 0
 
@@ -308,4 +313,4 @@ async def poll_and_extract_meta(message_id):
     filename = download.get('file')
     file_path = find_file(filename, download.get('downloaded_from'))
     if file_path:
-        generate_thumbnails(download.get('id'), str(file_path), duration)
+        await generate_thumbnails(download.get('id'), str(file_path), duration)
