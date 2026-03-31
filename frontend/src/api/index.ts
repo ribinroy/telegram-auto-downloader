@@ -359,6 +359,30 @@ export async function checkVideoFile(downloadId: number): Promise<VideoCheckResu
   return response.json();
 }
 
+// Jobs API
+export interface SyncThumbnailsResult {
+  generated: number;
+  skipped: number;
+  orphan_deleted: number;
+  db_count_fixed: number;
+  meta_extracted: number;
+  no_duration: number;
+  not_video: number;
+  failed: number;
+}
+
+export async function syncThumbnails(): Promise<SyncThumbnailsResult> {
+  const response = await fetch(`${API_BASE}/api/jobs/sync-thumbnails`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+  });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  return response.json();
+}
+
 export function getVideoStreamUrl(downloadId: number): string {
   const token = getToken();
   return `${API_BASE}/api/video/stream/${downloadId}?token=${token}`;

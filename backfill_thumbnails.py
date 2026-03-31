@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """
-Backfill script: Generates thumbnails for existing completed video downloads.
-Safe to run while the service is running - uses its own DB session.
+Thumbnail sync script: ensures thumbnails match the actual file state on disk.
 
-Also backfills the thumb_count DB column for downloads that already have
-thumbnails on disk but no count stored yet.
+- File exists, thumbnails missing → generate thumbnails
+- File exists, thumbnails exist → skip (update DB count if needed)
+- File missing, thumbnails exist → delete thumbnails
+- Updates thumb_count in DB to stay in sync
 """
 import asyncio
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -16,11 +18,11 @@ sys.path.insert(0, str(Path(__file__).parent))
 from backend.config import DATABASE_URL, SCREENSHOTS_DIR
 from backend.database import DatabaseManager, Download, init_database
 from backend.file_meta import (
-    find_file, is_video_file, generate_thumbnails, VIDEO_EXTENSIONS
+    find_file, is_video_file, generate_thumbnails, extract_meta, probe_video
 )
 
 
-def main():
+async def async_main():
     print(f"Connecting to database: {DATABASE_URL[:30]}...")
     print(f"Screenshots dir: {SCREENSHOTS_DIR}")
     init_database(DATABASE_URL)
@@ -30,71 +32,109 @@ def main():
     try:
         downloads = session.query(Download).filter(
             Download.status == 'done',
-            Download.file_meta != None,
             Download.deleted_at == None,
         ).all()
 
-        print(f"Found {len(downloads)} completed downloads with file_meta")
+        print(f"Found {len(downloads)} completed downloads\n")
 
-        generated = 0
-        skipped_exists = 0
-        skipped_no_duration = 0
-        not_video = 0
-        not_found = 0
-        backfilled_count = 0
+        stats = {
+            'generated': 0,
+            'skipped': 0,
+            'orphan_deleted': 0,
+            'db_count_fixed': 0,
+            'meta_extracted': 0,
+            'not_video': 0,
+            'no_duration': 0,
+            'failed': 0,
+        }
 
         for dl in downloads:
             file_name = dl.file
-            if not file_name:
-                continue
-
-            if not is_video_file(file_name):
-                not_video += 1
+            if not file_name or not is_video_file(file_name):
+                stats['not_video'] += 1
                 continue
 
             dl_id = dl.id
-
-            # Skip if thumbnails already exist on disk
             thumb_dir = SCREENSHOTS_DIR / str(dl_id)
-            if thumb_dir.exists() and any(thumb_dir.glob('*.jpg')):
-                # Backfill thumb_count in DB if missing
-                if not dl.thumb_count:
-                    count = len([f for f in thumb_dir.iterdir() if f.suffix == '.jpg'])
-                    dl.thumb_count = count
-                    session.commit()
-                    backfilled_count += 1
-                skipped_exists += 1
-                continue
-
-            # Parse duration from file_meta
-            try:
-                meta = json.loads(dl.file_meta) if isinstance(dl.file_meta, str) else dl.file_meta
-            except (json.JSONDecodeError, TypeError):
-                continue
-
-            duration = meta.get('duration')
-            if not duration or duration <= 0:
-                skipped_no_duration += 1
-                continue
-
+            has_thumbs = thumb_dir.exists() and any(thumb_dir.glob('*.jpg'))
             file_path = find_file(file_name, dl.downloaded_from)
-            if not file_path:
-                not_found += 1
+
+            # Case: file missing, thumbnails exist → delete orphan thumbnails
+            if not file_path and has_thumbs:
+                shutil.rmtree(thumb_dir, ignore_errors=True)
+                dl.thumb_count = 0
+                session.commit()
+                stats['orphan_deleted'] += 1
+                print(f"  DELETED orphan thumbs: {file_name} (id={dl_id})")
                 continue
 
-            count = asyncio.run(generate_thumbnails(dl_id, str(file_path), duration))
-            if count:
-                generated += 1
-                print(f"  OK: {file_name} ({count} thumbs)")
-            else:
-                print(f"  FAIL: {file_name}")
+            # Case: file missing, no thumbnails → nothing to do
+            if not file_path:
+                continue
 
-        print(f"\nDone! Generated: {generated}, Already had thumbs: {skipped_exists}, "
-              f"No duration: {skipped_no_duration}, Not video: {not_video}, "
-              f"File not found: {not_found}, DB counts backfilled: {backfilled_count}")
+            # Case: file exists, thumbnails exist → sync DB count
+            if has_thumbs:
+                actual_count = len([f for f in thumb_dir.iterdir() if f.suffix == '.jpg'])
+                if dl.thumb_count != actual_count:
+                    dl.thumb_count = actual_count
+                    session.commit()
+                    stats['db_count_fixed'] += 1
+                    print(f"  FIXED count: {file_name} (id={dl_id}, count={actual_count})")
+                stats['skipped'] += 1
+                continue
+
+            # Case: file exists, thumbnails missing → extract meta if needed, then generate
+
+            # Extract meta if missing
+            duration = None
+            if dl.file_meta:
+                try:
+                    meta = json.loads(dl.file_meta) if isinstance(dl.file_meta, str) else dl.file_meta
+                    duration = meta.get('duration')
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+            if not duration:
+                probe_data = await probe_video(str(file_path))
+                if probe_data:
+                    meta = extract_meta(probe_data)
+                    if meta.get('video'):
+                        dl.file_meta = json.dumps(meta)
+                        session.commit()
+                        duration = meta.get('duration')
+                        stats['meta_extracted'] += 1
+                        print(f"  META extracted: {file_name} (id={dl_id})")
+
+            if not duration or duration <= 0:
+                stats['no_duration'] += 1
+                continue
+
+            count = await generate_thumbnails(dl_id, str(file_path), duration)
+            if count:
+                dl.thumb_count = count
+                session.commit()
+                stats['generated'] += 1
+                print(f"  OK: {file_name} (id={dl_id}, {count} thumbs)")
+            else:
+                stats['failed'] += 1
+                print(f"  FAIL: {file_name} (id={dl_id})")
+
+        print(f"\nSync complete!")
+        print(f"  Generated: {stats['generated']}")
+        print(f"  Already had thumbs: {stats['skipped']}")
+        print(f"  Orphan thumbs deleted: {stats['orphan_deleted']}")
+        print(f"  DB counts fixed: {stats['db_count_fixed']}")
+        print(f"  Meta extracted: {stats['meta_extracted']}")
+        print(f"  No duration: {stats['no_duration']}")
+        print(f"  Not video: {stats['not_video']}")
+        print(f"  Failed: {stats['failed']}")
 
     finally:
         db.close_session()
+
+
+def main():
+    asyncio.run(async_main())
 
 
 if __name__ == '__main__':

@@ -451,6 +451,12 @@ class WebApp:
                 task = self.download_tasks.get(telegram_id)
                 if task and not task.done():
                     task.cancel()
+                # Update Telegram status message
+                if self.telegram_downloader and telegram_id:
+                    asyncio.run_coroutine_threadsafe(
+                        self.telegram_downloader.update_status_message(telegram_id, "Stopped"),
+                        self.telegram_downloader.loop
+                    )
 
             # Update database status to stopped
             db.update_download_by_message_id(message_id, status='stopped', speed=0)
@@ -471,8 +477,13 @@ class WebApp:
             telegram_id = int(message_id) if message_id else None
             if self.telegram_downloader and telegram_id:
                 self.telegram_downloader.pause_download(telegram_id)
+                # Update Telegram status message to show paused
+                asyncio.run_coroutine_threadsafe(
+                    self.telegram_downloader.update_status_message(telegram_id, "Paused"),
+                    self.telegram_downloader.loop
+                )
 
-            db.update_download_by_message_id(message_id, status='paused', speed=0)
+            db.update_download_by_message_id(message_id, status='paused', speed=0, pending_time=None)
             self.emit_status(message_id, 'paused')
             return jsonify({"status": "paused"})
 
@@ -489,7 +500,16 @@ class WebApp:
 
             telegram_id = int(message_id) if message_id else None
             if self.telegram_downloader and telegram_id:
-                self.telegram_downloader.resume_download(telegram_id)
+                future = asyncio.run_coroutine_threadsafe(
+                    self.telegram_downloader.restart_download(telegram_id),
+                    self.telegram_downloader.loop
+                )
+                try:
+                    success = future.result(timeout=30)
+                    if not success:
+                        return jsonify({"error": "Failed to restart download from Telegram"}), 500
+                except Exception as e:
+                    return jsonify({"error": f"Failed to restart download: {str(e)}"}), 500
 
             db.update_download_by_message_id(message_id, status='downloading', speed=0)
             self.emit_status(message_id, 'downloading')
@@ -1081,6 +1101,96 @@ class WebApp:
                 return jsonify({'error': 'Thumbnail not found'}), 404
 
             return send_from_directory(str(thumb_dir), filename, mimetype='image/jpeg')
+
+        # Jobs API
+        @self.app.route("/api/jobs/sync-thumbnails", methods=["POST"])
+        @token_required
+        def api_sync_thumbnails():
+            """Run thumbnail sync job - generates missing thumbnails, cleans orphans."""
+            import json as _json
+            import shutil
+            from backend.config import SCREENSHOTS_DIR
+            from backend.file_meta import (
+                find_file, is_video_file, generate_thumbnails as gen_thumbs,
+                probe_video, extract_meta
+            )
+
+            db = get_db()
+            downloads = db.get_all_downloads()
+            completed = [d for d in downloads if d['status'] == 'done' and not d.get('deleted_at')]
+
+            stats = {
+                'generated': 0,
+                'skipped': 0,
+                'orphan_deleted': 0,
+                'db_count_fixed': 0,
+                'meta_extracted': 0,
+                'no_duration': 0,
+                'not_video': 0,
+                'failed': 0,
+            }
+
+            import asyncio as _asyncio
+            loop = _asyncio.new_event_loop()
+
+            for dl in completed:
+                file_name = dl.get('file')
+                if not file_name or not is_video_file(file_name):
+                    stats['not_video'] += 1
+                    continue
+
+                dl_id = dl['id']
+                thumb_dir = SCREENSHOTS_DIR / str(dl_id)
+                has_thumbs = thumb_dir.exists() and any(thumb_dir.glob('*.jpg'))
+                file_path = find_file(file_name, dl.get('downloaded_from'))
+
+                # File missing, thumbnails exist → delete orphans
+                if not file_path and has_thumbs:
+                    shutil.rmtree(thumb_dir, ignore_errors=True)
+                    db.update_download_by_id(dl_id, thumb_count=0)
+                    stats['orphan_deleted'] += 1
+                    continue
+
+                # File missing, no thumbnails → skip
+                if not file_path:
+                    continue
+
+                # File exists, thumbnails exist → sync DB count
+                if has_thumbs:
+                    actual_count = len([f for f in thumb_dir.iterdir() if f.suffix == '.jpg'])
+                    if dl.get('thumb_count') != actual_count:
+                        db.update_download_by_id(dl_id, thumb_count=actual_count)
+                        stats['db_count_fixed'] += 1
+                    stats['skipped'] += 1
+                    continue
+
+                # File exists, thumbnails missing → generate
+                duration = None
+                file_meta = dl.get('file_meta')
+                if file_meta:
+                    duration = file_meta.get('duration') if isinstance(file_meta, dict) else None
+
+                if not duration:
+                    probe_data = loop.run_until_complete(probe_video(str(file_path)))
+                    if probe_data:
+                        meta = extract_meta(probe_data)
+                        if meta.get('video'):
+                            db.update_download_by_id(dl_id, file_meta=_json.dumps(meta))
+                            duration = meta.get('duration')
+                            stats['meta_extracted'] += 1
+
+                if not duration or duration <= 0:
+                    stats['no_duration'] += 1
+                    continue
+
+                count = loop.run_until_complete(gen_thumbs(dl_id, str(file_path), duration))
+                if count:
+                    stats['generated'] += 1
+                else:
+                    stats['failed'] += 1
+
+            loop.close()
+            return jsonify(stats)
 
         # Serve frontend
         @self.app.route('/')

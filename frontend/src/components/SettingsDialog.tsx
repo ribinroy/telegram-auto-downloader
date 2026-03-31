@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { X, Loader2, AlertCircle, CheckCircle, Key, FolderCog, Plus, Trash2, Shield, ShieldOff, Pencil, Check, Cookie } from 'lucide-react';
-import { updatePassword, fetchMappings, addMapping, updateMapping, deleteMapping, fetchCookies, saveCookies } from '../api';
+import { X, Loader2, AlertCircle, CheckCircle, Key, FolderCog, Plus, Trash2, Shield, ShieldOff, Pencil, Check, Cookie, Wrench } from 'lucide-react';
+import { updatePassword, fetchMappings, addMapping, updateMapping, deleteMapping, fetchCookies, saveCookies, syncThumbnails } from '../api';
+import type { SyncThumbnailsResult } from '../api';
 import type { DownloadTypeMap } from '../types';
 import { ConfirmDialog } from './ConfirmDialog';
 
@@ -11,7 +12,7 @@ interface SettingsDialogProps {
   showMappings?: boolean;
 }
 
-type TabType = 'password' | 'mappings' | 'cookies';
+type TabType = 'password' | 'mappings' | 'cookies' | 'jobs';
 
 export function SettingsDialog({ isOpen, onClose, showMappings = false }: SettingsDialogProps) {
   const [activeTab, setActiveTab] = useState<TabType>('password');
@@ -52,6 +53,11 @@ export function SettingsDialog({ isOpen, onClose, showMappings = false }: Settin
   const [cookiesSaving, setCookiesSaving] = useState(false);
   const [cookiesError, setCookiesError] = useState<string | null>(null);
   const [cookiesSuccess, setCookiesSuccess] = useState(false);
+
+  // Jobs state
+  const [syncRunning, setSyncRunning] = useState(false);
+  const [syncResult, setSyncResult] = useState<SyncThumbnailsResult | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
 
   // Load mappings when tab changes to mappings
   useEffect(() => {
@@ -96,6 +102,20 @@ export function SettingsDialog({ isOpen, onClose, showMappings = false }: Settin
       setCookiesError('Failed to save cookies');
     } finally {
       setCookiesSaving(false);
+    }
+  };
+
+  const handleSyncThumbnails = async () => {
+    setSyncRunning(true);
+    setSyncError(null);
+    setSyncResult(null);
+    try {
+      const result = await syncThumbnails();
+      setSyncResult(result);
+    } catch {
+      setSyncError('Failed to run thumbnail sync');
+    } finally {
+      setSyncRunning(false);
     }
   };
 
@@ -246,6 +266,8 @@ export function SettingsDialog({ isOpen, onClose, showMappings = false }: Settin
     setEditQuality('');
     setCookiesError(null);
     setCookiesSuccess(false);
+    setSyncResult(null);
+    setSyncError(null);
     onClose();
   };
 
@@ -308,6 +330,17 @@ export function SettingsDialog({ isOpen, onClose, showMappings = false }: Settin
           >
             <Cookie className="w-4 h-4" />
             <span className="hidden xs:inline">Cookies</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('jobs')}
+            className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2.5 sm:py-3 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap ${
+              activeTab === 'jobs'
+                ? 'text-cyan-400 border-b-2 border-cyan-400'
+                : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            <Wrench className="w-4 h-4" />
+            <span className="hidden xs:inline">Jobs</span>
           </button>
         </div>
 
@@ -672,6 +705,88 @@ export function SettingsDialog({ isOpen, onClose, showMappings = false }: Settin
                   </button>
                 </>
               )}
+            </>
+          )}
+
+          {activeTab === 'jobs' && (
+            <>
+              <p className="text-sm text-slate-400 mb-4">
+                Maintenance jobs to keep thumbnails and metadata in sync.
+              </p>
+
+              {/* Sync Thumbnails */}
+              <div className="bg-slate-700/30 rounded-lg p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <div>
+                    <h3 className="text-white font-medium text-sm">Sync Thumbnails</h3>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      Generate missing thumbnails, clean up orphans, and fix DB counts.
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  onClick={handleSyncThumbnails}
+                  disabled={syncRunning}
+                  className="w-full bg-cyan-600 hover:bg-cyan-700 text-white font-medium py-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 mt-3"
+                >
+                  {syncRunning ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Running...
+                    </>
+                  ) : (
+                    'Run Sync'
+                  )}
+                </button>
+
+                {/* Error */}
+                {syncError && (
+                  <div className="flex items-center gap-2 bg-red-500/20 border border-red-500/50 rounded-lg p-3 mt-3 text-red-400 text-sm">
+                    <AlertCircle className="w-4 h-4 shrink-0" />
+                    <span>{syncError}</span>
+                  </div>
+                )}
+
+                {/* Results */}
+                {syncResult && (
+                  <div className="mt-3 bg-slate-800/50 rounded-lg p-3 space-y-1.5">
+                    <div className="flex items-center gap-2 text-green-400 text-sm font-medium mb-2">
+                      <CheckCircle className="w-4 h-4" />
+                      Sync complete
+                    </div>
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                      {syncResult.generated > 0 && (
+                        <div className="text-green-400">Generated: {syncResult.generated}</div>
+                      )}
+                      {syncResult.skipped > 0 && (
+                        <div className="text-slate-400">Already had thumbs: {syncResult.skipped}</div>
+                      )}
+                      {syncResult.orphan_deleted > 0 && (
+                        <div className="text-amber-400">Orphans deleted: {syncResult.orphan_deleted}</div>
+                      )}
+                      {syncResult.db_count_fixed > 0 && (
+                        <div className="text-cyan-400">DB counts fixed: {syncResult.db_count_fixed}</div>
+                      )}
+                      {syncResult.meta_extracted > 0 && (
+                        <div className="text-cyan-400">Meta extracted: {syncResult.meta_extracted}</div>
+                      )}
+                      {syncResult.failed > 0 && (
+                        <div className="text-red-400">Failed: {syncResult.failed}</div>
+                      )}
+                      {syncResult.no_duration > 0 && (
+                        <div className="text-slate-500">No duration: {syncResult.no_duration}</div>
+                      )}
+                      {syncResult.not_video > 0 && (
+                        <div className="text-slate-500">Not video: {syncResult.not_video}</div>
+                      )}
+                      {syncResult.generated === 0 && syncResult.orphan_deleted === 0 && syncResult.db_count_fixed === 0 && syncResult.meta_extracted === 0 && syncResult.failed === 0 && (
+                        <div className="col-span-2 text-slate-400">Everything is already in sync.</div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
             </>
           )}
         </div>
