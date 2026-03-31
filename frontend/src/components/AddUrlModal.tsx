@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { X, Link, Loader2, AlertCircle, CheckCircle, Download } from 'lucide-react';
 import { checkUrl, downloadUrl, fetchMappingBySource } from '../api';
 import type { UrlCheckResult, VideoFormat } from '../types';
@@ -194,8 +195,8 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
 
   const formats = checkResult?.formats || [];
 
-  return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-3 sm:p-4">
+  return createPortal(
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] p-3 sm:p-4">
       <div className="bg-slate-800 rounded-xl w-full max-w-lg border border-slate-700 shadow-xl max-h-[90vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between p-3 sm:p-4 border-b border-slate-700">
@@ -363,6 +364,7 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

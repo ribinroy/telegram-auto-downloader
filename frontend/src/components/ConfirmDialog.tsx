@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { AlertTriangle } from 'lucide-react';
 
 interface ConfirmDialogProps {
@@ -69,32 +70,32 @@ export function ConfirmDialog({
 
   const styles = variantStyles[variant];
 
-  return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+  return createPortal(
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] p-4">
       <div className="bg-slate-800 rounded-xl w-full max-w-sm border border-slate-700 shadow-xl">
-        <div className="p-6">
-          <div className="flex items-start gap-4">
+        <div className="p-4 sm:p-6">
+          <div className="flex items-start gap-3 sm:gap-4">
             <div className={`p-2 rounded-full bg-slate-700/50 ${styles.icon}`}>
-              <AlertTriangle className="w-6 h-6" />
+              <AlertTriangle className="w-5 h-5 sm:w-6 sm:h-6" />
             </div>
             <div className="flex-1">
-              <h3 className="text-lg font-semibold text-white mb-1">{title}</h3>
+              <h3 className="text-base sm:text-lg font-semibold text-white mb-1">{title}</h3>
               <p className="text-slate-400 text-sm">{message}</p>
             </div>
           </div>
         </div>
 
-        <div className="flex flex-wrap gap-3 p-4 border-t border-slate-700">
+        <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 p-3 sm:p-4 border-t border-slate-700">
           <button
             onClick={onCancel}
-            className="flex-1 py-2.5 px-4 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors whitespace-nowrap"
+            className="w-full sm:flex-1 py-2.5 px-4 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors whitespace-nowrap"
           >
             {cancelText}
           </button>
           <button
             ref={confirmButtonRef}
             onClick={onConfirm}
-            className={`flex-1 py-2.5 px-4 ${styles.button} text-white rounded-lg transition-colors whitespace-nowrap`}
+            className={`w-full sm:flex-1 py-2.5 px-4 ${styles.button} text-white rounded-lg transition-colors whitespace-nowrap`}
           >
             {confirmText}
           </button>
@@ -102,7 +103,7 @@ export function ConfirmDialog({
             <button
               onClick={onExtraAction}
               disabled={extraActionDisabled}
-              className={`flex-1 py-2.5 px-4 text-white rounded-lg transition-colors whitespace-nowrap ${
+              className={`w-full sm:flex-1 py-2.5 px-4 text-white rounded-lg transition-colors whitespace-nowrap ${
                 extraActionDisabled
                   ? 'bg-slate-600 opacity-50 cursor-not-allowed'
                   : 'bg-red-800 hover:bg-red-700'
@@ -113,6 +114,7 @@ export function ConfirmDialog({
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

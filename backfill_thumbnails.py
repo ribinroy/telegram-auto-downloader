@@ -3,6 +3,7 @@
 Backfill script: Generates thumbnails for existing completed video downloads.
 Safe to run while the service is running - uses its own DB session.
 """
+import asyncio
 import json
 import sys
 from pathlib import Path
@@ -71,7 +72,7 @@ def main():
                 not_found += 1
                 continue
 
-            if generate_thumbnails(dl_id, str(file_path), duration):
+            if asyncio.run(generate_thumbnails(dl_id, str(file_path), duration)):
                 generated += 1
                 print(f"  OK: {file_name}")
             else:

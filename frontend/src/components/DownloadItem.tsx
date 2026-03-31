@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Square,
   Trash2,
@@ -207,6 +207,11 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
   const [checkingVideo, setCheckingVideo] = useState(false);
   const [localFileDeleted, setLocalFileDeleted] = useState(download.file_deleted);
   const [thumbIndex, setThumbIndex] = useState(0);
+  const [showThumbs, setShowThumbs] = useState(false);
+  const [thumbBelow, setThumbBelow] = useState(false);
+  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const itemRef = useRef<HTMLDivElement>(null);
+  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
   const progressPercent = download.progress || 0;
 
   const isTelegram = download.downloaded_from === 'telegram';
@@ -219,14 +224,71 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
     );
   }, [download.id, download.thumb_count]);
 
-  // Carousel through thumbnails
+  // Carousel through thumbnails (only when tooltip is NOT open)
   useEffect(() => {
-    if (thumbUrls.length <= 1) return;
+    if (showThumbs || thumbUrls.length <= 1) return;
     const interval = setInterval(() => {
       setThumbIndex(prev => (prev + 1) % thumbUrls.length);
-    }, 4000);
+    }, 3000);
     return () => clearInterval(interval);
-  }, [thumbUrls.length]);
+  }, [showThumbs, thumbUrls.length]);
+
+  // Arrow key navigation for thumbnail tooltip
+  useEffect(() => {
+    if (!showThumbs || thumbUrls.length <= 1) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+        e.preventDefault();
+        setThumbIndex(prev => (prev + 1) % thumbUrls.length);
+      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        setThumbIndex(prev => (prev - 1 + thumbUrls.length) % thumbUrls.length);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showThumbs, thumbUrls.length]);
+
+  const handleThumbTouchStart = (e: React.TouchEvent) => {
+    touchStartRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+  };
+
+  const handleThumbTouchEnd = (e: React.TouchEvent) => {
+    if (!touchStartRef.current || thumbUrls.length <= 1) return;
+    const dx = e.changedTouches[0].clientX - touchStartRef.current.x;
+    const dy = e.changedTouches[0].clientY - touchStartRef.current.y;
+    touchStartRef.current = null;
+    // Only count horizontal swipes (ignore vertical scrolls)
+    if (Math.abs(dx) < 30 || Math.abs(dx) < Math.abs(dy)) return;
+    if (dx < 0) {
+      setThumbIndex(prev => (prev + 1) % thumbUrls.length);
+    } else {
+      setThumbIndex(prev => (prev - 1 + thumbUrls.length) % thumbUrls.length);
+    }
+  };
+
+  const handleMouseEnter = () => {
+    if (thumbUrls.length === 0) return;
+    hoverTimerRef.current = setTimeout(() => {
+      if (itemRef.current) {
+        const rect = itemRef.current.getBoundingClientRect();
+        // Tooltip is aspect-video (~56.25% of width). Estimate width as min(600, 90vw).
+        const tooltipWidth = Math.min(600, window.innerWidth * 0.9);
+        const tooltipHeight = tooltipWidth * 9 / 16;
+        setThumbBelow(rect.top < tooltipHeight + 16);
+      }
+      setThumbIndex(0);
+      setShowThumbs(true);
+    }, 500);
+  };
+
+  const handleMouseLeave = () => {
+    if (hoverTimerRef.current) {
+      clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = null;
+    }
+    setShowThumbs(false);
+  };
 
   const handleStopConfirm = () => {
     if (download.message_id) onStop(download.message_id);
@@ -262,9 +324,14 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
   };
 
   return (
-    <div className="relative rounded-xl p-3 sm:p-4 border border-slate-700/50 transition-all overflow-visible">
+    <div
+      ref={itemRef}
+      className="relative rounded-xl p-3 sm:p-4 border border-slate-700/50 transition-all overflow-visible"
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+    >
       {/* Thumbnail background */}
-      {thumbUrls.length > 0 && (
+      {thumbUrls.length > 0 ? (
         <div className="absolute inset-0 rounded-xl overflow-hidden">
           {thumbUrls.map((url, i) => (
             <div
@@ -278,8 +345,36 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
           ))}
           <div className="absolute inset-0 bg-slate-900/80" />
         </div>
+      ) : (
+        <div className="absolute inset-0 rounded-xl bg-slate-800/30" />
       )}
-      {!thumbUrls.length && <div className="absolute inset-0 rounded-xl bg-slate-800/30" />}
+      {/* Thumbnail tooltip on hover */}
+      {showThumbs && thumbUrls.length > 0 && (
+        <div
+          className={`absolute left-1/2 -translate-x-1/2 z-50 rounded-lg overflow-hidden shadow-2xl border border-slate-600/50 sm:pointer-events-none w-[min(600px,calc(100vw-2rem))] ${thumbBelow ? 'top-full mt-2' : 'bottom-full mb-2'}`}
+          onTouchStart={handleThumbTouchStart}
+          onTouchEnd={handleThumbTouchEnd}
+        >
+          <div className="relative aspect-video bg-black">
+            {thumbUrls.map((url, i) => (
+              <img
+                key={url}
+                src={url}
+                alt=""
+                className={`absolute inset-0 w-full h-full object-contain transition-opacity duration-700 ${i === thumbIndex ? 'opacity-100' : 'opacity-0'}`}
+              />
+            ))}
+            <div className="absolute bottom-2 right-2 flex gap-1">
+              {thumbUrls.map((_, i) => (
+                <div
+                  key={i}
+                  className={`w-1.5 h-1.5 rounded-full transition-colors ${i === thumbIndex ? 'bg-white' : 'bg-white/30'}`}
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
       {/* Content */}
       <div className="relative z-10">
       {/* Mobile layout: stacked */}

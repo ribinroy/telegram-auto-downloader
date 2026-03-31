@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, lazy, Suspense } from 'react';
+import { createPortal } from 'react-dom';
 import { X, Globe } from 'lucide-react';
 
 const VRVideoPlayer = lazy(() =>
@@ -51,8 +52,8 @@ export function VideoPlayerModal({ isOpen, onClose, videoUrl, title }: VideoPlay
 
   if (!isOpen) return null;
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
+  return createPortal(
+    <div className="fixed inset-0 z-[100] flex items-center justify-center">
       {/* Backdrop */}
       <div
         className="absolute inset-0 bg-black/90 backdrop-blur-sm"
@@ -122,6 +123,7 @@ export function VideoPlayerModal({ isOpen, onClose, videoUrl, title }: VideoPlay
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
