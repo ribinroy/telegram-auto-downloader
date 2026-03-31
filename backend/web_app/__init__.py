@@ -451,6 +451,12 @@ class WebApp:
                 task = self.download_tasks.get(telegram_id)
                 if task and not task.done():
                     task.cancel()
+                # Update Telegram status message
+                if self.telegram_downloader and telegram_id:
+                    asyncio.run_coroutine_threadsafe(
+                        self.telegram_downloader.update_status_message(telegram_id, "Stopped"),
+                        self.telegram_downloader.loop
+                    )
 
             # Update database status to stopped
             db.update_download_by_message_id(message_id, status='stopped', speed=0)
@@ -471,6 +477,11 @@ class WebApp:
             telegram_id = int(message_id) if message_id else None
             if self.telegram_downloader and telegram_id:
                 self.telegram_downloader.pause_download(telegram_id)
+                # Update Telegram status message to show paused
+                asyncio.run_coroutine_threadsafe(
+                    self.telegram_downloader.update_status_message(telegram_id, "Paused"),
+                    self.telegram_downloader.loop
+                )
 
             db.update_download_by_message_id(message_id, status='paused', speed=0, pending_time=None)
             self.emit_status(message_id, 'paused')

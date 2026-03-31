@@ -98,6 +98,20 @@ class TelegramDownloader:
         except Exception as e:
             logging.error(f"Failed to edit status message: {e}")
 
+    async def update_status_message(self, message_id: int, status: str):
+        """Update the Telegram status message for a download by looking up status_msg_id from DB."""
+        db = get_db()
+        download = db.get_download_by_message_id(message_id)
+        if not download or not download.get("status_msg_id"):
+            return
+        emoji_map = {"Downloading": "⬇️", "Downloaded": "✅", "Failed": "❌", "Stopped": "🛑", "Paused": "⏸️"}
+        text = f"{emoji_map.get(status, '')} Status: {status}"
+        try:
+            msg = await self.client.get_messages(self.chat_id, ids=download["status_msg_id"])
+            await msg.edit(text)
+        except Exception as e:
+            logging.error(f"Failed to update status message: {e}")
+
     def pause_download(self, message_id: int):
         """Cancel the active download task so it can be restarted later."""
         task = self.download_tasks.get(message_id)
@@ -169,11 +183,21 @@ class TelegramDownloader:
         # Record download started
         metrics.record_download_started('telegram')
 
-        # Send initial "Downloading" message (skip on restart/resume)
-        if not is_restart:
+        # Send initial "Downloading" message, or recover existing one on restart
+        if is_restart:
+            # Recover status message ID from DB
+            download = db.get_download_by_message_id(message_id)
+            entry["_status_msg_id"] = download.get("status_msg_id") if download else None
+            if entry["_status_msg_id"]:
+                try:
+                    await self.edit_status_message(event, entry, "Downloading")
+                except Exception as e:
+                    logging.error(f"Failed to update existing status message: {e}")
+        else:
             try:
                 msg = await event.reply("⬇️ Status: Downloading")
                 entry["_status_msg_id"] = msg.id
+                db.update_download_by_message_id(message_id, status_msg_id=msg.id)
             except Exception as e:
                 logging.error(f"Failed to send initial status message: {e}")
                 entry["_status_msg_id"] = None
