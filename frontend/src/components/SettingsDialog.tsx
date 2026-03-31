@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { X, Loader2, AlertCircle, CheckCircle, Key, FolderCog, Plus, Trash2, Shield, ShieldOff, Pencil, Check, Cookie } from 'lucide-react';
 import { updatePassword, fetchMappings, addMapping, updateMapping, deleteMapping, fetchCookies, saveCookies } from '../api';
 import type { DownloadTypeMap } from '../types';
@@ -250,8 +251,8 @@ export function SettingsDialog({ isOpen, onClose, showMappings = false }: Settin
 
   if (!isOpen) return null;
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
+  return createPortal(
+    <div className="fixed inset-0 z-[100] flex items-center justify-center">
       {/* Backdrop */}
       <div
         className="absolute inset-0 bg-black/60 backdrop-blur-sm"
@@ -686,6 +687,7 @@ export function SettingsDialog({ isOpen, onClose, showMappings = false }: Settin
         onConfirm={() => deleteConfirmId && handleDeleteMapping(deleteConfirmId)}
         onCancel={() => setDeleteConfirmId(null)}
       />
-    </div>
+    </div>,
+    document.body
   );
 }
