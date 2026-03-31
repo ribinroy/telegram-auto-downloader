@@ -7,9 +7,12 @@ interface ConfirmDialogProps {
   message: string;
   confirmText?: string;
   cancelText?: string;
+  extraActionText?: string;
+  extraActionDisabled?: boolean;
   variant?: 'danger' | 'warning' | 'info';
   onConfirm: () => void;
   onCancel: () => void;
+  onExtraAction?: () => void;
 }
 
 export function ConfirmDialog({
@@ -18,9 +21,12 @@ export function ConfirmDialog({
   message,
   confirmText = 'Confirm',
   cancelText = 'Cancel',
+  extraActionText,
+  extraActionDisabled = false,
   variant = 'danger',
   onConfirm,
   onCancel,
+  onExtraAction,
 }: ConfirmDialogProps) {
   const confirmButtonRef = useRef<HTMLButtonElement>(null);
 
@@ -78,20 +84,33 @@ export function ConfirmDialog({
           </div>
         </div>
 
-        <div className="flex gap-3 p-4 border-t border-slate-700">
+        <div className="flex flex-wrap gap-3 p-4 border-t border-slate-700">
           <button
             onClick={onCancel}
-            className="flex-1 py-2.5 px-4 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors"
+            className="flex-1 py-2.5 px-4 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors whitespace-nowrap"
           >
             {cancelText}
           </button>
           <button
             ref={confirmButtonRef}
             onClick={onConfirm}
-            className={`flex-1 py-2.5 px-4 ${styles.button} text-white rounded-lg transition-colors`}
+            className={`flex-1 py-2.5 px-4 ${styles.button} text-white rounded-lg transition-colors whitespace-nowrap`}
           >
             {confirmText}
           </button>
+          {extraActionText && onExtraAction && (
+            <button
+              onClick={onExtraAction}
+              disabled={extraActionDisabled}
+              className={`flex-1 py-2.5 px-4 text-white rounded-lg transition-colors whitespace-nowrap ${
+                extraActionDisabled
+                  ? 'bg-slate-600 opacity-50 cursor-not-allowed'
+                  : 'bg-red-800 hover:bg-red-700'
+              }`}
+            >
+              {extraActionText}
+            </button>
+          )}
         </div>
       </div>
     </div>

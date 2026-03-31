@@ -1,6 +1,7 @@
 """
 Database module for DownLee
 """
+import json
 import hashlib
 import uuid
 from datetime import datetime
@@ -37,6 +38,7 @@ class Download(Base):
     url = Column(Text, nullable=True)  # Source URL for yt-dlp downloads
     file_deleted = Column(Boolean, default=False)  # True if physical file was deleted from disk
     author = Column(String(200), nullable=True)  # username:id for telegram, username for downlee
+    file_meta = Column(Text, nullable=True)  # JSON metadata: video/audio details for video files
 
     def to_dict(self):
         """Convert model to dictionary"""
@@ -57,7 +59,8 @@ class Download(Base):
             'url': self.url,
             'file_deleted': self.file_deleted or False,
             'author': self.author,
-            'deleted_at': f"{self.deleted_at.isoformat()}Z" if self.deleted_at else None
+            'deleted_at': f"{self.deleted_at.isoformat()}Z" if self.deleted_at else None,
+            'file_meta': json.loads(self.file_meta) if self.file_meta else None
         }
 
 
@@ -156,6 +159,11 @@ class DatabaseManager:
             # Add author column if it doesn't exist
             if 'author' not in columns:
                 conn.execute(text('ALTER TABLE downloads ADD COLUMN author VARCHAR(200)'))
+                conn.commit()
+
+            # Add file_meta column if it doesn't exist
+            if 'file_meta' not in columns:
+                conn.execute(text('ALTER TABLE downloads ADD COLUMN file_meta TEXT'))
                 conn.commit()
 
             # Migrate is_deleted boolean to deleted_at timestamp

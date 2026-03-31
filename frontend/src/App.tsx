@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { Search, Download, Wifi, WifiOff, Loader2, HardDrive, Clock, Zap, LogOut, Settings, Plus, BarChart3, X } from 'lucide-react';
 import { formatBytes, formatSpeed } from './utils/format';
 import { fetchDownloads, fetchStats, fetchAuthors, retryDownload, stopDownload, deleteDownload, verifyToken, clearToken, getToken, fetchSecuredMappingIds, type SortBy, type SortOrder } from './api';
-import { connectSocket, disconnectSocket, type ProgressUpdate, type StatusUpdate, type DeletedUpdate } from './api/socket';
+import { connectSocket, disconnectSocket, type ProgressUpdate, type StatusUpdate, type DeletedUpdate, type MetaUpdate } from './api/socket';
 import { DownloadItem } from './components/DownloadItem';
 import { LoginPage } from './components/LoginPage';
 import { SettingsDialog } from './components/SettingsDialog';
@@ -11,7 +11,7 @@ import { AnalyticsPage } from './components/AnalyticsPage';
 import { ToastContainer, useToast } from './components/Toast';
 import type { Download as DownloadType, Stats } from './types';
 
-type TabType = 'active' | 'all';
+
 
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
@@ -88,7 +88,6 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
-  const [activeTab, setActiveTab] = useState<TabType>('all');
   const [sortBy, setSortBy] = useState<SortBy>('created_at');
   const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
   const [authors, setAuthors] = useState<string[]>([]);
@@ -147,20 +146,12 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
       }
     }
 
-    setDownloads(prev => {
-      const updated = prev.map(d =>
-        d.message_id === data.message_id
-          ? { ...d, status: data.status, error: data.error || null, speed: 0 }
-          : d
-      );
-
-      // If on active tab and status changed to done, remove it
-      if (activeTab === 'active' && data.status === 'done') {
-        return updated.filter(d => d.message_id !== data.message_id);
-      }
-      return updated;
-    });
-  }, [activeTab, addToast]);
+    setDownloads(prev => prev.map(d =>
+      d.message_id === data.message_id
+        ? { ...d, status: data.status, error: data.error || null, speed: 0 }
+        : d
+    ));
+  }, [addToast]);
 
   // Handle new downloads
   const handleNewDownload = useCallback((data: DownloadType) => {
@@ -177,15 +168,21 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
       duration: 3000,
     });
 
-    // Only add if matches current filter
-    if (activeTab === 'all' || data.status !== 'done') {
-      setDownloads(prev => [data, ...prev]);
-    }
-  }, [activeTab, addToast]);
+    setDownloads(prev => [data, ...prev]);
+  }, [addToast]);
 
   // Handle deleted downloads
   const handleDeleted = useCallback((data: DeletedUpdate) => {
     setDownloads(prev => prev.filter(d => d.message_id !== data.message_id));
+  }, []);
+
+  // Handle metadata updates
+  const handleMeta = useCallback((data: MetaUpdate) => {
+    setDownloads(prev => prev.map(d =>
+      d.message_id === data.message_id
+        ? { ...d, file_meta: data.file_meta }
+        : d
+    ));
   }, []);
 
   // Handle stats updates from websocket
@@ -205,7 +202,7 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
       const excludeIds = showSecured ? undefined : securedMappingIds;
       const data = await fetchDownloads({
         search: debouncedSearch,
-        filter: activeTab,
+        filter: 'all',
         sortBy,
         sortOrder,
         limit: PAGE_SIZE,
@@ -236,7 +233,7 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
       setLoading(false);
       setLoadingMore(false);
     }
-  }, [debouncedSearch, activeTab, sortBy, sortOrder, showSecured, securedMappingIds, selectedAuthor, downloads.length]);
+  }, [debouncedSearch, sortBy, sortOrder, showSecured, securedMappingIds, selectedAuthor, downloads.length]);
 
   // Load more downloads when scrolling to bottom
   const loadMore = useCallback(() => {
@@ -274,7 +271,7 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
       loadDownloads(true);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedSearch, activeTab, sortBy, sortOrder, showSecured, securedMappingIds, securedMappingIdsLoaded, selectedAuthor]);
+  }, [debouncedSearch, sortBy, sortOrder, showSecured, securedMappingIds, securedMappingIdsLoaded, selectedAuthor]);
 
   // Load authors
   const loadAuthors = useCallback(async () => {
@@ -316,6 +313,7 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
       onStatus: handleStatus,
       onNew: handleNewDownload,
       onDeleted: handleDeleted,
+      onMeta: handleMeta,
       onStats: handleStats,
       onConnect: () => setConnected(true),
       onDisconnect: () => setConnected(false),
@@ -324,7 +322,7 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
     return () => {
       disconnectSocket();
     };
-  }, [handleProgress, handleStatus, handleNewDownload, handleDeleted, handleStats]);
+  }, [handleProgress, handleStatus, handleNewDownload, handleDeleted, handleMeta, handleStats]);
 
   const handleRetry = async (id: number) => {
     await retryDownload(id);
@@ -334,8 +332,8 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
     await stopDownload(message_id);
   };
 
-  const handleDelete = async (message_id: string) => {
-    await deleteDownload(message_id);
+  const handleDelete = async (message_id: string, deleteFile?: boolean) => {
+    await deleteDownload(message_id, deleteFile);
   };
 
   // Toggle secured downloads visibility
@@ -509,69 +507,42 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
 
       {/* Main Content - with top padding for fixed header */}
       <div className="max-w-7xl mx-auto px-3 sm:px-4 pt-16 sm:pt-20 pb-24 w-full">
-        {/* Tabs, Search and Sort - Responsive layout */}
+        {/* Search and Sort - Responsive layout */}
         <div className="flex flex-col sm:flex-row sm:items-center gap-3 mb-4 sm:mb-6">
-          {/* Top row on mobile: Tabs and Sort */}
-          <div className="flex items-center justify-between sm:justify-start gap-2 sm:gap-3">
-            {/* Tabs */}
-            <div className="flex gap-1.5 sm:gap-2">
-              <button
-                onClick={() => setActiveTab('active')}
-                className={`px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-colors ${
-                  activeTab === 'active'
-                    ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/50'
-                    : 'bg-slate-800/50 text-slate-400 border border-slate-700 hover:bg-slate-700/50'
-                }`}
-              >
-                Active {stats.active_count > 0 && `(${stats.active_count})`}
-              </button>
-              <button
-                onClick={() => setActiveTab('all')}
-                className={`px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-colors ${
-                  activeTab === 'all'
-                    ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/50'
-                    : 'bg-slate-800/50 text-slate-400 border border-slate-700 hover:bg-slate-700/50'
-                }`}
-              >
-                All ({stats.all_count})
-              </button>
-            </div>
-
-            {/* Sort and Author filter - visible on mobile in top row */}
-            <div className="flex items-center gap-1.5 sm:gap-2 sm:hidden">
-              {authors.length > 1 && (
-                <select
-                  value={selectedAuthor}
-                  onChange={(e) => setSelectedAuthor(e.target.value)}
-                  className="bg-slate-800/50 border border-slate-700 rounded-lg py-1.5 px-2 text-xs text-white focus:outline-none focus:border-cyan-500 transition-colors cursor-pointer"
-                >
-                  <option value="">All authors</option>
-                  {authors.map(a => {
-                    const colonIdx = a.lastIndexOf(':');
-                    const label = colonIdx > 0 && colonIdx < a.length - 1 ? a.substring(0, colonIdx) : a;
-                    return <option key={a} value={a}>{label}</option>;
-                  })}
-                </select>
-              )}
+          {/* Sort and Author filter - visible on mobile */}
+          <div className="flex items-center justify-end gap-1.5 sm:gap-2 sm:hidden">
+            {authors.length > 1 && (
               <select
-                value={sortBy}
-                onChange={(e) => setSortBy(e.target.value as SortBy)}
+                value={selectedAuthor}
+                onChange={(e) => setSelectedAuthor(e.target.value)}
                 className="bg-slate-800/50 border border-slate-700 rounded-lg py-1.5 px-2 text-xs text-white focus:outline-none focus:border-cyan-500 transition-colors cursor-pointer"
               >
-                <option value="created_at">Date</option>
-                <option value="file">Name</option>
-                <option value="status">Status</option>
-                <option value="progress">Progress</option>
+                <option value="">All authors</option>
+                {authors.map(a => {
+                  const colonIdx = a.lastIndexOf(':');
+                  const label = colonIdx > 0 && colonIdx < a.length - 1 ? a.substring(0, colonIdx) : a;
+                  return <option key={a} value={a}>{label}</option>;
+                })}
               </select>
-              <select
-                value={sortOrder}
-                onChange={(e) => setSortOrder(e.target.value as SortOrder)}
-                className="bg-slate-800/50 border border-slate-700 rounded-lg py-1.5 px-2 text-xs text-white focus:outline-none focus:border-cyan-500 transition-colors cursor-pointer"
-              >
-                <option value="desc">Desc</option>
-                <option value="asc">Asc</option>
-              </select>
-            </div>
+            )}
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value as SortBy)}
+              className="bg-slate-800/50 border border-slate-700 rounded-lg py-1.5 px-2 text-xs text-white focus:outline-none focus:border-cyan-500 transition-colors cursor-pointer"
+            >
+              <option value="created_at">Date</option>
+              <option value="file">Name</option>
+              <option value="status">Status</option>
+              <option value="progress">Progress</option>
+            </select>
+            <select
+              value={sortOrder}
+              onChange={(e) => setSortOrder(e.target.value as SortOrder)}
+              className="bg-slate-800/50 border border-slate-700 rounded-lg py-1.5 px-2 text-xs text-white focus:outline-none focus:border-cyan-500 transition-colors cursor-pointer"
+            >
+              <option value="desc">Desc</option>
+              <option value="asc">Asc</option>
+            </select>
           </div>
 
           {/* Search */}
@@ -659,12 +630,8 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
           <div className="min-h-[50vh] flex items-center justify-center text-slate-400">
             <div className="text-center">
               <Download className="w-12 h-12 mx-auto mb-4 opacity-50" />
-              <p>{activeTab === 'active' ? 'No active downloads' : 'No downloads yet'}</p>
-              <p className="text-sm">
-                {activeTab === 'active'
-                  ? 'All downloads are complete'
-                  : 'Files sent to your Telegram chat will appear here'}
-              </p>
+              <p>No downloads yet</p>
+              <p className="text-sm">Files sent to your Telegram chat will appear here</p>
             </div>
           </div>
         ) : (

@@ -123,16 +123,16 @@ class WebApp:
                 # Check URL
                 url = (d.get("url") or "").lower()
                 # Check author
-                author = (d.get("author") or "").lower()
+                d_author = (d.get("author") or "").lower()
 
                 # Exact substring match first
-                if query in file_name or query in downloaded_from or query in url or query in author:
+                if query in file_name or query in downloaded_from or query in url or query in d_author:
                     filtered_list.append(d)
                     continue
 
                 # Fuzzy search: check if all query words appear in any field
                 query_words = query.split()
-                searchable_text = f"{file_name} {downloaded_from} {url} {author}"
+                searchable_text = f"{file_name} {downloaded_from} {url} {d_author}"
                 if all(word in searchable_text for word in query_words):
                     filtered_list.append(d)
         else:
@@ -461,6 +461,7 @@ class WebApp:
         def api_delete():
             data = request.json
             message_id = data.get("message_id")  # Now always a string
+            delete_file = data.get("delete_file", False)
             db = get_db()
 
             # Check if it's a yt-dlp download (UUID format) or Telegram (numeric string)
@@ -483,6 +484,28 @@ class WebApp:
                     task.cancel()
                     db.update_download_by_message_id(message_id, status='stopped', speed=0)
                 self.download_tasks.pop(telegram_id, None)
+
+            # Delete the physical file if requested
+            if delete_file:
+                download = db.get_download_by_message_id(message_id)
+                if download and download.get("file"):
+                    from backend.config import DOWNLOAD_DIR
+                    file_name = download["file"]
+                    downloaded_from = download.get("downloaded_from")
+
+                    possible_paths = [
+                        DOWNLOAD_DIR / file_name,
+                        DOWNLOAD_DIR / "Videos" / file_name,
+                    ]
+                    if downloaded_from:
+                        mapping = db.get_download_type_map(downloaded_from)
+                        if mapping and mapping.get("folder"):
+                            possible_paths.insert(0, Path(mapping["folder"]) / file_name)
+
+                    for file_path in possible_paths:
+                        if file_path.exists():
+                            file_path.unlink()
+                            break
 
             # Soft delete from database
             db.delete_download_by_message_id(message_id)

@@ -14,6 +14,7 @@ from backend.config import DOWNLOAD_DIR
 from backend.database import get_db, generate_uuid
 from backend.web_app import get_socketio
 from backend import metrics
+from backend.file_meta import poll_and_extract_meta, is_video_file
 
 logger = logging.getLogger(__name__)
 
@@ -573,6 +574,10 @@ class YtdlpDownloader:
 
         future.add_done_callback(on_done)
         self.download_tasks[message_id] = future
+
+        # Start background metadata extraction for video files
+        if is_video_file(filename):
+            asyncio.run_coroutine_threadsafe(poll_and_extract_meta(message_id), loop)
 
         return new_download
 

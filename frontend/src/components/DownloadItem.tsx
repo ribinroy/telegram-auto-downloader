@@ -27,7 +27,7 @@ interface DownloadItemProps {
   download: Download;
   onRetry: (id: number) => void;
   onStop: (message_id: string) => void;
-  onDelete: (message_id: string) => void;
+  onDelete: (message_id: string, deleteFile?: boolean) => void;
 }
 
 // Known platform colors (using short names without TLD)
@@ -142,6 +142,28 @@ function getPlatformIcon(source: string) {
   );
 }
 
+function getResolutionLabel(download: Download): string | null {
+  const meta = download.file_meta;
+  if (!meta?.video) return null;
+  const { height, width } = meta.video;
+  if (!height) return null;
+  if (height >= 4320 || width >= 7680) return '8K';
+  if (height >= 2160 || width >= 3840) return '4K';
+  if (height >= 1440 || width >= 2560) return '2K';
+  if (height >= 1080 || width >= 1920) return 'FH';
+  if (height >= 720 || width >= 1280) return 'HD';
+  return 'SD';
+}
+
+function getAudioLabel(download: Download): string | null {
+  const channels = download.file_meta?.audio?.channels;
+  if (!channels) return null;
+  if (channels >= 8) return '7.1';
+  if (channels >= 6) return '5.1';
+  if (channels >= 3) return '2.1';
+  return '2.0';
+}
+
 function getStatusIcon(status: Download['status']) {
   switch (status) {
     case 'downloading':
@@ -194,7 +216,12 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
   };
 
   const handleDeleteConfirm = () => {
-    if (download.message_id) onDelete(download.message_id);
+    if (download.message_id) onDelete(download.message_id, false);
+    setConfirmAction(null);
+  };
+
+  const handleDeleteWithFile = () => {
+    if (download.message_id) onDelete(download.message_id, true);
     setConfirmAction(null);
   };
 
@@ -222,9 +249,47 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
       <div className="flex flex-col sm:flex-row sm:items-start gap-3 sm:gap-4">
         {/* Top row on mobile: Icon + Title + Status */}
         <div className="flex items-start gap-3 sm:contents">
-          {/* Source Icon */}
-          <div className="p-2 sm:p-2.5 bg-slate-700/50 rounded-lg shrink-0">
-            {getPlatformIcon(download.downloaded_from || 'telegram')}
+          {/* Source Icon + Resolution */}
+          <div className="flex flex-col items-center gap-1 shrink-0">
+            <div className="relative w-9 h-9 sm:w-10 sm:h-10 flex items-center justify-center bg-slate-700/50 rounded-lg">
+              {getPlatformIcon(download.downloaded_from || 'telegram')}
+
+              {(() => {
+                const res = getResolutionLabel(download);
+                const audio = getAudioLabel(download);
+                const bitDepth = download.file_meta?.video?.bit_depth;
+                const bitLabel = bitDepth && bitDepth > 8 ? `${bitDepth}b` : null;
+                const tooltipParts: string[] = [];
+                if (download.file_meta?.video) tooltipParts.push(`${download.file_meta.video.width}x${download.file_meta.video.height}${bitDepth ? ` ${bitDepth}bit` : ''}`);
+                if (download.file_meta?.audio) tooltipParts.push(`${download.file_meta.audio.codec}${download.file_meta.audio.channels ? ` ${download.file_meta.audio.channels}ch` : ''}`);
+                const tooltip = tooltipParts.join(' · ');
+                return (
+                  <>
+                    {res && (
+                      <Tooltip content={tooltip}>
+                        <span className="absolute -top-1.5 -left-1.5 text-[10px] font-medium text-slate-400 bg-slate-700/80 px-1 py-0.5 rounded cursor-default leading-none">
+                          {res}
+                        </span>
+                      </Tooltip>
+                    )}
+                    {audio && (
+                      <Tooltip content={tooltip}>
+                        <span className="absolute -top-1.5 -right-1.5 text-[10px] font-medium text-slate-400 bg-slate-700/80 px-1 py-0.5 rounded cursor-default leading-none">
+                          {audio}
+                        </span>
+                      </Tooltip>
+                    )}
+                    {bitLabel && (
+                      <Tooltip content={tooltip}>
+                        <span className="absolute -bottom-1.5 -right-1.5 text-[10px] font-medium text-slate-400 bg-slate-700/80 px-1 py-0.5 rounded cursor-default leading-none">
+                          {bitLabel}
+                        </span>
+                      </Tooltip>
+                    )}
+                  </>
+                );
+              })()}
+            </div>
           </div>
 
           {/* Title and info - takes remaining space on mobile */}
@@ -591,9 +656,12 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
         title="Delete Download?"
         message="This will remove the download from the list. This action cannot be undone."
         confirmText="Delete"
+        extraActionText="Delete + File"
+
         variant="danger"
         onConfirm={handleDeleteConfirm}
         onCancel={() => setConfirmAction(null)}
+        onExtraAction={handleDeleteWithFile}
       />
 
       {/* Video Player Modal */}
