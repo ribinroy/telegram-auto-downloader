@@ -27,7 +27,7 @@ FFPROBE_PATH = shutil.which('ffprobe') or '/usr/bin/ffprobe'
 FFMPEG_PATH = shutil.which('ffmpeg') or '/usr/bin/ffmpeg'
 
 THUMBS_DIR = SCREENSHOTS_DIR
-THUMB_POSITIONS = [0.25, 0.50, 0.75, 0.95]  # Percentages of duration
+THUMB_POSITIONS = [0.05, 0.15, 0.25, 0.35, 0.45, 0.55, 0.65, 0.75, 0.85, 0.95]  # Percentages of duration
 
 
 def probe_video(file_path: str) -> dict | None:

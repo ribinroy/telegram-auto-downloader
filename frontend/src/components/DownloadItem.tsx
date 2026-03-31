@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Square,
   Trash2,
@@ -207,6 +207,8 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
   const [checkingVideo, setCheckingVideo] = useState(false);
   const [localFileDeleted, setLocalFileDeleted] = useState(download.file_deleted);
   const [thumbIndex, setThumbIndex] = useState(0);
+  const [showThumbs, setShowThumbs] = useState(false);
+  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const progressPercent = download.progress || 0;
 
   const isTelegram = download.downloaded_from === 'telegram';
@@ -219,14 +221,30 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
     );
   }, [download.id, download.thumb_count]);
 
-  // Carousel through thumbnails
+  // Carousel through thumbnails when preview is visible
   useEffect(() => {
-    if (thumbUrls.length <= 1) return;
+    if (!showThumbs || thumbUrls.length <= 1) return;
     const interval = setInterval(() => {
       setThumbIndex(prev => (prev + 1) % thumbUrls.length);
-    }, 4000);
+    }, 3000);
     return () => clearInterval(interval);
-  }, [thumbUrls.length]);
+  }, [showThumbs, thumbUrls.length]);
+
+  const handleMouseEnter = () => {
+    if (thumbUrls.length === 0) return;
+    hoverTimerRef.current = setTimeout(() => {
+      setThumbIndex(0);
+      setShowThumbs(true);
+    }, 1000);
+  };
+
+  const handleMouseLeave = () => {
+    if (hoverTimerRef.current) {
+      clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = null;
+    }
+    setShowThumbs(false);
+  };
 
   const handleStopConfirm = () => {
     if (download.message_id) onStop(download.message_id);
@@ -262,9 +280,13 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
   };
 
   return (
-    <div className="relative rounded-xl p-3 sm:p-4 border border-slate-700/50 transition-all overflow-visible">
+    <div
+      className="relative rounded-xl p-3 sm:p-4 border border-slate-700/50 transition-all overflow-visible"
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+    >
       {/* Thumbnail background */}
-      {thumbUrls.length > 0 && (
+      {thumbUrls.length > 0 ? (
         <div className="absolute inset-0 rounded-xl overflow-hidden">
           {thumbUrls.map((url, i) => (
             <div
@@ -278,8 +300,32 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
           ))}
           <div className="absolute inset-0 bg-slate-900/80" />
         </div>
+      ) : (
+        <div className="absolute inset-0 rounded-xl bg-slate-800/30" />
       )}
-      {!thumbUrls.length && <div className="absolute inset-0 rounded-xl bg-slate-800/30" />}
+      {/* Thumbnail tooltip on hover */}
+      {showThumbs && thumbUrls.length > 0 && (
+        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-50 rounded-lg overflow-hidden shadow-2xl border border-slate-600/50" style={{ maxWidth: 600 }}>
+          <div className="relative aspect-video bg-black">
+            {thumbUrls.map((url, i) => (
+              <img
+                key={url}
+                src={url}
+                alt=""
+                className={`absolute inset-0 w-full h-full object-contain transition-opacity duration-700 ${i === thumbIndex ? 'opacity-100' : 'opacity-0'}`}
+              />
+            ))}
+            <div className="absolute bottom-2 right-2 flex gap-1">
+              {thumbUrls.map((_, i) => (
+                <div
+                  key={i}
+                  className={`w-1.5 h-1.5 rounded-full transition-colors ${i === thumbIndex ? 'bg-white' : 'bg-white/30'}`}
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
       {/* Content */}
       <div className="relative z-10">
       {/* Mobile layout: stacked */}
