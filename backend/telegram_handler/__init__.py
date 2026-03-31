@@ -16,7 +16,6 @@ from backend.file_meta import poll_and_extract_meta, is_video_file
 class TelegramDownloader:
     def __init__(self, download_tasks):
         self.download_tasks = download_tasks
-        self.pause_events = {}  # key: message_id (int), value: asyncio.Event
 
         # Get credentials from config (env file)
         self.api_id = API_ID
@@ -100,21 +99,13 @@ class TelegramDownloader:
             logging.error(f"Failed to edit status message: {e}")
 
     def pause_download(self, message_id: int):
-        """Signal a Telegram download to pause."""
-        event = self.pause_events.get(message_id)
-        if event:
-            event.clear()
-
-    def resume_download(self, message_id: int):
-        """Signal a paused Telegram download to resume."""
-        event = self.pause_events.get(message_id)
-        if event:
-            event.set()
-            return True
-        return False
+        """Cancel the active download task so it can be restarted later."""
+        task = self.download_tasks.get(message_id)
+        if task and not task.done():
+            task.cancel()
 
     async def restart_download(self, message_id: int):
-        """Re-fetch a Telegram message and restart the download (e.g. after system restart)."""
+        """Re-fetch a Telegram message and restart the download (resumes from partial file)."""
         db = get_db()
         download = db.get_download_by_message_id(message_id)
         if not download:
@@ -175,11 +166,6 @@ class TelegramDownloader:
         message_id = entry["message_id"]
         download_start_time = datetime.now()
 
-        # Create pause event (set = running)
-        pause_event = asyncio.Event()
-        pause_event.set()
-        self.pause_events[message_id] = pause_event
-
         # Record download started
         metrics.record_download_started('telegram')
 
@@ -217,9 +203,6 @@ class TelegramDownloader:
                             file_size=total_bytes,
                             request_size=524288,  # 512KB chunks
                         ):
-                            # Wait if paused (blocks without cancelling)
-                            await pause_event.wait()
-
                             f.write(chunk)
                             downloaded += len(chunk)
 
@@ -275,10 +258,7 @@ class TelegramDownloader:
                     return
 
                 except asyncio.CancelledError:
-                    db.update_download_by_message_id(message_id, status='stopped', speed=0)
-                    self.emit_status(message_id, 'stopped')
-                    if entry.get("_status_msg_id"):
-                        await self.edit_status_message(event, entry, "Stopped")
+                    # Status already set by the API handler (stop or pause)
                     metrics.record_download_stopped('telegram')
                     return
                 except Exception as e:
@@ -294,7 +274,7 @@ class TelegramDownloader:
                 await self.edit_status_message(event, entry, "Failed")
             metrics.record_download_failed('telegram', 'max_retries')
         finally:
-            self.pause_events.pop(message_id, None)
+            self.download_tasks.pop(message_id, None)
 
     async def _handle_new_file(self, event):
         """Handle new file messages from Telegram"""

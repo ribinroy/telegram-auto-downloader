@@ -472,7 +472,7 @@ class WebApp:
             if self.telegram_downloader and telegram_id:
                 self.telegram_downloader.pause_download(telegram_id)
 
-            db.update_download_by_message_id(message_id, status='paused', speed=0)
+            db.update_download_by_message_id(message_id, status='paused', speed=0, pending_time=None)
             self.emit_status(message_id, 'paused')
             return jsonify({"status": "paused"})
 
@@ -488,20 +488,17 @@ class WebApp:
                 return jsonify({"error": "Resume not supported for this download type"}), 400
 
             telegram_id = int(message_id) if message_id else None
-            if self.telegram_downloader and telegram_id:
-                resumed = self.telegram_downloader.resume_download(telegram_id)
-                if not resumed and self.event_loop:
-                    # No active task (e.g. after system restart) — re-fetch and restart
-                    future = asyncio.run_coroutine_threadsafe(
-                        self.telegram_downloader.restart_download(telegram_id),
-                        self.event_loop
-                    )
-                    try:
-                        success = future.result(timeout=30)
-                        if not success:
-                            return jsonify({"error": "Failed to restart download from Telegram"}), 500
-                    except Exception as e:
-                        return jsonify({"error": f"Failed to restart download: {str(e)}"}), 500
+            if self.telegram_downloader and telegram_id and self.event_loop:
+                future = asyncio.run_coroutine_threadsafe(
+                    self.telegram_downloader.restart_download(telegram_id),
+                    self.event_loop
+                )
+                try:
+                    success = future.result(timeout=30)
+                    if not success:
+                        return jsonify({"error": "Failed to restart download from Telegram"}), 500
+                except Exception as e:
+                    return jsonify({"error": f"Failed to restart download: {str(e)}"}), 500
 
             db.update_download_by_message_id(message_id, status='downloading', speed=0)
             self.emit_status(message_id, 'downloading')
