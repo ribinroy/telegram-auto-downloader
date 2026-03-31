@@ -223,12 +223,28 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
 
   // Carousel through thumbnails
   useEffect(() => {
-    if (thumbUrls.length <= 1) return;
+    if (!showThumbs || thumbUrls.length <= 1) return;
     const interval = setInterval(() => {
       setThumbIndex(prev => (prev + 1) % thumbUrls.length);
     }, 3000);
     return () => clearInterval(interval);
-  }, [thumbUrls.length]);
+  }, [showThumbs, thumbUrls.length]);
+
+  // Arrow key navigation for thumbnail tooltip
+  useEffect(() => {
+    if (!showThumbs || thumbUrls.length <= 1) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+        e.preventDefault();
+        setThumbIndex(prev => (prev + 1) % thumbUrls.length);
+      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        setThumbIndex(prev => (prev - 1 + thumbUrls.length) % thumbUrls.length);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showThumbs, thumbUrls.length]);
 
   const handleMouseEnter = () => {
     if (thumbUrls.length === 0) return;
@@ -305,7 +321,7 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
       )}
       {/* Thumbnail tooltip on hover */}
       {showThumbs && thumbUrls.length > 0 && (
-        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-50 rounded-lg overflow-hidden shadow-2xl border border-slate-600/50" style={{ maxWidth: 600 }}>
+        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-50 rounded-lg overflow-hidden shadow-2xl border border-slate-600/50 pointer-events-none w-[min(600px,90vw)]">
           <div className="relative aspect-video bg-black">
             {thumbUrls.map((url, i) => (
               <img
