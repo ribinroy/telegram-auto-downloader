@@ -82,24 +82,24 @@ export function ConfirmDialog({
           </div>
         </div>
 
-        <div className="flex gap-3 p-4 border-t border-slate-700">
+        <div className="flex flex-wrap gap-3 p-4 border-t border-slate-700">
           <button
             onClick={onCancel}
-            className="flex-1 py-2.5 px-4 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors"
+            className="py-2.5 px-4 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors whitespace-nowrap"
           >
             {cancelText}
           </button>
           <button
             ref={confirmButtonRef}
             onClick={onConfirm}
-            className={`flex-1 py-2.5 px-4 ${styles.button} text-white rounded-lg transition-colors`}
+            className={`py-2.5 px-4 ${styles.button} text-white rounded-lg transition-colors whitespace-nowrap`}
           >
             {confirmText}
           </button>
           {extraActionText && onExtraAction && (
             <button
               onClick={onExtraAction}
-              className="flex-1 py-2.5 px-4 bg-red-800 hover:bg-red-700 text-white rounded-lg transition-colors"
+              className="py-2.5 px-4 bg-red-800 hover:bg-red-700 text-white rounded-lg transition-colors whitespace-nowrap"
             >
               {extraActionText}
             </button>

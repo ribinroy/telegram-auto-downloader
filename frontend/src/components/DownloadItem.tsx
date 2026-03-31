@@ -257,7 +257,7 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
             {(getResolutionLabel(download) || getAudioLabel(download)) && (() => {
               const res = getResolutionLabel(download);
               const audio = getAudioLabel(download);
-              const label = [res, audio].filter(Boolean).join(' | ');
+              const label = [res, audio].filter(Boolean).join('-');
               const tooltipParts: string[] = [];
               if (download.file_meta?.video) tooltipParts.push(`${download.file_meta.video.width}x${download.file_meta.video.height}`);
               if (download.file_meta?.audio) tooltipParts.push(`${download.file_meta.audio.codec}${download.file_meta.audio.channels ? ` ${download.file_meta.audio.channels}ch` : ''}`);
