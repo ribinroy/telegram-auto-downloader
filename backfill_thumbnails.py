@@ -2,6 +2,9 @@
 """
 Backfill script: Generates thumbnails for existing completed video downloads.
 Safe to run while the service is running - uses its own DB session.
+
+Also backfills the thumb_count DB column for downloads that already have
+thumbnails on disk but no count stored yet.
 """
 import asyncio
 import json
@@ -38,6 +41,7 @@ def main():
         skipped_no_duration = 0
         not_video = 0
         not_found = 0
+        backfilled_count = 0
 
         for dl in downloads:
             file_name = dl.file
@@ -50,9 +54,15 @@ def main():
 
             dl_id = dl.id
 
-            # Skip if thumbnails already exist
+            # Skip if thumbnails already exist on disk
             thumb_dir = SCREENSHOTS_DIR / str(dl_id)
             if thumb_dir.exists() and any(thumb_dir.glob('*.jpg')):
+                # Backfill thumb_count in DB if missing
+                if not dl.thumb_count:
+                    count = len([f for f in thumb_dir.iterdir() if f.suffix == '.jpg'])
+                    dl.thumb_count = count
+                    session.commit()
+                    backfilled_count += 1
                 skipped_exists += 1
                 continue
 
@@ -72,14 +82,16 @@ def main():
                 not_found += 1
                 continue
 
-            if asyncio.run(generate_thumbnails(dl_id, str(file_path), duration)):
+            count = asyncio.run(generate_thumbnails(dl_id, str(file_path), duration))
+            if count:
                 generated += 1
-                print(f"  OK: {file_name}")
+                print(f"  OK: {file_name} ({count} thumbs)")
             else:
                 print(f"  FAIL: {file_name}")
 
         print(f"\nDone! Generated: {generated}, Already had thumbs: {skipped_exists}, "
-              f"No duration: {skipped_no_duration}, Not video: {not_video}, File not found: {not_found}")
+              f"No duration: {skipped_no_duration}, Not video: {not_video}, "
+              f"File not found: {not_found}, DB counts backfilled: {backfilled_count}")
 
     finally:
         db.close_session()

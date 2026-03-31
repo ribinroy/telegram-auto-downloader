@@ -8,8 +8,8 @@ is extracted automatically once a video download completes.
 import asyncio
 import json
 import logging
+import re
 import shutil
-import subprocess
 from pathlib import Path
 
 from backend.config import DOWNLOAD_DIR, SCREENSHOTS_DIR
@@ -22,6 +22,8 @@ VIDEO_EXTENSIONS = {'.mp4', '.mkv', '.webm', '.avi', '.mov', '.m4v', '.flv', '.w
 POLL_INTERVAL = 2  # seconds between probe attempts
 MIN_BYTES_FOR_PROBE = 1 * 1024 * 1024  # 1MB - minimum downloaded before first probe
 
+TERMINAL_STATUSES = ('failed', 'stopped')
+
 # Resolve absolute paths at import time so they work regardless of service PATH
 FFPROBE_PATH = shutil.which('ffprobe') or '/usr/bin/ffprobe'
 FFMPEG_PATH = shutil.which('ffmpeg') or '/usr/bin/ffmpeg'
@@ -30,22 +32,27 @@ THUMBS_DIR = SCREENSHOTS_DIR
 THUMB_POSITIONS = [0.05, 0.15, 0.25, 0.35, 0.45, 0.55, 0.65, 0.75, 0.85, 0.95]  # Percentages of duration
 
 
-def probe_video(file_path: str) -> dict | None:
+async def probe_video(file_path: str) -> dict | None:
     """Run ffprobe on a video file and return parsed metadata."""
     try:
-        result = subprocess.run(
-            [
-                FFPROBE_PATH, '-v', 'quiet', '-print_format', 'json',
-                '-show_streams', '-show_format', str(file_path)
-            ],
-            capture_output=True, text=True, timeout=30
+        proc = await asyncio.create_subprocess_exec(
+            FFPROBE_PATH, '-v', 'quiet', '-print_format', 'json',
+            '-show_streams', '-show_format', str(file_path),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
-        if result.returncode != 0:
-            print(f"[file_meta] ffprobe exited with code {result.returncode}: {result.stderr[:200]}")
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+        if proc.returncode != 0:
+            logger.warning("ffprobe exited with code %d: %s", proc.returncode, stderr.decode()[:200])
             return None
-        return json.loads(result.stdout)
-    except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError) as e:
-        print(f"[file_meta] ffprobe exception: {e}")
+        return json.loads(stdout.decode())
+    except asyncio.TimeoutError:
+        logger.warning("ffprobe timed out for %s", file_path)
+        if proc.returncode is None:
+            proc.kill()
+        return None
+    except (json.JSONDecodeError, FileNotFoundError) as e:
+        logger.warning("ffprobe exception: %s", e)
         return None
 
 
@@ -75,7 +82,6 @@ def extract_meta(probe_data: dict) -> dict:
             if bits_raw:
                 meta['video']['bit_depth'] = int(bits_raw)
             elif pix_fmt:
-                import re
                 m = re.search(r'p(\d+)', pix_fmt)
                 if m:
                     meta['video']['bit_depth'] = int(m.group(1))
@@ -126,7 +132,7 @@ def is_video_file(filename: str) -> bool:
     return Path(filename).suffix.lower() in VIDEO_EXTENSIONS
 
 
-def extract_and_store_meta(message_id) -> bool:
+async def extract_and_store_meta(message_id) -> bool:
     """
     Try to extract metadata for a download and store it in the DB.
     Returns True if metadata was successfully stored, False otherwise.
@@ -147,7 +153,7 @@ def extract_and_store_meta(message_id) -> bool:
     if not file_path:
         return False
 
-    probe_data = probe_video(str(file_path))
+    probe_data = await probe_video(str(file_path))
     if not probe_data:
         return False
 
@@ -157,29 +163,22 @@ def extract_and_store_meta(message_id) -> bool:
 
     db.update_download_by_message_id(message_id, file_meta=json.dumps(meta))
     res = f"{meta['video']['width']}x{meta['video']['height']}"
-    print(f"[file_meta] Stored metadata [{res}] for {filename}")
+    logger.info("Stored metadata [%s] for %s", res, filename)
 
-    # Emit websocket event so frontend picks up the metadata
-    try:
-        from backend.web_app import get_socketio
-        socketio = get_socketio()
-        if socketio:
-            socketio.emit('download:meta', {
-                'message_id': str(message_id),
-                'file_meta': meta
-            })
-    except Exception:
-        pass
+    _emit_event('download:meta', {
+        'message_id': str(message_id),
+        'file_meta': meta
+    })
 
     return True
 
 
-async def generate_thumbnails(download_id, file_path: str, duration: float) -> bool:
+async def generate_thumbnails(download_id, file_path: str, duration: float) -> int:
     """
     Extract thumbnail images from a video at each THUMB_POSITIONS percentage.
     Stores them in THUMBS_DIR/<download_id>/1.jpg .. N.jpg
     All ffmpeg processes run in parallel for speed.
-    Returns True if at least one thumbnail was created.
+    Returns the number of thumbnails created.
     """
     folder_name = str(download_id)
     thumb_dir = THUMBS_DIR / folder_name
@@ -211,22 +210,59 @@ async def generate_thumbnails(download_id, file_path: str, duration: float) -> b
     created = sum(results)
 
     if created > 0:
-        print(f"[file_meta] Generated {created} thumbnails for download {folder_name}")
+        logger.info("Generated %d thumbnails for download %s", created, folder_name)
+        # Persist count in DB and notify frontend
+        db = get_db()
+        db.update_download_by_id(download_id, thumb_count=created)
+        _emit_event('download:thumbs', {
+            'download_id': download_id,
+            'thumb_count': created
+        })
     else:
         shutil.rmtree(thumb_dir, ignore_errors=True)
-    return created > 0
+    return created
 
 
 def delete_thumbnails(download_id):
-    """Delete the thumbnail folder for a download."""
+    """Delete the thumbnail folder for a download and reset DB count."""
     thumb_dir = THUMBS_DIR / str(download_id)
     if thumb_dir.exists():
         shutil.rmtree(thumb_dir, ignore_errors=True)
+    db = get_db()
+    db.update_download_by_id(download_id, thumb_count=0)
 
 
 def get_thumbs_dir() -> Path:
     """Return the base thumbnails directory."""
     return THUMBS_DIR
+
+
+def _emit_event(event: str, data: dict):
+    """Emit a websocket event to the frontend, swallowing errors."""
+    try:
+        from backend.web_app import get_socketio
+        socketio = get_socketio()
+        if socketio:
+            socketio.emit(event, data)
+    except Exception:
+        pass
+
+
+async def _poll_download(db, msg_id, *, ready_fn):
+    """
+    Poll download status until ready_fn(download) returns True,
+    or the download enters a terminal state / disappears.
+    Returns the download dict when ready, or None.
+    """
+    while True:
+        download = db.get_download_by_message_id(msg_id)
+        if not download:
+            return None
+        if ready_fn(download):
+            return download
+        if download.get('status') in TERMINAL_STATUSES:
+            return None
+        await asyncio.sleep(POLL_INTERVAL)
 
 
 async def poll_and_extract_meta(message_id):
@@ -241,70 +277,44 @@ async def poll_and_extract_meta(message_id):
     db = get_db()
     msg_id = str(message_id)
 
-    # Phase 1: wait until at least 1MB is downloaded
-    while True:
-        download = db.get_download_by_message_id(msg_id)
-        if not download:
-            return
+    # Phase 1: wait until enough data is downloaded to probe
+    download = await _poll_download(db, msg_id, ready_fn=lambda d: (
+        d.get('file_meta')
+        or not d.get('file') or not is_video_file(d['file'])
+        or (d.get('downloaded_bytes', 0) or 0) >= MIN_BYTES_FOR_PROBE
+        or d.get('status') == 'done'
+    ))
+    if not download:
+        return
 
-        if download.get('file_meta'):
-            return
+    filename = download.get('file')
+    if not filename or not is_video_file(filename) or download.get('file_meta'):
+        return
 
-        filename = download.get('file')
-        if not filename or not is_video_file(filename):
-            return
-
-        status = download.get('status')
-        downloaded_bytes = download.get('downloaded_bytes', 0) or 0
-
-        if status in ('failed', 'stopped'):
-            return
-
-        if downloaded_bytes >= MIN_BYTES_FOR_PROBE or status == 'done':
-            break
-
-        await asyncio.sleep(POLL_INTERVAL)
-
-    # Phase 2: probe every 2s until metadata is extracted
+    # Phase 2: actively probe every 2s until metadata is extracted
     meta_stored = False
     while True:
         download = db.get_download_by_message_id(msg_id)
         if not download:
             return
-
         if download.get('file_meta'):
             meta_stored = True
             break
-
-        if extract_and_store_meta(msg_id):
+        if await extract_and_store_meta(msg_id):
             meta_stored = True
             break
-
-        status = download.get('status')
-
-        if status in ('done', 'failed', 'stopped'):
+        if download.get('status') in (*TERMINAL_STATUSES, 'done'):
             break
-
         await asyncio.sleep(POLL_INTERVAL)
 
     if not meta_stored:
         return
 
     # Phase 3: wait for download to complete, then generate thumbnails
-    while True:
-        download = db.get_download_by_message_id(msg_id)
-        if not download:
-            return
+    download = await _poll_download(db, msg_id, ready_fn=lambda d: d.get('status') == 'done')
+    if not download:
+        return
 
-        status = download.get('status')
-        if status == 'done':
-            break
-        if status in ('failed', 'stopped'):
-            return
-
-        await asyncio.sleep(POLL_INTERVAL)
-
-    # Generate thumbnails from the completed file
     file_meta = download.get('file_meta')
     duration = file_meta.get('duration') if isinstance(file_meta, dict) else None
     if not duration:
