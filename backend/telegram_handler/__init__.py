@@ -174,10 +174,40 @@ class TelegramDownloader:
 
         # Start background metadata extraction for video files
         if is_video_file(filename):
-            asyncio.create_task(poll_and_extract_meta(message_id))
+            asyncio.create_task(self._post_restart_meta(message_id, task))
 
         logging.info(f"Restarted download for message_id={message_id}")
         return True
+
+    async def _post_restart_meta(self, message_id: int, download_task):
+        """After a restarted download completes, extract meta + generate thumbnails if missing."""
+        from backend.file_meta import extract_and_store_meta, generate_thumbnails, find_file
+        try:
+            await download_task
+        except (asyncio.CancelledError, Exception):
+            return
+
+        db = get_db()
+        download = db.get_download_by_message_id(message_id)
+        if not download or download.get('status') != 'done':
+            return
+
+        # Extract meta if missing
+        if not download.get('file_meta'):
+            await extract_and_store_meta(str(message_id))
+            download = db.get_download_by_message_id(message_id)
+            if not download:
+                return
+
+        # Generate thumbnails if missing
+        if not download.get('thumb_count'):
+            file_meta = download.get('file_meta')
+            duration = file_meta.get('duration') if isinstance(file_meta, dict) else None
+            if duration:
+                filename = download.get('file')
+                file_path = find_file(filename, download.get('downloaded_from'))
+                if file_path:
+                    await generate_thumbnails(download.get('id'), str(file_path), duration)
 
     async def safe_download(self, event, path, entry, is_restart=False):
         """Downloads the media safely with live progress using chunk-based iteration."""
