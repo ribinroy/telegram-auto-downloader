@@ -251,24 +251,42 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
         <div className="flex items-start gap-3 sm:contents">
           {/* Source Icon + Resolution */}
           <div className="flex flex-col items-center gap-1 shrink-0">
-            <div className="relative p-2 sm:p-2.5 bg-slate-700/50 rounded-lg">
+            <div className="relative w-9 h-9 sm:w-10 sm:h-10 flex items-center justify-center bg-slate-700/50 rounded-lg">
               {getPlatformIcon(download.downloaded_from || 'telegram')}
 
-              {(getResolutionLabel(download) || getAudioLabel(download)) && (() => {
+              {(() => {
                 const res = getResolutionLabel(download);
                 const audio = getAudioLabel(download);
                 const bitDepth = download.file_meta?.video?.bit_depth;
                 const bitLabel = bitDepth && bitDepth > 8 ? `${bitDepth}b` : null;
-                const label = [res, bitLabel, audio].filter(Boolean).join('·');
                 const tooltipParts: string[] = [];
                 if (download.file_meta?.video) tooltipParts.push(`${download.file_meta.video.width}x${download.file_meta.video.height}${bitDepth ? ` ${bitDepth}bit` : ''}`);
                 if (download.file_meta?.audio) tooltipParts.push(`${download.file_meta.audio.codec}${download.file_meta.audio.channels ? ` ${download.file_meta.audio.channels}ch` : ''}`);
+                const tooltip = tooltipParts.join(' · ');
                 return (
-                  <Tooltip content={tooltipParts.join(' · ')}>
-                    <span className="absolute text-[10px] font-medium text-slate-400 bg-slate-700/40 px-1.5 py-0.5 rounded cursor-default">
-                      {label}
-                    </span>
-                  </Tooltip>
+                  <>
+                    {res && (
+                      <Tooltip content={tooltip}>
+                        <span className="absolute -top-1.5 -left-1.5 text-[10px] font-medium text-slate-400 bg-slate-700/80 px-1 py-0.5 rounded cursor-default leading-none">
+                          {res}
+                        </span>
+                      </Tooltip>
+                    )}
+                    {audio && (
+                      <Tooltip content={tooltip}>
+                        <span className="absolute -top-1.5 -right-1.5 text-[10px] font-medium text-slate-400 bg-slate-700/80 px-1 py-0.5 rounded cursor-default leading-none">
+                          {audio}
+                        </span>
+                      </Tooltip>
+                    )}
+                    {bitLabel && (
+                      <Tooltip content={tooltip}>
+                        <span className="absolute -bottom-1.5 -right-1.5 text-[10px] font-medium text-slate-400 bg-slate-700/80 px-1 py-0.5 rounded cursor-default leading-none">
+                          {bitLabel}
+                        </span>
+                      </Tooltip>
+                    )}
+                  </>
                 );
               })()}
             </div>
