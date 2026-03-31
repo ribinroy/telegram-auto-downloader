@@ -206,7 +206,8 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [checkingVideo, setCheckingVideo] = useState(false);
   const [localFileDeleted, setLocalFileDeleted] = useState(download.file_deleted);
-  const [thumbIndex, setThumbIndex] = useState(0);
+  const [thumbIndex, setThumbIndex] = useState(-1);
+  const [bgThumbIndex] = useState(() => Math.floor(Math.random() * 10));
   const [showThumbs, setShowThumbs] = useState(false);
   const [thumbBelow, setThumbBelow] = useState(false);
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -224,9 +225,9 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
     );
   }, [download.id, download.thumb_count]);
 
-  // Carousel through thumbnails (only when tooltip is NOT open)
+  // Carousel through thumbnails only when tooltip is open
   useEffect(() => {
-    if (showThumbs || thumbUrls.length <= 1) return;
+    if (!showThumbs || thumbUrls.length <= 1) return;
     const interval = setInterval(() => {
       setThumbIndex(prev => (prev + 1) % thumbUrls.length);
     }, 3000);
@@ -330,19 +331,15 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
     >
-      {/* Thumbnail background */}
+      {/* Thumbnail background - random static image per load */}
       {thumbUrls.length > 0 ? (
         <div className="absolute inset-0 rounded-xl overflow-hidden">
-          {thumbUrls.map((url, i) => (
-            <div
-              key={url}
-              className="absolute inset-0 bg-cover bg-center transition-opacity duration-1000"
-              style={{
-                backgroundImage: `url(${url})`,
-                opacity: i === thumbIndex ? 1 : 0,
-              }}
-            />
-          ))}
+          <div
+            className="absolute inset-0 bg-cover bg-center"
+            style={{
+              backgroundImage: `url(${thumbUrls[bgThumbIndex % thumbUrls.length]})`,
+            }}
+          />
           <div className="absolute inset-0 bg-slate-900/80" />
         </div>
       ) : (
