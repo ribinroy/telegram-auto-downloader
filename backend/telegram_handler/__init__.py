@@ -16,6 +16,7 @@ from backend.file_meta import poll_and_extract_meta, is_video_file
 class TelegramDownloader:
     def __init__(self, download_tasks):
         self.download_tasks = download_tasks
+        self.pause_events = {}  # key: message_id (int), value: asyncio.Event
 
         # Get credentials from config (env file)
         self.api_id = API_ID
@@ -89,7 +90,7 @@ class TelegramDownloader:
             if not entry.get("_status_msg_id"):
                 return
             msg = await client.get_messages(event.chat_id, ids=entry["_status_msg_id"])
-            emoji_map = {"Downloading": "⬇️", "Downloaded": "✅", "Failed": "❌", "Stopped": "🛑"}
+            emoji_map = {"Downloading": "⬇️", "Downloaded": "✅", "Failed": "❌", "Stopped": "🛑", "Paused": "⏸️"}
             if status is None:
                 text = f"⬇️ Status: Downloading {entry.get('progress', 0)}% ({human_readable_size(entry.get('downloaded_bytes', 0))}/{human_readable_size(entry.get('total_bytes', 0))})"
             else:
@@ -98,15 +99,28 @@ class TelegramDownloader:
         except Exception as e:
             logging.error(f"Failed to edit status message: {e}")
 
+    def pause_download(self, message_id: int):
+        """Signal a Telegram download to pause."""
+        event = self.pause_events.get(message_id)
+        if event:
+            event.clear()
+
+    def resume_download(self, message_id: int):
+        """Signal a paused Telegram download to resume."""
+        event = self.pause_events.get(message_id)
+        if event:
+            event.set()
+
     async def safe_download(self, event, path, entry):
-        """Downloads the media safely with live progress."""
-        last_bytes = 0
-        start_time = datetime.now()
-        download_start_time = datetime.now()  # For metrics duration
-        last_update = 0  # timestamp of last message edit
+        """Downloads the media safely with live progress using chunk-based iteration."""
         db = get_db()
         message_id = entry["message_id"]
-        final_total_bytes = 0  # Track for metrics
+        download_start_time = datetime.now()
+
+        # Create pause event (set = running)
+        pause_event = asyncio.Event()
+        pause_event.set()
+        self.pause_events[message_id] = pause_event
 
         # Record download started
         metrics.record_download_started('telegram')
@@ -119,92 +133,110 @@ class TelegramDownloader:
             logging.error(f"Failed to send initial status message: {e}")
             entry["_status_msg_id"] = None
 
-        for attempt in range(1, MAX_RETRIES + 1):
-            if attempt > 1:
-                metrics.record_retry('telegram')
+        try:
+            total_bytes = event.file.size or 0
 
-            try:
-                def progress_callback(current, total):
-                    nonlocal last_bytes, start_time, last_update, final_total_bytes
-                    final_total_bytes = total  # Track for metrics
-                    now = datetime.now()
-                    delta = (now - start_time).total_seconds()
-                    speed = 0
-                    if delta > 0:
-                        speed = round((current - last_bytes) / 1024 / delta, 1)
-                    last_bytes = current
-                    start_time = now
+            for attempt in range(1, MAX_RETRIES + 1):
+                if attempt > 1:
+                    metrics.record_retry('telegram')
 
-                    progress = round(current / total * 100, 1)
-                    pending_time = None
-                    if speed > 0:
-                        remaining_bytes = total - current
-                        pending_time = remaining_bytes / (speed * 1024)
+                try:
+                    # Determine resume offset from partial file
+                    from pathlib import Path
+                    partial = Path(path)
+                    resume_offset = partial.stat().st_size if partial.exists() else 0
+                    downloaded = resume_offset
+                    last_bytes = downloaded
+                    start_time = datetime.now()
+                    last_update = 0
+                    last_emit = 0
 
-                    # Update entry dict for status message
-                    entry["progress"] = progress
-                    entry["downloaded_bytes"] = current
-                    entry["total_bytes"] = total
-                    entry["speed"] = speed
-                    entry["pending_time"] = pending_time
+                    mode = 'ab' if resume_offset > 0 else 'wb'
+                    with open(path, mode) as f:
+                        async for chunk in self.client.iter_download(
+                            event.message.media,
+                            offset=resume_offset,
+                            file_size=total_bytes,
+                            request_size=524288,  # 512KB chunks
+                        ):
+                            # Wait if paused (blocks without cancelling)
+                            await pause_event.wait()
 
-                    # Save to database using message_id
+                            f.write(chunk)
+                            downloaded += len(chunk)
+
+                            # Progress reporting (throttled to 1/sec)
+                            now = datetime.now()
+                            timestamp = now.timestamp()
+                            if timestamp - last_emit < 1:
+                                continue
+                            last_emit = timestamp
+
+                            delta = (now - start_time).total_seconds()
+                            speed = round((downloaded - last_bytes) / 1024 / delta, 1) if delta > 0 else 0
+                            last_bytes = downloaded
+                            start_time = now
+
+                            progress = round(downloaded / total_bytes * 100, 1) if total_bytes > 0 else 0
+                            pending_time = (total_bytes - downloaded) / (speed * 1024) if speed > 0 else None
+
+                            entry["progress"] = progress
+                            entry["downloaded_bytes"] = downloaded
+                            entry["total_bytes"] = total_bytes
+                            entry["speed"] = speed
+                            entry["pending_time"] = pending_time
+
+                            db.update_download_by_message_id(
+                                message_id,
+                                progress=progress,
+                                downloaded_bytes=downloaded,
+                                total_bytes=total_bytes,
+                                speed=speed,
+                                pending_time=pending_time
+                            )
+                            self.emit_progress(message_id, progress, downloaded, total_bytes, speed, pending_time)
+
+                            if entry.get("_status_msg_id") and timestamp - last_update >= 20:
+                                last_update = timestamp
+                                asyncio.create_task(self.edit_status_message(event, entry))
+
+                    # Download complete
                     db.update_download_by_message_id(
                         message_id,
-                        progress=progress,
-                        downloaded_bytes=current,
-                        total_bytes=total,
-                        speed=speed,
-                        pending_time=pending_time
+                        status='done',
+                        progress=100,
+                        speed=0,
+                        pending_time=0
                     )
+                    self.emit_status(message_id, 'done')
+                    if entry.get("_status_msg_id"):
+                        await self.edit_status_message(event, entry, "Downloaded")
 
-                    # Emit only changed fields
-                    self.emit_progress(message_id, progress, current, total, speed, pending_time)
+                    duration = (datetime.now() - download_start_time).total_seconds()
+                    metrics.record_download_completed('telegram', total_bytes, duration)
+                    return
 
-                    # Throttle edits: 1 per 20 seconds
-                    timestamp = now.timestamp()
-                    if entry.get("_status_msg_id") and timestamp - last_update >= 20:
-                        last_update = timestamp
-                        asyncio.create_task(self.edit_status_message(event, entry))
+                except asyncio.CancelledError:
+                    db.update_download_by_message_id(message_id, status='stopped', speed=0)
+                    self.emit_status(message_id, 'stopped')
+                    if entry.get("_status_msg_id"):
+                        await self.edit_status_message(event, entry, "Stopped")
+                    metrics.record_download_stopped('telegram')
+                    return
+                except Exception as e:
+                    error_msg = f"Attempt {attempt}/{MAX_RETRIES} failed: {str(e)}"
+                    db.update_download_by_message_id(message_id, error=error_msg)
+                    logging.error(error_msg)
+                    await asyncio.sleep(5)
 
-                await event.download_media(file=path, progress_callback=progress_callback)
-
-                # Final update - download complete
-                db.update_download_by_message_id(
-                    message_id,
-                    status='done',
-                    progress=100,
-                    speed=0,
-                    pending_time=0
-                )
-                self.emit_status(message_id, 'done')
-                if entry.get("_status_msg_id"):
-                    await self.edit_status_message(event, entry, "Downloaded")
-
-                # Record completed download metrics
-                duration = (datetime.now() - download_start_time).total_seconds()
-                metrics.record_download_completed('telegram', final_total_bytes, duration)
-                return
-
-            except asyncio.CancelledError:
-                db.update_download_by_message_id(message_id, status='stopped', speed=0)
-                self.emit_status(message_id, 'stopped')
-                if entry.get("_status_msg_id"):
-                    await self.edit_status_message(event, entry, "Stopped")
-                metrics.record_download_stopped('telegram')
-                return
-            except Exception as e:
-                error_msg = f"Attempt {attempt}/{MAX_RETRIES} failed: {str(e)}"
-                db.update_download_by_message_id(message_id, error=error_msg)
-                logging.error(error_msg)
-                await asyncio.sleep(5)
-
-        # All retries exhausted - mark as failed
-        db.update_download_by_message_id(message_id, status='failed', speed=0, pending_time=None)
-        self.emit_status(message_id, 'failed')
-        if entry.get("_status_msg_id"):
-            await self.edit_status_message(event, entry, "Failed")
-        metrics.record_download_failed('telegram', 'max_retries')
+            # All retries exhausted
+            db.update_download_by_message_id(message_id, status='failed', speed=0, pending_time=None)
+            self.emit_status(message_id, 'failed')
+            if entry.get("_status_msg_id"):
+                await self.edit_status_message(event, entry, "Failed")
+            metrics.record_download_failed('telegram', 'max_retries')
+        finally:
+            self.pause_events.pop(message_id, None)
 
     async def _handle_new_file(self, event):
         """Handle new file messages from Telegram"""

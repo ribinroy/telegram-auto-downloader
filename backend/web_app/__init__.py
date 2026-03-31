@@ -63,10 +63,11 @@ def token_required(f):
 
 
 class WebApp:
-    def __init__(self, download_tasks, ytdlp_downloader=None, event_loop=None):
+    def __init__(self, download_tasks, ytdlp_downloader=None, event_loop=None, telegram_downloader=None):
         global socketio, _web_app
         self.download_tasks = download_tasks
         self.ytdlp_downloader = ytdlp_downloader
+        self.telegram_downloader = telegram_downloader
         self.event_loop = event_loop
         self.app = Flask(__name__, static_folder=str(FRONTEND_DIST), static_url_path='')
         CORS(self.app, resources={r"/*": {"origins": "*"}})
@@ -192,11 +193,11 @@ class WebApp:
         # Total size is sum of all total_bytes
         total_size = sum(d.get("total_bytes", 0) or 0 for d in all_downloads)
 
-        # Pending is only for active downloads
+        # Pending is for active and paused downloads
         pending_bytes = sum(
             (d.get("total_bytes", 0) or 0) - (d.get("downloaded_bytes", 0) or 0)
             for d in all_downloads
-            if d.get("status") == "downloading"
+            if d.get("status") in ("downloading", "paused")
         )
 
         total_speed = sum(d.get("speed", 0) or 0 for d in all_downloads)
@@ -455,6 +456,44 @@ class WebApp:
             db.update_download_by_message_id(message_id, status='stopped', speed=0)
             self.emit_status(message_id, 'stopped')
             return jsonify({"status": "stopped"})
+
+        @self.app.route("/api/pause", methods=["POST"])
+        @token_required
+        def api_pause():
+            data = request.json
+            message_id = data.get("message_id")
+            db = get_db()
+
+            is_uuid = message_id and '-' in message_id
+            if is_uuid:
+                return jsonify({"error": "Pause not supported for this download type"}), 400
+
+            telegram_id = int(message_id) if message_id else None
+            if self.telegram_downloader and telegram_id:
+                self.telegram_downloader.pause_download(telegram_id)
+
+            db.update_download_by_message_id(message_id, status='paused', speed=0)
+            self.emit_status(message_id, 'paused')
+            return jsonify({"status": "paused"})
+
+        @self.app.route("/api/resume", methods=["POST"])
+        @token_required
+        def api_resume():
+            data = request.json
+            message_id = data.get("message_id")
+            db = get_db()
+
+            is_uuid = message_id and '-' in message_id
+            if is_uuid:
+                return jsonify({"error": "Resume not supported for this download type"}), 400
+
+            telegram_id = int(message_id) if message_id else None
+            if self.telegram_downloader and telegram_id:
+                self.telegram_downloader.resume_download(telegram_id)
+
+            db.update_download_by_message_id(message_id, status='downloading', speed=0)
+            self.emit_status(message_id, 'downloading')
+            return jsonify({"status": "downloading"})
 
         @self.app.route("/api/delete", methods=["POST"])
         @token_required
