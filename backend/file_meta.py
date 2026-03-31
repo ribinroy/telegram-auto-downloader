@@ -118,36 +118,25 @@ def extract_and_store_meta(message_id) -> bool:
     db = get_db()
     download = db.get_download_by_message_id(message_id)
     if not download:
-        print(f"[file_meta] extract_and_store: download {message_id} not found in DB")
         return False
 
-    # Already has metadata
     if download.get('file_meta'):
-        print(f"[file_meta] extract_and_store: {message_id} already has metadata")
         return True
 
     filename = download.get('file')
-    if not filename:
-        print(f"[file_meta] extract_and_store: {message_id} has no filename")
-        return False
-    if not is_video_file(filename):
-        print(f"[file_meta] extract_and_store: {filename} is not a video file (ext: {Path(filename).suffix.lower()})")
+    if not filename or not is_video_file(filename):
         return False
 
     file_path = find_file(filename, download.get('downloaded_from'))
     if not file_path:
-        print(f"[file_meta] extract_and_store: file not found on disk for {filename} (source: {download.get('downloaded_from')})")
         return False
 
-    print(f"[file_meta] extract_and_store: probing {file_path}")
     probe_data = probe_video(str(file_path))
     if not probe_data:
-        print(f"[file_meta] extract_and_store: ffprobe failed for {file_path}")
         return False
 
     meta = extract_meta(probe_data)
     if not meta.get('video'):
-        print(f"[file_meta] extract_and_store: no video stream found in {filename}")
         return False
 
     db.update_download_by_message_id(message_id, file_meta=json.dumps(meta))
@@ -180,59 +169,46 @@ async def poll_and_extract_meta(message_id):
     """
     db = get_db()
     msg_id = str(message_id)
-    print(f"[file_meta] Poll started for {msg_id}")
 
     # Phase 1: wait until at least 1MB is downloaded
     while True:
         download = db.get_download_by_message_id(msg_id)
         if not download:
-            print(f"[file_meta] Download {msg_id} not found in DB, stopping poll")
             return
 
         if download.get('file_meta'):
-            print(f"[file_meta] Metadata already exists for {msg_id}, skipping")
             return
 
         filename = download.get('file')
         if not filename or not is_video_file(filename):
-            print(f"[file_meta] {msg_id} not a video file (file={filename}), stopping poll")
             return
 
         status = download.get('status')
         downloaded_bytes = download.get('downloaded_bytes', 0) or 0
 
         if status in ('failed', 'stopped'):
-            print(f"[file_meta] Download {msg_id} is {status}, stopping poll")
             return
 
-        # Once we have 1MB or the download is done, move to probing
         if downloaded_bytes >= MIN_BYTES_FOR_PROBE or status == 'done':
-            print(f"[file_meta] {msg_id} has {downloaded_bytes} bytes (status={status}), starting probe phase")
             break
 
-        print(f"[file_meta] {msg_id} waiting for 1MB... ({downloaded_bytes} bytes, status={status})")
         await asyncio.sleep(POLL_INTERVAL)
 
     # Phase 2: probe every 2s until metadata is extracted
     while True:
         download = db.get_download_by_message_id(msg_id)
         if not download:
-            print(f"[file_meta] Download {msg_id} not found in DB, stopping poll")
             return
 
         if download.get('file_meta'):
-            print(f"[file_meta] Metadata already exists for {msg_id}, skipping")
             return
 
         if extract_and_store_meta(msg_id):
-            print(f"[file_meta] Successfully extracted metadata for {msg_id}")
             return
 
         status = download.get('status')
 
-        # Download finished but probe still failed - give up
         if status in ('done', 'failed', 'stopped'):
-            print(f"[file_meta] Download {msg_id} is {status}, probe failed, giving up")
             return
 
         await asyncio.sleep(POLL_INTERVAL)
