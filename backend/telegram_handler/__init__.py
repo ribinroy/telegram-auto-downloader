@@ -369,6 +369,7 @@ class TelegramDownloader:
         """Start the Telegram client"""
         print("🚀 DownLee running...")
         self.client.start()
+        self.loop = self.client.loop  # Store reference for cross-thread scheduling
         self.client.loop.run_until_complete(self.send_startup_greeting())
         self.client.run_until_disconnected()
 

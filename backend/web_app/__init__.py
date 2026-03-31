@@ -488,10 +488,10 @@ class WebApp:
                 return jsonify({"error": "Resume not supported for this download type"}), 400
 
             telegram_id = int(message_id) if message_id else None
-            if self.telegram_downloader and telegram_id and self.event_loop:
+            if self.telegram_downloader and telegram_id:
                 future = asyncio.run_coroutine_threadsafe(
                     self.telegram_downloader.restart_download(telegram_id),
-                    self.event_loop
+                    self.telegram_downloader.loop
                 )
                 try:
                     success = future.result(timeout=30)
