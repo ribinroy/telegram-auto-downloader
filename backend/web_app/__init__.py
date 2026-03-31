@@ -507,9 +507,11 @@ class WebApp:
                             file_path.unlink()
                             break
 
-            # Delete thumbnails
+            # Delete thumbnails (uses download id for folder name)
             from backend.file_meta import delete_thumbnails
-            delete_thumbnails(message_id)
+            dl_for_thumbs = db.get_download_by_message_id(message_id)
+            if dl_for_thumbs and dl_for_thumbs.get('id'):
+                delete_thumbnails(dl_for_thumbs['id'])
 
             # Soft delete from database
             db.delete_download_by_message_id(message_id)
@@ -1002,19 +1004,19 @@ class WebApp:
                 return response
 
         # Thumbnail API
-        @self.app.route("/api/thumbs/<message_id>", methods=["GET"])
+        @self.app.route("/api/thumbs/<int:download_id>", methods=["GET"])
         @token_required
-        def get_thumbs(message_id):
+        def get_thumbs(download_id):
             """Get list of available thumbnails for a download"""
             from backend.file_meta import get_thumbs_dir
-            thumb_dir = get_thumbs_dir() / str(message_id)
+            thumb_dir = get_thumbs_dir() / str(download_id)
             if not thumb_dir.exists():
                 return jsonify({"thumbs": []})
             thumbs = sorted([f.name for f in thumb_dir.iterdir() if f.suffix == '.jpg'])
             return jsonify({"thumbs": thumbs})
 
-        @self.app.route("/api/thumbs/<message_id>/<filename>", methods=["GET"])
-        def serve_thumb(message_id, filename):
+        @self.app.route("/api/thumbs/<int:download_id>/<filename>", methods=["GET"])
+        def serve_thumb(download_id, filename):
             """Serve a thumbnail image"""
             # Accept token from query param or header
             token = request.args.get('token')
@@ -1034,7 +1036,7 @@ class WebApp:
                 return jsonify({'error': 'Invalid filename'}), 400
 
             from backend.file_meta import get_thumbs_dir
-            thumb_dir = get_thumbs_dir() / str(message_id)
+            thumb_dir = get_thumbs_dir() / str(download_id)
             thumb_path = thumb_dir / filename
             if not thumb_path.exists():
                 return jsonify({'error': 'Thumbnail not found'}), 404

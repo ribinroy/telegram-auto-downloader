@@ -347,3 +347,17 @@ export function getVideoStreamUrl(downloadId: number): string {
   const token = getToken();
   return `${API_BASE}/api/video/stream/${downloadId}?token=${token}`;
 }
+
+export function getThumbUrl(downloadId: number, filename: string): string {
+  const token = getToken();
+  return `${API_BASE}/api/thumbs/${downloadId}/${filename}?token=${token}`;
+}
+
+export async function fetchThumbs(downloadId: number): Promise<string[]> {
+  const response = await fetch(`${API_BASE}/api/thumbs/${downloadId}`, {
+    headers: getAuthHeaders(),
+  });
+  if (!response.ok) return [];
+  const data = await response.json();
+  return data.thumbs || [];
+}

@@ -174,14 +174,14 @@ def extract_and_store_meta(message_id) -> bool:
     return True
 
 
-def generate_thumbnails(message_id, file_path: str, duration: float) -> bool:
+def generate_thumbnails(download_id, file_path: str, duration: float) -> bool:
     """
     Extract 4 thumbnail images from a video at 25%, 50%, 75%, 95% of duration.
-    Stores them in THUMBS_DIR/<message_id>/1.jpg .. 4.jpg
+    Stores them in THUMBS_DIR/<download_id>/1.jpg .. 4.jpg
     Returns True if at least one thumbnail was created.
     """
-    msg_id = str(message_id)
-    thumb_dir = THUMBS_DIR / msg_id
+    folder_name = str(download_id)
+    thumb_dir = THUMBS_DIR / folder_name
     thumb_dir.mkdir(parents=True, exist_ok=True)
 
     created = 0
@@ -204,17 +204,16 @@ def generate_thumbnails(message_id, file_path: str, duration: float) -> bool:
             continue
 
     if created > 0:
-        print(f"[file_meta] Generated {created} thumbnails for {msg_id}")
+        print(f"[file_meta] Generated {created} thumbnails for download {folder_name}")
     else:
         # Clean up empty folder
         shutil.rmtree(thumb_dir, ignore_errors=True)
     return created > 0
 
 
-def delete_thumbnails(message_id):
+def delete_thumbnails(download_id):
     """Delete the thumbnail folder for a download."""
-    msg_id = str(message_id)
-    thumb_dir = THUMBS_DIR / msg_id
+    thumb_dir = THUMBS_DIR / str(download_id)
     if thumb_dir.exists():
         shutil.rmtree(thumb_dir, ignore_errors=True)
 
@@ -308,4 +307,4 @@ async def poll_and_extract_meta(message_id):
     filename = download.get('file')
     file_path = find_file(filename, download.get('downloaded_from'))
     if file_path:
-        generate_thumbnails(msg_id, str(file_path), duration)
+        generate_thumbnails(download.get('id'), str(file_path), duration)

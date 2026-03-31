@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   Square,
   Trash2,
@@ -21,7 +21,7 @@ import { formatBytes, formatTime, formatSpeed } from '../utils/format';
 import { ConfirmDialog } from './ConfirmDialog';
 import { VideoPlayerModal } from './VideoPlayerModal';
 import { Tooltip } from './Tooltip';
-import { checkVideoFile, getVideoStreamUrl } from '../api';
+import { checkVideoFile, getVideoStreamUrl, fetchThumbs, getThumbUrl } from '../api';
 
 interface DownloadItemProps {
   download: Download;
@@ -206,9 +206,32 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [checkingVideo, setCheckingVideo] = useState(false);
   const [localFileDeleted, setLocalFileDeleted] = useState(download.file_deleted);
+  const [thumbUrls, setThumbUrls] = useState<string[]>([]);
+  const [thumbIndex, setThumbIndex] = useState(0);
   const progressPercent = download.progress || 0;
 
   const isTelegram = download.downloaded_from === 'telegram';
+  const isVideo = download.file_meta?.video != null;
+
+  // Fetch thumbnails for video downloads
+  useEffect(() => {
+    if (!isVideo || download.status !== 'done') return;
+    let cancelled = false;
+    fetchThumbs(download.id).then(names => {
+      if (cancelled || names.length === 0) return;
+      setThumbUrls(names.map(n => getThumbUrl(download.id, n)));
+    });
+    return () => { cancelled = true; };
+  }, [download.id, download.status, isVideo]);
+
+  // Carousel through thumbnails
+  useEffect(() => {
+    if (thumbUrls.length <= 1) return;
+    const interval = setInterval(() => {
+      setThumbIndex(prev => (prev + 1) % thumbUrls.length);
+    }, 4000);
+    return () => clearInterval(interval);
+  }, [thumbUrls.length]);
 
   const handleStopConfirm = () => {
     if (download.message_id) onStop(download.message_id);
@@ -244,7 +267,26 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
   };
 
   return (
-    <div className="bg-slate-800/30 rounded-xl p-3 sm:p-4 border border-slate-700/50 transition-all overflow-visible">
+    <div className="relative rounded-xl p-3 sm:p-4 border border-slate-700/50 transition-all overflow-visible">
+      {/* Thumbnail background */}
+      {thumbUrls.length > 0 && (
+        <div className="absolute inset-0 rounded-xl overflow-hidden">
+          {thumbUrls.map((url, i) => (
+            <div
+              key={url}
+              className="absolute inset-0 bg-cover bg-center transition-opacity duration-1000"
+              style={{
+                backgroundImage: `url(${url})`,
+                opacity: i === thumbIndex ? 1 : 0,
+              }}
+            />
+          ))}
+          <div className="absolute inset-0 bg-slate-900/80" />
+        </div>
+      )}
+      {!thumbUrls.length && <div className="absolute inset-0 rounded-xl bg-slate-800/30" />}
+      {/* Content */}
+      <div className="relative z-10">
       {/* Mobile layout: stacked */}
       <div className="flex flex-col sm:flex-row sm:items-start gap-3 sm:gap-4">
         {/* Top row on mobile: Icon + Title + Status */}
@@ -679,6 +721,7 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
           title={download.file}
         />
       )}
+      </div>
     </div>
   );
 }
