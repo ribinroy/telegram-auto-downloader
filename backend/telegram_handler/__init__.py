@@ -110,6 +110,64 @@ class TelegramDownloader:
         event = self.pause_events.get(message_id)
         if event:
             event.set()
+            return True
+        return False
+
+    async def restart_download(self, message_id: int):
+        """Re-fetch a Telegram message and restart the download (e.g. after system restart)."""
+        db = get_db()
+        download = db.get_download_by_message_id(message_id)
+        if not download:
+            logging.error(f"No DB record for message_id={message_id}")
+            return False
+
+        try:
+            msg = await self.client.get_messages(self.chat_id, ids=message_id)
+        except Exception as e:
+            logging.error(f"Failed to fetch Telegram message {message_id}: {e}")
+            return False
+
+        if not msg or not msg.file:
+            logging.error(f"Message {message_id} has no file attachment")
+            return False
+
+        # Determine download path from DB record
+        filename = download.get("file")
+        if not filename:
+            logging.error(f"No filename in DB for message_id={message_id}")
+            return False
+
+        kind = get_media_folder(msg.file.mime_type)
+
+        # Check for custom folder mapping
+        folder = None
+        mapping = db.get_download_type_map('telegram')
+        if mapping and mapping.get('folder'):
+            from pathlib import Path as P
+            custom_folder = P(mapping['folder'])
+            try:
+                if custom_folder.exists() or custom_folder.parent.exists():
+                    custom_folder.mkdir(parents=True, exist_ok=True)
+                    folder = custom_folder
+            except (OSError, PermissionError):
+                pass
+
+        if folder is None:
+            folder = DOWNLOAD_DIR / kind
+            folder.mkdir(exist_ok=True)
+
+        path = folder / filename
+
+        entry = {
+            "file": filename,
+            "message_id": message_id,
+            "_status_msg_id": None
+        }
+
+        task = asyncio.create_task(self.safe_download(msg, str(path), entry))
+        self.download_tasks[message_id] = task
+        logging.info(f"Restarted download for message_id={message_id}")
+        return True
 
     async def safe_download(self, event, path, entry):
         """Downloads the media safely with live progress using chunk-based iteration."""
@@ -154,7 +212,7 @@ class TelegramDownloader:
                     mode = 'ab' if resume_offset > 0 else 'wb'
                     with open(path, mode) as f:
                         async for chunk in self.client.iter_download(
-                            event.message.media,
+                            event.media,
                             offset=resume_offset,
                             file_size=total_bytes,
                             request_size=524288,  # 512KB chunks
