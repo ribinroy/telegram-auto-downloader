@@ -10,6 +10,7 @@ from backend.database import get_db
 from backend.utils import human_readable_size, get_media_folder
 from backend.web_app import get_socketio
 from backend import metrics
+from backend.file_meta import poll_and_extract_meta, is_video_file
 
 
 class TelegramDownloader:
@@ -274,6 +275,10 @@ class TelegramDownloader:
         # Start the download task
         task = asyncio.create_task(self.safe_download(event, str(path), entry))
         self.download_tasks[event.id] = task  # Use message_id as key
+
+        # Start background metadata extraction for video files
+        if is_video_file(filename):
+            asyncio.create_task(poll_and_extract_meta(event.id))
 
     async def send_startup_greeting(self):
         """Send a greeting message to the chat when service starts"""

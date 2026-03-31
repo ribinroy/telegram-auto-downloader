@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { Search, Download, Wifi, WifiOff, Loader2, HardDrive, Clock, Zap, LogOut, Settings, Plus, BarChart3, X } from 'lucide-react';
 import { formatBytes, formatSpeed } from './utils/format';
 import { fetchDownloads, fetchStats, fetchAuthors, retryDownload, stopDownload, deleteDownload, verifyToken, clearToken, getToken, fetchSecuredMappingIds, type SortBy, type SortOrder } from './api';
-import { connectSocket, disconnectSocket, type ProgressUpdate, type StatusUpdate, type DeletedUpdate } from './api/socket';
+import { connectSocket, disconnectSocket, type ProgressUpdate, type StatusUpdate, type DeletedUpdate, type MetaUpdate } from './api/socket';
 import { DownloadItem } from './components/DownloadItem';
 import { LoginPage } from './components/LoginPage';
 import { SettingsDialog } from './components/SettingsDialog';
@@ -188,6 +188,15 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
     setDownloads(prev => prev.filter(d => d.message_id !== data.message_id));
   }, []);
 
+  // Handle metadata updates
+  const handleMeta = useCallback((data: MetaUpdate) => {
+    setDownloads(prev => prev.map(d =>
+      d.message_id === data.message_id
+        ? { ...d, file_meta: data.file_meta }
+        : d
+    ));
+  }, []);
+
   // Handle stats updates from websocket
   const handleStats = useCallback((data: Stats) => {
     setStats(data);
@@ -316,6 +325,7 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
       onStatus: handleStatus,
       onNew: handleNewDownload,
       onDeleted: handleDeleted,
+      onMeta: handleMeta,
       onStats: handleStats,
       onConnect: () => setConnected(true),
       onDisconnect: () => setConnected(false),
@@ -324,7 +334,7 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
     return () => {
       disconnectSocket();
     };
-  }, [handleProgress, handleStatus, handleNewDownload, handleDeleted, handleStats]);
+  }, [handleProgress, handleStatus, handleNewDownload, handleDeleted, handleMeta, handleStats]);
 
   const handleRetry = async (id: number) => {
     await retryDownload(id);

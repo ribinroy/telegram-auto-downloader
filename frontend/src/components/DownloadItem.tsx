@@ -636,7 +636,7 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
         message="This will remove the download from the list. This action cannot be undone."
         confirmText="Delete"
         extraActionText="Delete + File"
-        extraActionDisabled={localFileDeleted}
+
         variant="danger"
         onConfirm={handleDeleteConfirm}
         onCancel={() => setConfirmAction(null)}

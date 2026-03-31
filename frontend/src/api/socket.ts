@@ -24,11 +24,17 @@ export interface DeletedUpdate {
   message_id: string;  // String to avoid JS precision loss
 }
 
+export interface MetaUpdate {
+  message_id: string;
+  file_meta: Download['file_meta'];
+}
+
 export interface SocketHandlers {
   onProgress: (data: ProgressUpdate) => void;
   onStatus: (data: StatusUpdate) => void;
   onNew: (data: Download) => void;
   onDeleted: (data: DeletedUpdate) => void;
+  onMeta: (data: MetaUpdate) => void;
   onStats: (data: Stats) => void;
   onConnect: () => void;
   onDisconnect: () => void;
@@ -61,6 +67,7 @@ export function connectSocket(handlers: SocketHandlers): Socket {
   socket.on('download:status', handlers.onStatus);
   socket.on('download:new', handlers.onNew);
   socket.on('download:deleted', handlers.onDeleted);
+  socket.on('download:meta', handlers.onMeta);
   socket.on('stats', handlers.onStats);
 
   socket.on('connect_error', (error) => {
