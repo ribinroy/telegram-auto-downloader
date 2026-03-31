@@ -208,7 +208,9 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
   const [localFileDeleted, setLocalFileDeleted] = useState(download.file_deleted);
   const [thumbIndex, setThumbIndex] = useState(0);
   const [showThumbs, setShowThumbs] = useState(false);
+  const [thumbBelow, setThumbBelow] = useState(false);
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const itemRef = useRef<HTMLDivElement>(null);
   const progressPercent = download.progress || 0;
 
   const isTelegram = download.downloaded_from === 'telegram';
@@ -249,9 +251,16 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
   const handleMouseEnter = () => {
     if (thumbUrls.length === 0) return;
     hoverTimerRef.current = setTimeout(() => {
+      if (itemRef.current) {
+        const rect = itemRef.current.getBoundingClientRect();
+        // Tooltip is aspect-video (~56.25% of width). Estimate width as min(600, 90vw).
+        const tooltipWidth = Math.min(600, window.innerWidth * 0.9);
+        const tooltipHeight = tooltipWidth * 9 / 16;
+        setThumbBelow(rect.top < tooltipHeight + 16);
+      }
       setThumbIndex(0);
       setShowThumbs(true);
-    }, 1000);
+    }, 500);
   };
 
   const handleMouseLeave = () => {
@@ -297,6 +306,7 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
 
   return (
     <div
+      ref={itemRef}
       className="relative rounded-xl p-3 sm:p-4 border border-slate-700/50 transition-all overflow-visible"
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
@@ -321,7 +331,7 @@ export function DownloadItem({ download, onRetry, onStop, onDelete }: DownloadIt
       )}
       {/* Thumbnail tooltip on hover */}
       {showThumbs && thumbUrls.length > 0 && (
-        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-50 rounded-lg overflow-hidden shadow-2xl border border-slate-600/50 pointer-events-none w-[min(600px,90vw)]">
+        <div className={`absolute left-1/2 -translate-x-1/2 z-50 rounded-lg overflow-hidden shadow-2xl border border-slate-600/50 pointer-events-none w-[min(600px,90vw)] ${thumbBelow ? 'top-full mt-2' : 'bottom-full mb-2'}`}>
           <div className="relative aspect-video bg-black">
             {thumbUrls.map((url, i) => (
               <img
