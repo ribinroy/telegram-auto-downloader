@@ -658,11 +658,13 @@ class WebApp:
         @token_required
         def get_mapping_by_source(source):
             """Get mapping for a specific source"""
+            from backend.config import DOWNLOAD_DIR
             db = get_db()
             mapping = db.get_download_type_map(source)
             if mapping:
+                mapping["download_folder"] = mapping.get("folder") or str(DOWNLOAD_DIR / "Videos")
                 return jsonify(mapping)
-            return jsonify(None)
+            return jsonify({"download_folder": str(DOWNLOAD_DIR / "Videos")})
 
         @self.app.route("/api/mappings", methods=["POST"])
         @token_required

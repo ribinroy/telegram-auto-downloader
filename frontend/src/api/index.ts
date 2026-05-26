@@ -236,7 +236,7 @@ export async function fetchSecuredMappingIds(): Promise<number[]> {
   return response.json();
 }
 
-export async function fetchMappingBySource(source: string): Promise<DownloadTypeMap | null> {
+export async function fetchMappingBySource(source: string): Promise<Partial<DownloadTypeMap> & { download_folder?: string } | null> {
   const response = await fetch(`${API_BASE}/api/mappings/source/${encodeURIComponent(source)}`, {
     headers: getAuthHeaders(),
   });

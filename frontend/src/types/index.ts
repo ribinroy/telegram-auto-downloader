@@ -87,6 +87,7 @@ export interface DownloadTypeMap {
   quality: string | null;
   created_at: string;
   updated_at: string;
+  download_folder?: string;
 }
 
 // Analytics types
