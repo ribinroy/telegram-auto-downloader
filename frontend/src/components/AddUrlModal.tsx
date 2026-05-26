@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { X, Link, Loader2, AlertCircle, CheckCircle, Download } from 'lucide-react';
+import { X, Link, Loader2, AlertCircle, CheckCircle, Download, Folder } from 'lucide-react';
 import { checkUrl, downloadUrl, fetchMappingBySource } from '../api';
 import type { UrlCheckResult, VideoFormat } from '../types';
 import { formatBytes } from '../utils/format';
@@ -42,6 +42,7 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
   const [selectedFormat, setSelectedFormat] = useState<VideoFormat | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [customFilename, setCustomFilename] = useState('');
+  const [downloadFolder, setDownloadFolder] = useState<string | null>(null);
   const hasAutoChecked = useRef(false);
   const filenameInputRef = useRef<HTMLInputElement>(null);
 
@@ -52,6 +53,7 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
     setError(null);
     setCheckResult(null);
     setSelectedFormat(null);
+    setDownloadFolder(null);
 
     try {
       const result = await checkUrl(urlToCheck.trim());
@@ -59,28 +61,34 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
       if (!result.supported) {
         setError(result.error || 'URL not supported');
       }
-      if (result.formats && result.formats.length > 0) {
-        // Try to get the default quality from mapping
-        const source = getSourceFromUrl(urlToCheck);
-        let defaultFormat: VideoFormat | null = null;
 
-        if (source) {
-          try {
-            const mapping = await fetchMappingBySource(source);
-            if (mapping?.quality) {
-              // Find format matching the default quality (e.g., "720p")
-              const targetQuality = mapping.quality.toLowerCase().replace('p', '');
+      // Fetch mapping for folder display and default quality
+      const source = getSourceFromUrl(urlToCheck);
+      if (source) {
+        try {
+          const fetchedMapping = await fetchMappingBySource(source);
+          if (fetchedMapping?.download_folder) {
+            setDownloadFolder(fetchedMapping.download_folder);
+          }
+
+          if (result.formats && result.formats.length > 0) {
+            let defaultFormat: VideoFormat | null = null;
+            if (fetchedMapping?.quality) {
+              const targetQuality = fetchedMapping.quality.toLowerCase().replace('p', '');
               defaultFormat = result.formats.find(f =>
                 f.resolution?.toLowerCase().replace('p', '') === targetQuality
               ) || null;
             }
-          } catch {
-            // Ignore mapping fetch errors, just use default
+            setSelectedFormat(defaultFormat || result.formats[0]);
+          }
+        } catch {
+          // Ignore mapping fetch errors, just use default
+          if (result.formats && result.formats.length > 0) {
+            setSelectedFormat(result.formats[0]);
           }
         }
-
-        // Use default quality from mapping if found, otherwise use highest (first)
-        setSelectedFormat(defaultFormat || result.formats[0]);
+      } else if (result.formats && result.formats.length > 0) {
+        setSelectedFormat(result.formats[0]);
       }
     } catch {
       setError('Failed to check URL');
@@ -165,6 +173,7 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
     setChecking(false);
     setCustomFilename('');
     setDownloading(false);
+    setDownloadFolder(null);
     onClose();
   };
 
@@ -314,6 +323,17 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
               placeholder={checkResult?.title || 'Enter custom filename...'}
               className="w-full bg-slate-900 border border-slate-600 rounded-lg py-2 sm:py-2.5 px-3 text-sm sm:text-base text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 transition-colors"
             />
+            {downloadFolder && (
+              <div className="flex items-center gap-1 mt-1.5 text-xs text-slate-500 min-w-0">
+                <Folder className="w-3.5 h-3.5 flex-shrink-0" />
+                {downloadFolder.split('/').filter(Boolean).map((segment, i, arr) => (
+                  <span key={i} className="flex items-center gap-1 min-w-0">
+                    {i > 0 && <span className="text-slate-600">/</span>}
+                    <span className={i === arr.length - 1 ? 'text-slate-400 truncate' : 'truncate'}>{segment}</span>
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
