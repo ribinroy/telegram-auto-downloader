@@ -73,6 +73,7 @@ class YtdlpDownloader:
                 '--dump-json',
                 '--no-download',
                 '--extractor-args', 'generic:impersonate',  # Cloudflare bypass
+                '--js-runtimes', 'node',  # Use Node.js for YouTube JS extraction
             ]
             cmd.extend(self._get_cookie_args())
             cmd.append(url)
@@ -84,16 +85,22 @@ class YtdlpDownloader:
                 timeout=60
             )
 
+            stderr_msg = result.stderr.strip()
+            if stderr_msg:
+                print(f"[yt-dlp check] stderr: {stderr_msg[:500]}")
+
             if result.returncode != 0:
-                error_msg = result.stderr.strip()
                 # Extract meaningful error message
-                if 'Unsupported URL' in error_msg:
+                if 'Unsupported URL' in stderr_msg:
                     return {'supported': False, 'error': 'Unsupported URL'}
-                if 'Video unavailable' in error_msg:
+                if 'Video unavailable' in stderr_msg:
                     return {'supported': False, 'error': 'Video unavailable'}
-                if 'Private video' in error_msg:
+                if 'Private video' in stderr_msg:
                     return {'supported': False, 'error': 'Private video'}
-                return {'supported': False, 'error': error_msg[:200] if error_msg else 'Unknown error'}
+                return {'supported': False, 'error': stderr_msg[:200] if stderr_msg else 'Unknown error'}
+
+            if not result.stdout.strip():
+                return {'supported': False, 'error': stderr_msg[:200] if stderr_msg else 'No output from yt-dlp'}
 
             info = json.loads(result.stdout)
 
@@ -155,7 +162,10 @@ class YtdlpDownloader:
             # Get the best format (first after sorting)
             best_format_id = formats[0]['format_id'] if formats else 'best'
 
-            return {
+            # Extract warnings from stderr
+            warnings = [line.strip() for line in stderr_msg.splitlines() if line.strip().startswith('WARNING:')]
+
+            resp = {
                 'supported': True,
                 'title': info.get('title', 'Unknown'),
                 'duration': info.get('duration'),
@@ -165,10 +175,13 @@ class YtdlpDownloader:
                 'formats': formats,
                 'best_format_id': best_format_id,
             }
+            if warnings:
+                resp['warnings'] = warnings
+            return resp
         except subprocess.TimeoutExpired:
             return {'supported': False, 'error': 'Request timed out'}
-        except json.JSONDecodeError:
-            return {'supported': False, 'error': 'Failed to parse video info'}
+        except json.JSONDecodeError as e:
+            return {'supported': False, 'error': f'Failed to parse video info: {stderr_msg[:200] if stderr_msg else str(e)}'}
         except FileNotFoundError:
             return {'supported': False, 'error': 'yt-dlp is not installed'}
         except Exception as e:
@@ -316,11 +329,9 @@ class YtdlpDownloader:
         if mapping and mapping.get('folder'):
             custom_folder = Path(mapping['folder'])
             try:
-                # Check if folder exists or can be created
-                if custom_folder.exists() or custom_folder.parent.exists():
-                    custom_folder.mkdir(parents=True, exist_ok=True)
-                    output_dir = custom_folder
-                    print(f"[yt-dlp] Using custom folder: {output_dir}")
+                custom_folder.mkdir(parents=True, exist_ok=True)
+                output_dir = custom_folder
+                print(f"[yt-dlp] Using custom folder: {output_dir}")
             except (OSError, PermissionError) as e:
                 print(f"[yt-dlp] Custom folder not accessible: {e}, falling back to default")
 
@@ -351,6 +362,7 @@ class YtdlpDownloader:
                 '-o', output_template,
                 '--no-mtime',  # Don't set file modification time
                 '--extractor-args', 'generic:impersonate',  # Cloudflare bypass
+                '--js-runtimes', 'node',  # Use Node.js for YouTube JS extraction
             ]
 
             # Add cookies for authentication/Cloudflare bypass

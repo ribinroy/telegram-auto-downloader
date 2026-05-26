@@ -13,7 +13,8 @@ import {
   Eye,
   Loader2,
   ExternalLink,
-  User
+  User,
+  Image
 } from 'lucide-react';
 import ReactTimeAgo from 'react-time-ago';
 import type { Download } from '../types';
@@ -217,6 +218,7 @@ export function DownloadItem({ download, onRetry, onStop, onPause, onResume, onD
   const [showThumbs, setShowThumbs] = useState(false);
   const [thumbBelow, setThumbBelow] = useState(false);
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const leaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const itemRef = useRef<HTMLDivElement>(null);
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
   const progressPercent = download.progress || 0;
@@ -256,6 +258,14 @@ export function DownloadItem({ download, onRetry, onStop, onPause, onResume, onD
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [showThumbs, thumbUrls.length]);
 
+  // Cleanup timers on unmount
+  useEffect(() => {
+    return () => {
+      if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+      if (leaveTimerRef.current) clearTimeout(leaveTimerRef.current);
+    };
+  }, []);
+
   const handleThumbTouchStart = (e: React.TouchEvent) => {
     touchStartRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
   };
@@ -274,12 +284,28 @@ export function DownloadItem({ download, onRetry, onStop, onPause, onResume, onD
     }
   };
 
+  const closeThumbs = () => {
+    if (hoverTimerRef.current) {
+      clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = null;
+    }
+    if (leaveTimerRef.current) {
+      clearTimeout(leaveTimerRef.current);
+      leaveTimerRef.current = null;
+    }
+    setShowThumbs(false);
+  };
+
   const handleMouseEnter = () => {
     if (thumbUrls.length === 0) return;
+    // Cancel any pending hide
+    if (leaveTimerRef.current) {
+      clearTimeout(leaveTimerRef.current);
+      leaveTimerRef.current = null;
+    }
     hoverTimerRef.current = setTimeout(() => {
       if (itemRef.current) {
         const rect = itemRef.current.getBoundingClientRect();
-        // Tooltip is aspect-video (~56.25% of width). Estimate width as min(600, 90vw).
         const tooltipWidth = Math.min(600, window.innerWidth * 0.9);
         const tooltipHeight = tooltipWidth * 9 / 16;
         setThumbBelow(rect.top < tooltipHeight + 16);
@@ -294,7 +320,10 @@ export function DownloadItem({ download, onRetry, onStop, onPause, onResume, onD
       clearTimeout(hoverTimerRef.current);
       hoverTimerRef.current = null;
     }
-    setShowThumbs(false);
+    // Small delay before hiding to bridge the gap between item and tooltip
+    leaveTimerRef.current = setTimeout(() => {
+      setShowThumbs(false);
+    }, 100);
   };
 
   const handleStopConfirm = () => {
@@ -336,6 +365,7 @@ export function DownloadItem({ download, onRetry, onStop, onPause, onResume, onD
       className="relative rounded-xl p-3 sm:p-4 border border-slate-700/50 transition-all overflow-visible"
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
+      onClick={closeThumbs}
     >
       {/* Thumbnail background - random static image per load */}
       {thumbUrls.length > 0 ? (
@@ -354,10 +384,13 @@ export function DownloadItem({ download, onRetry, onStop, onPause, onResume, onD
       {/* Thumbnail tooltip on hover */}
       {showThumbs && thumbUrls.length > 0 && (
         <div
-          className={`absolute left-1/2 -translate-x-1/2 z-50 rounded-lg overflow-hidden shadow-2xl border border-slate-600/50 sm:pointer-events-none w-[min(600px,calc(100vw-2rem))] ${thumbBelow ? 'top-full mt-2' : 'bottom-full mb-2'}`}
-          onTouchStart={handleThumbTouchStart}
-          onTouchEnd={handleThumbTouchEnd}
+          className={`absolute left-1/2 -translate-x-1/2 z-50 w-[min(600px,calc(100vw-2rem))] ${thumbBelow ? 'top-full' : 'bottom-full'}`}
         >
+          <div
+            className={`rounded-lg overflow-hidden shadow-2xl border border-slate-600/50 sm:pointer-events-none animate-thumb-pop ${thumbBelow ? 'mt-2 origin-top' : 'mb-2 origin-bottom'}`}
+            onTouchStart={handleThumbTouchStart}
+            onTouchEnd={handleThumbTouchEnd}
+          >
           <div className="relative aspect-video bg-black">
             {thumbUrls.map((url, i) => (
               <img
@@ -375,6 +408,7 @@ export function DownloadItem({ download, onRetry, onStop, onPause, onResume, onD
                 />
               ))}
             </div>
+          </div>
           </div>
         </div>
       )}
@@ -754,6 +788,29 @@ export function DownloadItem({ download, onRetry, onStop, onPause, onResume, onD
 
           {/* Right: action buttons */}
           <div className="flex items-center gap-1.5">
+            {/* Thumbnail preview toggle */}
+            {thumbUrls.length > 0 && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (showThumbs) {
+                    closeThumbs();
+                  } else {
+                    if (itemRef.current) {
+                      const rect = itemRef.current.getBoundingClientRect();
+                      const tooltipWidth = Math.min(600, window.innerWidth * 0.9);
+                      const tooltipHeight = tooltipWidth * 9 / 16;
+                      setThumbBelow(rect.top < tooltipHeight + 16);
+                    }
+                    setThumbIndex(0);
+                    setShowThumbs(true);
+                  }
+                }}
+                className={`p-1.5 rounded-lg transition-colors ${showThumbs ? 'bg-purple-500/30 text-purple-300' : 'bg-purple-500/20 text-purple-400'}`}
+              >
+                <Image className="w-4 h-4" />
+              </button>
+            )}
             {/* View button for completed downloads */}
             {download.status === 'done' && (
               <button
