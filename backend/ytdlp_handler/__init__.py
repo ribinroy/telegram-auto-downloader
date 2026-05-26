@@ -73,6 +73,7 @@ class YtdlpDownloader:
                 '--dump-json',
                 '--no-download',
                 '--extractor-args', 'generic:impersonate',  # Cloudflare bypass
+                '--js-runtimes', 'node',  # Use Node.js for YouTube JS extraction
             ]
             cmd.extend(self._get_cookie_args())
             cmd.append(url)
@@ -316,11 +317,9 @@ class YtdlpDownloader:
         if mapping and mapping.get('folder'):
             custom_folder = Path(mapping['folder'])
             try:
-                # Check if folder exists or can be created
-                if custom_folder.exists() or custom_folder.parent.exists():
-                    custom_folder.mkdir(parents=True, exist_ok=True)
-                    output_dir = custom_folder
-                    print(f"[yt-dlp] Using custom folder: {output_dir}")
+                custom_folder.mkdir(parents=True, exist_ok=True)
+                output_dir = custom_folder
+                print(f"[yt-dlp] Using custom folder: {output_dir}")
             except (OSError, PermissionError) as e:
                 print(f"[yt-dlp] Custom folder not accessible: {e}, falling back to default")
 
@@ -351,6 +350,7 @@ class YtdlpDownloader:
                 '-o', output_template,
                 '--no-mtime',  # Don't set file modification time
                 '--extractor-args', 'generic:impersonate',  # Cloudflare bypass
+                '--js-runtimes', 'node',  # Use Node.js for YouTube JS extraction
             ]
 
             # Add cookies for authentication/Cloudflare bypass
