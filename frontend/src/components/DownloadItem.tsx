@@ -387,7 +387,7 @@ export function DownloadItem({ download, onRetry, onStop, onPause, onResume, onD
           className={`absolute left-1/2 -translate-x-1/2 z-50 w-[min(600px,calc(100vw-2rem))] ${thumbBelow ? 'top-full' : 'bottom-full'}`}
         >
           <div
-            className={`rounded-lg overflow-hidden shadow-2xl border border-slate-600/50 sm:pointer-events-none ${thumbBelow ? 'mt-2' : 'mb-2'}`}
+            className={`rounded-lg overflow-hidden shadow-2xl border border-slate-600/50 sm:pointer-events-none animate-thumb-pop ${thumbBelow ? 'mt-2 origin-top' : 'mb-2 origin-bottom'}`}
             onTouchStart={handleThumbTouchStart}
             onTouchEnd={handleThumbTouchEnd}
           >

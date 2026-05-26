@@ -28,3 +28,18 @@ body {
   background-size: 200% 100%;
   animation: shimmer 1.5s linear infinite;
 }
+
+@keyframes thumb-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-thumb-pop {
+  animation: thumb-pop 0.12s ease-out;
+}
