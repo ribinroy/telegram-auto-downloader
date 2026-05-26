@@ -383,6 +383,29 @@ export async function syncThumbnails(): Promise<SyncThumbnailsResult> {
   return response.json();
 }
 
+export async function getYtdlpVersion(): Promise<{ version: string | null; error?: string }> {
+  const response = await fetch(`${API_BASE}/api/jobs/ytdlp-version`, {
+    headers: getAuthHeaders(),
+  });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  return response.json();
+}
+
+export async function upgradeYtdlp(): Promise<{ old_version?: string; new_version?: string; upgraded?: boolean; error?: string }> {
+  const response = await fetch(`${API_BASE}/api/jobs/ytdlp-upgrade`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+  });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  return response.json();
+}
+
 export function getVideoStreamUrl(downloadId: number): string {
   const token = getToken();
   return `${API_BASE}/api/video/stream/${downloadId}?token=${token}`;

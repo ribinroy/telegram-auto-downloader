@@ -1105,6 +1105,55 @@ class WebApp:
             return send_from_directory(str(thumb_dir), filename, mimetype='image/jpeg')
 
         # Jobs API
+        @self.app.route("/api/jobs/ytdlp-version", methods=["GET"])
+        @token_required
+        def api_ytdlp_version():
+            """Get current yt-dlp version"""
+            import subprocess
+            try:
+                result = subprocess.run(
+                    [self.ytdlp_downloader.YTDLP_PATH, '--version'],
+                    capture_output=True, text=True, timeout=10
+                )
+                return jsonify({"version": result.stdout.strip()})
+            except Exception as e:
+                return jsonify({"version": None, "error": str(e)})
+
+        @self.app.route("/api/jobs/ytdlp-upgrade", methods=["POST"])
+        @token_required
+        def api_ytdlp_upgrade():
+            """Upgrade yt-dlp in the venv"""
+            import subprocess
+            venv_pip = str(Path(__file__).parent.parent.parent / 'venv' / 'bin' / 'pip')
+            try:
+                # Get current version
+                old_ver = subprocess.run(
+                    [self.ytdlp_downloader.YTDLP_PATH, '--version'],
+                    capture_output=True, text=True, timeout=10
+                ).stdout.strip()
+
+                # Run pip upgrade
+                result = subprocess.run(
+                    [venv_pip, 'install', '--upgrade', 'yt-dlp'],
+                    capture_output=True, text=True, timeout=120
+                )
+                if result.returncode != 0:
+                    return jsonify({"error": result.stderr.strip()[:500]}), 500
+
+                # Get new version
+                new_ver = subprocess.run(
+                    [self.ytdlp_downloader.YTDLP_PATH, '--version'],
+                    capture_output=True, text=True, timeout=10
+                ).stdout.strip()
+
+                return jsonify({
+                    "old_version": old_ver,
+                    "new_version": new_ver,
+                    "upgraded": old_ver != new_ver,
+                })
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
+
         @self.app.route("/api/jobs/sync-thumbnails", methods=["POST"])
         @token_required
         def api_sync_thumbnails():

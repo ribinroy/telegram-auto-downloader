@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { X, Loader2, AlertCircle, CheckCircle, Key, FolderCog, Plus, Trash2, Shield, ShieldOff, Pencil, Check, Cookie, Wrench } from 'lucide-react';
-import { updatePassword, fetchMappings, addMapping, updateMapping, deleteMapping, fetchCookies, saveCookies, syncThumbnails } from '../api';
+import { updatePassword, fetchMappings, addMapping, updateMapping, deleteMapping, fetchCookies, saveCookies, syncThumbnails, getYtdlpVersion, upgradeYtdlp } from '../api';
 import type { SyncThumbnailsResult } from '../api';
 import type { DownloadTypeMap } from '../types';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -59,6 +59,12 @@ export function SettingsDialog({ isOpen, onClose, showMappings = false }: Settin
   const [syncResult, setSyncResult] = useState<SyncThumbnailsResult | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
 
+  // yt-dlp upgrade state
+  const [ytdlpVersion, setYtdlpVersion] = useState<string | null>(null);
+  const [ytdlpUpgrading, setYtdlpUpgrading] = useState(false);
+  const [ytdlpResult, setYtdlpResult] = useState<{ old_version?: string; new_version?: string; upgraded?: boolean } | null>(null);
+  const [ytdlpError, setYtdlpError] = useState<string | null>(null);
+
   // Load mappings when tab changes to mappings
   useEffect(() => {
     if (isOpen && activeTab === 'mappings') {
@@ -70,6 +76,13 @@ export function SettingsDialog({ isOpen, onClose, showMappings = false }: Settin
   useEffect(() => {
     if (isOpen && activeTab === 'cookies') {
       loadCookies();
+    }
+  }, [isOpen, activeTab]);
+
+  // Load yt-dlp version when tab changes to jobs
+  useEffect(() => {
+    if (isOpen && activeTab === 'jobs') {
+      getYtdlpVersion().then(r => setYtdlpVersion(r.version)).catch(() => {});
     }
   }, [isOpen, activeTab]);
 
@@ -102,6 +115,25 @@ export function SettingsDialog({ isOpen, onClose, showMappings = false }: Settin
       setCookiesError('Failed to save cookies');
     } finally {
       setCookiesSaving(false);
+    }
+  };
+
+  const handleYtdlpUpgrade = async () => {
+    setYtdlpUpgrading(true);
+    setYtdlpError(null);
+    setYtdlpResult(null);
+    try {
+      const result = await upgradeYtdlp();
+      if (result.error) {
+        setYtdlpError(result.error);
+      } else {
+        setYtdlpResult(result);
+        if (result.new_version) setYtdlpVersion(result.new_version);
+      }
+    } catch {
+      setYtdlpError('Failed to upgrade yt-dlp');
+    } finally {
+      setYtdlpUpgrading(false);
     }
   };
 
@@ -268,6 +300,8 @@ export function SettingsDialog({ isOpen, onClose, showMappings = false }: Settin
     setCookiesSuccess(false);
     setSyncResult(null);
     setSyncError(null);
+    setYtdlpResult(null);
+    setYtdlpError(null);
     onClose();
   };
 
@@ -711,8 +745,54 @@ export function SettingsDialog({ isOpen, onClose, showMappings = false }: Settin
           {activeTab === 'jobs' && (
             <>
               <p className="text-sm text-slate-400 mb-4">
-                Maintenance jobs to keep thumbnails and metadata in sync.
+                Maintenance jobs and tools.
               </p>
+
+              {/* yt-dlp Upgrade */}
+              <div className="bg-slate-700/30 rounded-lg p-4 mb-4">
+                <div className="flex items-center justify-between mb-2">
+                  <div>
+                    <h3 className="text-white font-medium text-sm">yt-dlp</h3>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      {ytdlpVersion ? `Current version: ${ytdlpVersion}` : 'Checking version...'}
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  onClick={handleYtdlpUpgrade}
+                  disabled={ytdlpUpgrading}
+                  className="w-full bg-cyan-600 hover:bg-cyan-700 text-white font-medium py-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 mt-3"
+                >
+                  {ytdlpUpgrading ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Upgrading...
+                    </>
+                  ) : (
+                    'Upgrade yt-dlp'
+                  )}
+                </button>
+
+                {ytdlpError && (
+                  <div className="flex items-center gap-2 bg-red-500/20 border border-red-500/50 rounded-lg p-3 mt-3 text-red-400 text-sm">
+                    <AlertCircle className="w-4 h-4 shrink-0" />
+                    <span>{ytdlpError}</span>
+                  </div>
+                )}
+
+                {ytdlpResult && (
+                  <div className={`flex items-center gap-2 ${ytdlpResult.upgraded ? 'bg-green-500/20 border-green-500/50 text-green-400' : 'bg-slate-600/30 border-slate-500/50 text-slate-400'} border rounded-lg p-3 mt-3 text-sm`}>
+                    <CheckCircle className="w-4 h-4 shrink-0" />
+                    <span>
+                      {ytdlpResult.upgraded
+                        ? `Upgraded: ${ytdlpResult.old_version} → ${ytdlpResult.new_version}`
+                        : `Already up to date (${ytdlpResult.new_version})`
+                      }
+                    </span>
+                  </div>
+                )}
+              </div>
 
               {/* Sync Thumbnails */}
               <div className="bg-slate-700/30 rounded-lg p-4">
