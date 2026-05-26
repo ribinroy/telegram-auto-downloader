@@ -627,7 +627,7 @@ class WebApp:
                 author=author
             )
 
-            if 'error' in result:
+            if result.get('error'):
                 return jsonify(result), 400
 
             return jsonify(result)

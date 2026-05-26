@@ -125,7 +125,27 @@ class BrowserDownloader:
 
             logger.info(f"[Browser] Starting download from {url}")
 
-            # Navigate to the page
+            # Check if URL is a direct video file (CDN link)
+            parsed = urlparse(url)
+            is_direct_video = any(parsed.path.lower().endswith(ext) for ext in ('.mp4', '.mkv', '.webm', '.avi', '.mov'))
+
+            if is_direct_video:
+                # Direct video URL — skip page scraping, go straight to download
+                logger.info(f"[Browser] Direct video URL detected, downloading directly...")
+
+                if not output_path:
+                    # Extract filename from URL query param or path
+                    filename = unquote(parsed.path.split('/')[-1])
+                    output_path = str(self.download_dir / filename)
+
+                download_result = await self._download_via_navigation(url, output_path)
+                if download_result.get('success'):
+                    return download_result
+
+                logger.info("[Browser] Navigation method failed, trying CDP...")
+                return await self._download_with_cdp(page, url, output_path)
+
+            # Navigate to the page to scrape video sources
             await page.goto(url, wait_until='networkidle', timeout=60000)
             await asyncio.sleep(2)  # Wait for Cloudflare
 
