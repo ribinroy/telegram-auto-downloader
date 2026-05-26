@@ -21,6 +21,8 @@ A self-hosted media downloader with Telegram integration and a modern web dashbo
 - **Telegram Downloads**: Auto-download files from specified Telegram chat/channel
 - **URL Downloads**: Download videos from YouTube, Twitter, TikTok, Instagram, and 1000+ sites via yt-dlp
 - **Quality Selection**: Choose video quality/resolution when downloading URLs
+- **Download Folder Preview**: Shows the destination folder path as a breadcrumb when adding URL downloads
+- **Thumbnail Previews**: Hover to preview video thumbnails with carousel, or tap the preview button on mobile
 - **Real-time Progress**: WebSocket-based live progress tracking
 - **Web Dashboard**: Modern React UI with search, filtering, sorting, and dark mode
 - **Author Tracking**: Tracks who initiated each download (Telegram sender or logged-in web user)
@@ -30,6 +32,7 @@ A self-hosted media downloader with Telegram integration and a modern web dashbo
 - **Download Mappings**: Configure custom folders and default quality per source
 - **Secured Sources**: Hide downloads from specific sources (secret 4-click toggle)
 - **Video Playback**: Stream downloaded videos directly in the browser
+- **yt-dlp Management**: Check version and upgrade yt-dlp directly from the web UI (Settings > Jobs)
 - **User Authentication**: JWT-based login with password management
 - **Startup Greeting**: Sends a time-appropriate greeting to the Telegram chat on startup
 - **PostgreSQL Database**: Persistent storage for downloads and settings
@@ -45,7 +48,7 @@ A self-hosted media downloader with Telegram integration and a modern web dashbo
 ## Prerequisites
 
 - Python 3.10+
-- Node.js 18+
+- Node.js 18+ (also used as yt-dlp's JavaScript runtime for YouTube extraction)
 - PostgreSQL
 - yt-dlp
 
@@ -171,6 +174,9 @@ Files sent to the configured Telegram chat/channel are automatically downloaded.
 | `/api/mappings/<id>` | PUT/DELETE | Update or delete a mapping |
 | `/api/analytics` | GET | Get analytics data |
 | `/api/settings/cookies` | GET/POST | Manage yt-dlp cookies |
+| `/api/jobs/ytdlp-version` | GET | Get current yt-dlp version |
+| `/api/jobs/ytdlp-upgrade` | POST | Upgrade yt-dlp to latest version |
+| `/api/jobs/sync-thumbnails` | POST | Generate missing thumbnails and clean up orphans |
 | `/api/video/check/<id>` | GET | Check if video file exists |
 | `/api/video/stream/<id>` | GET | Stream video for playback |
 | `/metrics` | GET | Prometheus metrics |
