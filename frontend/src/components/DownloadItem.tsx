@@ -13,7 +13,8 @@ import {
   Eye,
   Loader2,
   ExternalLink,
-  User
+  User,
+  Image
 } from 'lucide-react';
 import ReactTimeAgo from 'react-time-ago';
 import type { Download } from '../types';
@@ -364,7 +365,7 @@ export function DownloadItem({ download, onRetry, onStop, onPause, onResume, onD
       className="relative rounded-xl p-3 sm:p-4 border border-slate-700/50 transition-all overflow-visible"
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
-      onClickCapture={closeThumbs}
+      onClick={closeThumbs}
     >
       {/* Thumbnail background - random static image per load */}
       {thumbUrls.length > 0 ? (
@@ -787,6 +788,29 @@ export function DownloadItem({ download, onRetry, onStop, onPause, onResume, onD
 
           {/* Right: action buttons */}
           <div className="flex items-center gap-1.5">
+            {/* Thumbnail preview toggle */}
+            {thumbUrls.length > 0 && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (showThumbs) {
+                    closeThumbs();
+                  } else {
+                    if (itemRef.current) {
+                      const rect = itemRef.current.getBoundingClientRect();
+                      const tooltipWidth = Math.min(600, window.innerWidth * 0.9);
+                      const tooltipHeight = tooltipWidth * 9 / 16;
+                      setThumbBelow(rect.top < tooltipHeight + 16);
+                    }
+                    setThumbIndex(0);
+                    setShowThumbs(true);
+                  }
+                }}
+                className={`p-1.5 rounded-lg transition-colors ${showThumbs ? 'bg-purple-500/30 text-purple-300' : 'bg-purple-500/20 text-purple-400'}`}
+              >
+                <Image className="w-4 h-4" />
+              </button>
+            )}
             {/* View button for completed downloads */}
             {download.status === 'done' && (
               <button
