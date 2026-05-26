@@ -330,6 +330,8 @@ class YtdlpDownloader:
             custom_folder = Path(mapping['folder'])
             try:
                 custom_folder.mkdir(parents=True, exist_ok=True)
+                if not os.access(custom_folder, os.W_OK):
+                    raise PermissionError(f"No write permission to {custom_folder}")
                 output_dir = custom_folder
                 print(f"[yt-dlp] Using custom folder: {output_dir}")
             except (OSError, PermissionError) as e:
