@@ -426,6 +426,8 @@ export function DownloadItem({ download, onRetry, onStop, onPause, onResume, onD
               const audio = getAudioLabel(download);
               const bitDepth = meta?.video?.bit_depth;
               const bitLabel = bitDepth && bitDepth > 8 ? `${bitDepth}b` : null;
+              const fps = meta?.video?.fps;
+              const fpsLabel = fps ? `${Math.round(fps)}` : null;
               const tooltipLines: string[] = [];
               if (meta?.video) {
                 tooltipLines.push(`${meta.video.width}x${meta.video.height} · ${meta.video.codec}${bitDepth ? ` · ${bitDepth}bit` : ''}${meta.video.fps ? ` · ${meta.video.fps}fps` : ''}${meta.video.bitrate ? ` · ${(meta.video.bitrate / 1000000).toFixed(1)}Mbps` : ''}`);
@@ -458,6 +460,11 @@ export function DownloadItem({ download, onRetry, onStop, onPause, onResume, onD
                     {bitLabel && (
                       <span className="absolute -bottom-1.5 -right-1.5 text-[10px] font-medium text-slate-400 bg-slate-700/80 px-1 py-0.5 rounded leading-none">
                         {bitLabel}
+                      </span>
+                    )}
+                    {fpsLabel && (
+                      <span className="absolute -bottom-1.5 -left-1.5 text-[10px] font-medium text-slate-400 bg-slate-700/80 px-1 py-0.5 rounded leading-none">
+                        {fpsLabel}
                       </span>
                     )}
                   </div>
