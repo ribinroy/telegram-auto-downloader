@@ -8,6 +8,7 @@ from backend.config import LOG_FILE, DATABASE_URL
 from backend.database import init_database
 from backend.telegram_handler import TelegramDownloader
 from backend.ytdlp_handler import YtdlpDownloader
+from backend.vps_handler import VpsDownloader
 from backend.web_app import WebApp
 
 
@@ -69,7 +70,8 @@ def main():
     # Initialize components
     telegram_downloader = TelegramDownloader(download_tasks)
     ytdlp_downloader = YtdlpDownloader(download_tasks)
-    web_app = WebApp(download_tasks, ytdlp_downloader, loop, telegram_downloader)
+    vps_downloader = VpsDownloader(download_tasks, loop)
+    web_app = WebApp(download_tasks, ytdlp_downloader, loop, telegram_downloader, vps_downloader)
 
     # Start Flask in a separate thread
     flask_thread = threading.Thread(target=web_app.run, daemon=True)
@@ -90,6 +92,10 @@ def main():
 
     print("🎬 yt-dlp downloader ready")
     print(f"   Event loop running: {loop.is_running()}")
+
+    # Start VPS autoSync scheduler (hourly check of watched folders)
+    vps_downloader.start_autosync()
+    print("🗄️  VPS autoSync scheduler started")
 
     # Start Telegram client (this will block)
     telegram_downloader.start()

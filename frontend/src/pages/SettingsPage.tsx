@@ -1,16 +1,33 @@
 import { useState, useEffect } from 'react';
-import { Loader2, AlertCircle, CheckCircle, Key, FolderCog, Plus, Trash2, Shield, ShieldOff, Pencil, Check, Cookie, Wrench } from 'lucide-react';
+import { useParams, useNavigate } from 'react-router-dom';
+import { Loader2, AlertCircle, CheckCircle, Key, FolderCog, Plus, Trash2, Shield, ShieldOff, Pencil, Check, Cookie, Wrench, Server } from 'lucide-react';
 import { updatePassword, fetchMappings, addMapping, updateMapping, deleteMapping, fetchCookies, saveCookies, syncThumbnails, getYtdlpVersion, upgradeYtdlp } from '../api';
 import type { SyncThumbnailsResult } from '../api';
 import type { DownloadTypeMap } from '../types';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { VpsSettings } from '../components/VpsSettings';
 import { useLayoutContext } from '../components/Layout';
+import { settingsTab } from '../routes';
 
-type TabType = 'password' | 'mappings' | 'cookies' | 'jobs';
+type TabType = 'password' | 'mappings' | 'cookies' | 'jobs' | 'vps';
+const TAB_IDS: TabType[] = ['password', 'mappings', 'cookies', 'vps', 'jobs'];
 
 export function SettingsPage() {
   const { showSecured: showMappings, loadSecuredMappingIds: onMappingsChanged } = useLayoutContext();
-  const [activeTab, setActiveTab] = useState<TabType>('password');
+  const { tab } = useParams<{ tab?: string }>();
+  const navigate = useNavigate();
+  const isValidTab = (t?: string): t is TabType => !!t && (TAB_IDS as string[]).includes(t);
+  const [activeTab, setActiveTab] = useState<TabType>(isValidTab(tab) ? tab : 'password');
+
+  // Keep the active tab in sync with the URL (/settings/:tab)
+  useEffect(() => {
+    if (isValidTab(tab)) setActiveTab(tab);
+    else if (!tab) setActiveTab('password');
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
+
+  // Navigate to a tab's unique URL (also updates activeTab via the effect)
+  const goToTab = (id: TabType) => navigate(settingsTab(id));
 
   // Password state
   const [currentPassword, setCurrentPassword] = useState('');
@@ -284,6 +301,7 @@ export function SettingsPage() {
     { id: 'password', label: 'Password', description: 'Change your account password', icon: Key, show: true },
     { id: 'mappings', label: 'Mappings', description: 'Per-source folders & quality', icon: FolderCog, show: showMappings },
     { id: 'cookies', label: 'Cookies', description: 'yt-dlp browser cookies', icon: Cookie, show: true },
+    { id: 'vps', label: 'VPS Connection', description: 'Remote SSH/SFTP server', icon: Server, show: true },
     { id: 'jobs', label: 'Jobs', description: 'Maintenance & tools', icon: Wrench, show: true },
   ];
   const visibleTabs = tabs.filter(t => t.show);
@@ -305,7 +323,7 @@ export function SettingsPage() {
             return (
               <button
                 key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
+                onClick={() => goToTab(tab.id)}
                 className={`flex items-center gap-3 px-3 sm:px-4 py-2.5 sm:py-3 rounded-lg text-left transition-colors whitespace-nowrap md:whitespace-normal ${
                   active
                     ? 'bg-cyan-500/15 text-cyan-400 md:border md:border-cyan-500/30'
@@ -326,13 +344,15 @@ export function SettingsPage() {
 
         {/* Content */}
         <div className="flex-1 min-w-0 bg-slate-800/50 border border-slate-700 rounded-xl p-4 sm:p-6">
-          <div className="hidden md:flex items-center gap-2 mb-5 pb-4 border-b border-slate-700/60">
-            <activeTabMeta.icon className="w-5 h-5 text-cyan-400" />
-            <div>
-              <h2 className="text-base font-semibold text-white leading-tight">{activeTabMeta.label}</h2>
-              <p className="text-xs text-slate-400">{activeTabMeta.description}</p>
+          {activeTab !== 'vps' && (
+            <div className="hidden md:flex items-center gap-2 mb-5 pb-4 border-b border-slate-700/60">
+              <activeTabMeta.icon className="w-5 h-5 text-cyan-400" />
+              <div>
+                <h2 className="text-base font-semibold text-white leading-tight">{activeTabMeta.label}</h2>
+                <p className="text-xs text-slate-400">{activeTabMeta.description}</p>
+              </div>
             </div>
-          </div>
+          )}
         {activeTab === 'password' && (
           <>
             {passwordSuccess && (
@@ -682,6 +702,8 @@ export function SettingsPage() {
             )}
           </>
         )}
+
+        {activeTab === 'vps' && <VpsSettings />}
 
         {activeTab === 'jobs' && (
           <>

@@ -3,8 +3,41 @@ Utility functions for DownLee
 """
 import os
 import json
+import base64
+import hashlib
 from datetime import datetime
 from pathlib import Path
+
+
+def _fernet():
+    """Build a Fernet cipher keyed off the app's JWT secret.
+
+    The key is derived (not stored) so secrets in the DB can only be
+    decrypted by an instance that knows JWT_SECRET. Set a stable
+    JWT_SECRET in .env in production, otherwise saved secrets become
+    unreadable when the fallback secret changes.
+    """
+    from cryptography.fernet import Fernet
+    secret = os.environ.get('JWT_SECRET', 'telegram-downloader-secret-key-change-in-prod')
+    key = base64.urlsafe_b64encode(hashlib.sha256(secret.encode()).digest())
+    return Fernet(key)
+
+
+def encrypt_secret(plaintext: str) -> str:
+    """Encrypt a secret string for at-rest storage. Returns a token string."""
+    if plaintext is None:
+        plaintext = ''
+    return _fernet().encrypt(plaintext.encode()).decode()
+
+
+def decrypt_secret(token: str) -> str:
+    """Decrypt a token produced by encrypt_secret. Returns '' on failure."""
+    if not token:
+        return ''
+    try:
+        return _fernet().decrypt(token.encode()).decode()
+    except Exception:
+        return ''
 
 
 def save_state(downloads, downloads_json_path):

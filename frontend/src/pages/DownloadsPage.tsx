@@ -1,20 +1,24 @@
-import { useEffect, useRef, useState } from 'react';
-import { Search, Download, Loader2, Plus, X } from 'lucide-react';
+import { useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Search, Download, Loader2, Plus, X, HardDrive } from 'lucide-react';
 import { useLayoutContext } from '../components/Layout';
+import { ROUTES } from '../routes';
 import { DownloadItem } from '../components/DownloadItem';
 import { AddUrlModal } from '../components/AddUrlModal';
 import type { SortBy, SortOrder } from '../api';
 
 export function DownloadsPage() {
   const {
-    downloads, totalResults, loading, loadingMore, hasMore, error,
+    downloads, totalResults, loading, loadingMore, error,
     search, setSearch, debouncedSearch,
     sortBy, setSortBy, sortOrder, setSortOrder,
     authors, selectedAuthor, setSelectedAuthor,
     loadMore, onRetry, onStop, onPause, onResume, onDelete,
     addUrlOpen, setAddUrlOpen, pastedUrl, setPastedUrl,
+    vpsReady,
   } = useLayoutContext();
 
+  const navigate = useNavigate();
   const searchRef = useRef<HTMLInputElement>(null);
 
   // Focus search on mount
@@ -203,6 +207,21 @@ export function DownloadsPage() {
           </div>
         )}
       </div>
+
+      {/* Floating VPS Button - only when VPS is configured with watched folders */}
+      {vpsReady && (
+        <div className="group fixed bottom-20 right-4 sm:bottom-24 sm:right-6 z-40">
+          <button
+            onClick={() => navigate(ROUTES.VPS)}
+            className="p-3 sm:p-4 bg-gradient-to-br from-violet-500 to-purple-600 hover:from-violet-400 hover:to-purple-500 text-white rounded-full shadow-lg shadow-purple-500/25 transition-all hover:scale-105"
+          >
+            <HardDrive className="w-5 h-5 sm:w-6 sm:h-6" />
+          </button>
+          <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
+            VPS files
+          </div>
+        </div>
+      )}
 
       {/* Floating Add Button */}
       <div className="group fixed bottom-4 right-4 sm:bottom-6 sm:right-6 z-40">

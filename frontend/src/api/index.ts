@@ -322,6 +322,224 @@ export async function saveCookies(cookies: string): Promise<{ status?: string; e
   return response.json();
 }
 
+// VPS connection settings API
+export interface VpsConfig {
+  configured: boolean;
+  host: string;
+  port: number;
+  username: string;
+  remote_path: string;
+  has_password: boolean;
+}
+
+export interface VpsConfigInput {
+  host: string;
+  port: number;
+  username: string;
+  remote_path: string;
+  password?: string;
+}
+
+export async function fetchVpsConfig(): Promise<VpsConfig> {
+  const response = await fetch(`${API_BASE}/api/settings/vps`, {
+    headers: getAuthHeaders(),
+  });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  return response.json();
+}
+
+export async function saveVpsConfig(config: VpsConfigInput): Promise<{ status?: string; configured?: boolean; has_password?: boolean; error?: string }> {
+  const response = await fetch(`${API_BASE}/api/settings/vps`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify(config),
+  });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  return response.json();
+}
+
+export async function testVpsConnection(config: VpsConfigInput): Promise<{ success: boolean; message?: string; error?: string }> {
+  const response = await fetch(`${API_BASE}/api/settings/vps/test`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify(config),
+  });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  return response.json();
+}
+
+export async function deleteVpsConfig(): Promise<{ status?: string; configured?: boolean; error?: string }> {
+  const response = await fetch(`${API_BASE}/api/settings/vps`, {
+    method: 'DELETE',
+    headers: getAuthHeaders(),
+  });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  return response.json();
+}
+
+export interface VpsBrowseEntry {
+  name: string;
+  path: string;
+  is_dir: boolean;
+}
+
+export interface VpsBrowseResult {
+  path?: string;
+  parent?: string | null;
+  entries?: VpsBrowseEntry[];
+  error?: string;
+}
+
+export async function browseVps(path?: string): Promise<VpsBrowseResult> {
+  const response = await fetch(`${API_BASE}/api/settings/vps/browse`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ path: path ?? '' }),
+  });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  return response.json();
+}
+
+export interface VpsWatchFolder {
+  id: number;
+  path: string;
+  host: string | null;
+  port: number | null;
+  username: string | null;
+  auto_sync: boolean;
+  active?: boolean;
+  created_at: string | null;
+}
+
+export async function fetchVpsFolders(): Promise<VpsWatchFolder[]> {
+  const response = await fetch(`${API_BASE}/api/settings/vps/folders`, {
+    headers: getAuthHeaders(),
+  });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  const data = await response.json();
+  return data.folders || [];
+}
+
+export async function addVpsFolders(paths: string[]): Promise<VpsWatchFolder[]> {
+  const response = await fetch(`${API_BASE}/api/settings/vps/folders`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ paths }),
+  });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  const data = await response.json();
+  return data.folders || [];
+}
+
+export async function deleteVpsFolder(id: number): Promise<VpsWatchFolder[]> {
+  const response = await fetch(`${API_BASE}/api/settings/vps/folders/${id}`, {
+    method: 'DELETE',
+    headers: getAuthHeaders(),
+  });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  const data = await response.json();
+  return data.folders || [];
+}
+
+export async function setVpsFolderAutoSync(id: number, autoSync: boolean): Promise<VpsWatchFolder[]> {
+  const response = await fetch(`${API_BASE}/api/settings/vps/folders/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ auto_sync: autoSync }),
+  });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  const data = await response.json();
+  return data.folders || [];
+}
+
+// VPS file listing (live, non-recursive contents of watched folders)
+export interface VpsFileEntry {
+  name: string;
+  path: string;
+  folder: string;
+  is_dir: boolean;
+  size: number;
+  modified: string | null;
+  downloaded: boolean;
+  message_id?: string;
+  status?: string;
+}
+
+export interface VpsFolderGroup {
+  path: string;
+  auto_sync: boolean;
+  active: boolean;
+  host?: string | null;
+  username?: string | null;
+  error?: string;
+  entries: VpsFileEntry[];
+}
+
+export async function fetchVpsFiles(): Promise<VpsFolderGroup[]> {
+  const response = await fetch(`${API_BASE}/api/vps/files`, {
+    headers: getAuthHeaders(),
+  });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  const data = await response.json();
+  return data.folders || [];
+}
+
+export async function downloadVpsFile(path: string, size?: number): Promise<{ error?: string; id?: number; message_id?: string }> {
+  const response = await fetch(`${API_BASE}/api/vps/download`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ path, size: size ?? 0 }),
+  });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  return response.json();
+}
+
+export async function deleteVpsRemote(path: string): Promise<{ status?: string; error?: string }> {
+  const response = await fetch(`${API_BASE}/api/vps/delete-remote`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ path }),
+  });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  return response.json();
+}
+
 // Analytics API
 export async function fetchAnalytics(days: number = 30, groupBy: 'day' | 'hour' = 'day', includeDeleted: boolean = false): Promise<AnalyticsData> {
   const params = new URLSearchParams();

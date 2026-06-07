@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { Outlet, useNavigate, useLocation, useOutletContext } from 'react-router-dom';
 import { Wifi, WifiOff, HardDrive, Clock, Zap, LogOut, Settings, BarChart3 } from 'lucide-react';
 import { formatBytes, formatSpeed } from '../utils/format';
-import { fetchDownloads, fetchStats, fetchAuthors, retryDownload, stopDownload, pauseDownload, resumeDownload, deleteDownload, fetchSecuredMappingIds, type SortBy, type SortOrder } from '../api';
+import { fetchDownloads, fetchStats, fetchAuthors, retryDownload, stopDownload, pauseDownload, resumeDownload, deleteDownload, fetchSecuredMappingIds, fetchVpsConfig, fetchVpsFolders, type SortBy, type SortOrder } from '../api';
 import { connectSocket, disconnectSocket, type ProgressUpdate, type StatusUpdate, type DeletedUpdate, type MetaUpdate } from '../api/socket';
 import { ToastContainer, useToast } from './Toast';
 import { ROUTES } from '../routes';
@@ -39,6 +39,7 @@ export interface LayoutContext {
   setPastedUrl: (url: string | null) => void;
   showSecured: boolean;
   loadSecuredMappingIds: () => Promise<void>;
+  vpsReady: boolean;
 }
 
 export function useLayoutContext() {
@@ -76,6 +77,9 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
   // Add URL modal
   const [addUrlOpen, setAddUrlOpen] = useState(false);
   const [pastedUrl, setPastedUrl] = useState<string | null>(null);
+
+  // VPS readiness (configured + at least one watched folder for this connection)
+  const [vpsReady, setVpsReady] = useState(false);
 
   // Connection & stats
   const [connected, setConnected] = useState(false);
@@ -221,12 +225,23 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
     try { setAuthors(await fetchAuthors()); } catch { console.error('Failed to fetch authors'); }
   }, []);
 
+  // Check VPS readiness for the floating button / page gating
+  const loadVpsReady = useCallback(async () => {
+    try {
+      const [cfg, folders] = await Promise.all([fetchVpsConfig(), fetchVpsFolders()]);
+      setVpsReady(!!cfg.configured && folders.some(f => f.active));
+    } catch {
+      setVpsReady(false);
+    }
+  }, []);
+
   // Load initial data
   useEffect(() => {
     loadSecuredMappingIds();
     loadStats();
     loadAuthors();
-  }, [loadSecuredMappingIds, loadStats, loadAuthors]);
+    loadVpsReady();
+  }, [loadSecuredMappingIds, loadStats, loadAuthors, loadVpsReady]);
 
   // Reload downloads when filters change
   useEffect(() => {
@@ -274,6 +289,7 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
     loadMore, onRetry, onStop, onPause, onResume, onDelete,
     addUrlOpen, setAddUrlOpen, pastedUrl, setPastedUrl,
     showSecured, loadSecuredMappingIds,
+    vpsReady,
   };
 
   return (
@@ -331,6 +347,20 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
                   </button>
                   <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
                     Analytics
+                  </div>
+                </div>
+              )}
+              {/* VPS files - only when configured with watched folders */}
+              {vpsReady && (
+                <div className="group relative">
+                  <button
+                    onClick={() => navigate(ROUTES.VPS)}
+                    className={`p-2 hover:bg-slate-600/50 text-slate-400 hover:text-white rounded-lg transition-colors ${location.pathname === ROUTES.VPS ? 'bg-slate-600/50 text-white' : 'bg-slate-700/50'}`}
+                  >
+                    <HardDrive className="w-4 h-4" />
+                  </button>
+                  <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
+                    VPS files
                   </div>
                 </div>
               )}
