@@ -251,31 +251,50 @@ class VpsDownloader:
             self.threads.pop(message_id, None)
             self.download_tasks.pop(message_id, None)
 
-    def _transfer_file(self, sftp, remote, local: Path, rsize: int, bump, chunk=65536):
-        """Copy a remote file to local, resuming from the local file's size."""
+    def _transfer_file(self, sftp, remote, local: Path, rsize: int, bump):
+        """Copy a remote file to local, resuming from the local file's size.
+
+        Uses paramiko's pipelined paths for speed: a fresh file uses the
+        optimized prefetched ``get()``; a resumed file uses concurrent ranged
+        reads (``readv``) over just the missing tail."""
         start_offset = 0
         if local.exists():
             ls = local.stat().st_size
             if rsize and ls >= rsize:
                 return  # already complete
             start_offset = ls
-        mode = 'ab' if start_offset > 0 else 'wb'
+
+        # Fast path: fresh download via paramiko's prefetched get()
+        if start_offset == 0:
+            sent = [0]
+
+            def cb(done, _total):
+                bump(done - sent[0])  # bump() raises _Cancelled if stopped
+                sent[0] = done
+
+            sftp.get(remote, str(local), callback=cb)
+            return
+
+        # Resume path: append the missing tail using concurrent ranged reads
         rf = sftp.open(remote, 'rb')
         try:
-            # Prefetch only for a fresh transfer (prefetch ignores seek offset)
-            if start_offset == 0 and rsize:
-                try:
-                    rf.prefetch(rsize)
-                except Exception:
-                    pass
-            rf.seek(start_offset)
-            with open(local, mode) as lf:
-                while True:
-                    data = rf.read(chunk)
-                    if not data:
-                        break
-                    lf.write(data)
-                    bump(len(data))
+            rf.set_pipelined(True)
+            with open(local, 'ab') as lf:
+                if rsize:
+                    chunk = 1 << 17  # 128 KiB requests, fetched concurrently by readv
+                    ranges = [(off, min(chunk, rsize - off)) for off in range(start_offset, rsize, chunk)]
+                    for data in rf.readv(ranges):
+                        lf.write(data)
+                        bump(len(data))
+                else:
+                    rf.prefetch()
+                    rf.seek(start_offset)
+                    while True:
+                        data = rf.read(1 << 17)
+                        if not data:
+                            break
+                        lf.write(data)
+                        bump(len(data))
         finally:
             rf.close()
 
