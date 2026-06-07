@@ -527,6 +527,19 @@ export async function downloadVpsFile(path: string, size?: number): Promise<{ er
   return response.json();
 }
 
+export async function deleteVpsRemote(path: string): Promise<{ status?: string; error?: string }> {
+  const response = await fetch(`${API_BASE}/api/vps/delete-remote`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ path }),
+  });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  return response.json();
+}
+
 // Analytics API
 export async function fetchAnalytics(days: number = 30, groupBy: 'day' | 'hour' = 'day', includeDeleted: boolean = false): Promise<AnalyticsData> {
   const params = new URLSearchParams();

@@ -44,6 +44,7 @@ function App() {
         <Route path={ROUTES.DOWNLOADS} element={<DownloadsPage />} />
         <Route path={ROUTES.ANALYTICS} element={<AnalyticsPage />} />
         <Route path={ROUTES.SETTINGS} element={<SettingsPage />} />
+        <Route path="/settings/:tab" element={<SettingsPage />} />
         <Route path={ROUTES.VPS} element={<VpsPage />} />
       </Route>
     </Routes>

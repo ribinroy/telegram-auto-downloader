@@ -452,17 +452,9 @@ class WebApp:
                 db = get_db()
                 download = db.get_download_by_id(download_id)
                 if download and download["status"] in ["failed", "stopped"]:
-                    # VPS download - restart the SFTP transfer from its remote path
+                    # VPS download - resume the SFTP transfer from where it stopped
                     if download.get("downloaded_from") == "vps" and self.vps_downloader:
-                        remote_path = download.get("url")
-                        # Drop the old (failed/stopped) record so the restart isn't blocked
-                        # by the duplicate guard, then start fresh.
-                        if download.get("message_id"):
-                            db.update_download_by_message_id(
-                                download["message_id"], deleted_at=datetime.utcnow()
-                            )
-                            self.emit_deleted(download["message_id"])
-                        self.vps_downloader.start_download(remote_path, download.get("total_bytes") or 0)
+                        self.vps_downloader.resume_download(download.get("message_id"))
                     # Check if it's a yt-dlp download (has URL)
                     elif download.get("url") and self.ytdlp_downloader and self.event_loop:
                         # Resume yt-dlp download (yt-dlp will continue from partial file)
@@ -1331,6 +1323,24 @@ class WebApp:
             if result.get("error"):
                 return jsonify(result), 400
             return jsonify(result)
+
+        @self.app.route("/api/vps/delete-remote", methods=["POST"])
+        @token_required
+        def delete_vps_remote():
+            """Permanently delete a file/folder ON the VPS over SFTP. Body: {path}."""
+            if not self.vps_downloader:
+                return jsonify({"error": "VPS downloader not available"}), 503
+            data = request.json or {}
+            path = (data.get("path") or "").strip()
+            if not path:
+                return jsonify({"error": "path is required"}), 400
+            try:
+                self.vps_downloader.delete_remote(path)
+                return jsonify({"status": "deleted"})
+            except ValueError as e:
+                return jsonify({"error": str(e)}), 400
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
 
         # Video file API for playback
         @self.app.route("/api/video/check/<int:download_id>", methods=["GET"])

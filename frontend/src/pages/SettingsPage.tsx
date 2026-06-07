@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
 import { Loader2, AlertCircle, CheckCircle, Key, FolderCog, Plus, Trash2, Shield, ShieldOff, Pencil, Check, Cookie, Wrench, Server } from 'lucide-react';
 import { updatePassword, fetchMappings, addMapping, updateMapping, deleteMapping, fetchCookies, saveCookies, syncThumbnails, getYtdlpVersion, upgradeYtdlp } from '../api';
 import type { SyncThumbnailsResult } from '../api';
@@ -6,12 +7,27 @@ import type { DownloadTypeMap } from '../types';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { VpsSettings } from '../components/VpsSettings';
 import { useLayoutContext } from '../components/Layout';
+import { settingsTab } from '../routes';
 
 type TabType = 'password' | 'mappings' | 'cookies' | 'jobs' | 'vps';
+const TAB_IDS: TabType[] = ['password', 'mappings', 'cookies', 'vps', 'jobs'];
 
 export function SettingsPage() {
   const { showSecured: showMappings, loadSecuredMappingIds: onMappingsChanged } = useLayoutContext();
-  const [activeTab, setActiveTab] = useState<TabType>('password');
+  const { tab } = useParams<{ tab?: string }>();
+  const navigate = useNavigate();
+  const isValidTab = (t?: string): t is TabType => !!t && (TAB_IDS as string[]).includes(t);
+  const [activeTab, setActiveTab] = useState<TabType>(isValidTab(tab) ? tab : 'password');
+
+  // Keep the active tab in sync with the URL (/settings/:tab)
+  useEffect(() => {
+    if (isValidTab(tab)) setActiveTab(tab);
+    else if (!tab) setActiveTab('password');
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
+
+  // Navigate to a tab's unique URL (also updates activeTab via the effect)
+  const goToTab = (id: TabType) => navigate(settingsTab(id));
 
   // Password state
   const [currentPassword, setCurrentPassword] = useState('');
@@ -307,7 +323,7 @@ export function SettingsPage() {
             return (
               <button
                 key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
+                onClick={() => goToTab(tab.id)}
                 className={`flex items-center gap-3 px-3 sm:px-4 py-2.5 sm:py-3 rounded-lg text-left transition-colors whitespace-nowrap md:whitespace-normal ${
                   active
                     ? 'bg-cyan-500/15 text-cyan-400 md:border md:border-cyan-500/30'

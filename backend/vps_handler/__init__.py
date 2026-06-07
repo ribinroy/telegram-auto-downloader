@@ -88,13 +88,16 @@ class VpsDownloader:
 
     # --- Download ---------------------------------------------------------
     def start_download(self, remote_path: str, size: int = 0) -> dict:
-        """Create a download record and kick off the SFTP transfer in a thread."""
+        """Create a download record and kick off the SFTP transfer in a thread.
+
+        Works for both files and directories (directories are downloaded
+        recursively, preserving structure)."""
         db = get_db()
         remote_path = (remote_path or "").strip()
         if not remote_path:
             return {"error": "remote path is required"}
         if db.vps_download_exists(remote_path):
-            return {"error": "This file is already downloaded"}
+            return {"error": "This item is already downloaded"}
 
         message_id = generate_uuid()
         filename = posixpath.basename(remote_path.rstrip("/")) or remote_path
@@ -115,83 +118,126 @@ class VpsDownloader:
         )
         metrics.record_download_started('vps')
         self.emit_new_download(new_download)
+        self._spawn(remote_path, message_id)
+        return new_download
 
+    def resume_download(self, message_id: str) -> bool:
+        """Resume a stopped/failed VPS download from where it left off,
+        reusing the same record (no restart from zero)."""
+        db = get_db()
+        dl = db.get_download_by_message_id(message_id)
+        if not dl or dl.get('downloaded_from') != 'vps' or not dl.get('url'):
+            return False
+        # Already running?
+        existing = self.threads.get(message_id)
+        if existing and existing.is_alive():
+            return True
+        self.cancelled.discard(message_id)
+        db.update_download_by_message_id(message_id, status='downloading', speed=0, error=None)
+        self.emit_status(message_id, 'downloading')
+        self._spawn(dl['url'], message_id)
+        return True
+
+    def _spawn(self, remote_path: str, message_id: str):
         thread = threading.Thread(
             target=self._download, args=(remote_path, message_id), daemon=True
         )
         self.threads[message_id] = thread
         self.download_tasks[message_id] = thread
         thread.start()
-        return new_download
 
     def _local_destination(self, remote_path: str) -> Path:
         """Mirror the remote folder structure under DOWNLOAD_DIR/VPS."""
         rel = remote_path.lstrip("/")
         return DOWNLOAD_DIR / "VPS" / rel
 
+    def _walk(self, sftp, root, out):
+        """Recursively collect (remote_file, size) tuples under a directory."""
+        for attr in sftp.listdir_attr(root):
+            if attr.filename in (".", ".."):
+                continue
+            full = posixpath.join(root, attr.filename)
+            if stat_module.S_ISDIR(attr.st_mode):
+                self._walk(sftp, full, out)
+            else:
+                out.append((full, attr.st_size or 0))
+
     def _download(self, remote_path: str, message_id: str):
         db = get_db()
         start_time = datetime.now()
         client = None
-        local_path = self._local_destination(remote_path)
         try:
-            local_path.parent.mkdir(parents=True, exist_ok=True)
             client, sftp = self._open_sftp()
+            st = sftp.stat(remote_path)
+            is_dir = stat_module.S_ISDIR(st.st_mode)
 
-            # Resolve total size (use stat if not known)
-            try:
-                total_bytes = sftp.stat(remote_path).st_size
-            except Exception:
-                total_bytes = 0
+            # Build the list of files to transfer
+            files = []  # (remote_file, size)
+            if is_dir:
+                self._walk(sftp, remote_path, files)
+            else:
+                files.append((remote_path, st.st_size or 0))
+            total_bytes = sum(s for _, s in files)
 
-            last_update = [0.0]
-            last_bytes = [0]
-            last_time = [start_time.timestamp()]
+            # Resume: count bytes already present locally
+            transferred = [0]
+            for rfile, rsize in files:
+                lp = self._local_destination(rfile)
+                if lp.exists():
+                    ls = lp.stat().st_size
+                    transferred[0] += min(ls, rsize) if rsize else ls
 
-            def callback(transferred, total):
+            state = {'last_update': 0.0, 'last_bytes': transferred[0], 'last_time': start_time.timestamp()}
+
+            def bump(delta):
+                transferred[0] += delta
                 if message_id in self.cancelled:
                     raise _Cancelled()
                 now = time.time()
-                if now - last_update[0] < 1:
+                if now - state['last_update'] < 1:
                     return
-                elapsed = now - last_time[0]
-                speed = ((transferred - last_bytes[0]) / elapsed / 1024) if elapsed > 0 else 0  # KB/s
-                tot = total or total_bytes
-                progress = (transferred / tot * 100) if tot else 0
-                pending_time = ((tot - transferred) / 1024 / speed) if speed > 0 else None
-                last_update[0] = now
-                last_bytes[0] = transferred
-                last_time[0] = now
+                elapsed = now - state['last_time']
+                speed = ((transferred[0] - state['last_bytes']) / elapsed / 1024) if elapsed > 0 else 0  # KB/s
+                progress = (transferred[0] / total_bytes * 100) if total_bytes else 0
+                pending_time = ((total_bytes - transferred[0]) / 1024 / speed) if speed > 0 else None
+                state['last_update'] = now
+                state['last_bytes'] = transferred[0]
+                state['last_time'] = now
                 db.update_download_by_message_id(
-                    message_id, progress=progress, downloaded_bytes=transferred,
-                    total_bytes=tot, speed=speed, pending_time=pending_time,
+                    message_id, progress=progress, downloaded_bytes=transferred[0],
+                    total_bytes=total_bytes, speed=speed, pending_time=pending_time,
                 )
-                self.emit_progress(message_id, progress, transferred, tot, speed, pending_time)
+                self.emit_progress(message_id, progress, transferred[0], total_bytes, speed, pending_time)
 
-            sftp.get(remote_path, str(local_path), callback=callback)
+            for rfile, rsize in files:
+                if message_id in self.cancelled:
+                    raise _Cancelled()
+                lp = self._local_destination(rfile)
+                lp.parent.mkdir(parents=True, exist_ok=True)
+                self._transfer_file(sftp, rfile, lp, rsize, bump)
+
             sftp.close()
 
-            final_size = local_path.stat().st_size if local_path.exists() else (total_bytes or 0)
             db.update_download_by_message_id(
                 message_id, status='done', progress=100, speed=0,
-                pending_time=0, downloaded_bytes=final_size, total_bytes=final_size,
+                pending_time=0, downloaded_bytes=total_bytes, total_bytes=total_bytes,
             )
             self.emit_status(message_id, 'done')
-            metrics.record_download_completed('vps', final_size, (datetime.now() - start_time).total_seconds())
-            logger.info(f"[vps] Download completed: {remote_path}")
+            metrics.record_download_completed('vps', total_bytes, (datetime.now() - start_time).total_seconds())
+            logger.info(f"[vps] Download completed: {remote_path} ({len(files)} file(s))")
 
-            if is_video_file(local_path.name) and self.loop:
+            if not is_dir and is_video_file(self._local_destination(remote_path).name) and self.loop:
                 asyncio.run_coroutine_threadsafe(poll_and_extract_meta(message_id), self.loop)
 
         except _Cancelled:
-            logger.info(f"[vps] Download cancelled: {remote_path}")
-            self._cleanup_partial(local_path)
+            # Keep partial files so the download can resume later.
+            logger.info(f"[vps] Download stopped (partial kept): {remote_path}")
             db.update_download_by_message_id(message_id, status='stopped', speed=0)
             self.emit_status(message_id, 'stopped')
             metrics.record_download_stopped('vps')
         except Exception as e:
+            # Keep partial files so a retry can resume.
             logger.error(f"[vps] Download error for {remote_path}: {e}")
-            self._cleanup_partial(local_path)
             db.update_download_by_message_id(message_id, status='failed', speed=0, error=str(e))
             self.emit_status(message_id, 'failed', str(e))
             metrics.record_download_failed('vps', 'exception')
@@ -205,16 +251,69 @@ class VpsDownloader:
             self.threads.pop(message_id, None)
             self.download_tasks.pop(message_id, None)
 
-    def _cleanup_partial(self, local_path: Path):
+    def _transfer_file(self, sftp, remote, local: Path, rsize: int, bump, chunk=65536):
+        """Copy a remote file to local, resuming from the local file's size."""
+        start_offset = 0
+        if local.exists():
+            ls = local.stat().st_size
+            if rsize and ls >= rsize:
+                return  # already complete
+            start_offset = ls
+        mode = 'ab' if start_offset > 0 else 'wb'
+        rf = sftp.open(remote, 'rb')
         try:
-            if local_path.exists():
-                local_path.unlink()
-        except Exception:
-            pass
+            # Prefetch only for a fresh transfer (prefetch ignores seek offset)
+            if start_offset == 0 and rsize:
+                try:
+                    rf.prefetch(rsize)
+                except Exception:
+                    pass
+            rf.seek(start_offset)
+            with open(local, mode) as lf:
+                while True:
+                    data = rf.read(chunk)
+                    if not data:
+                        break
+                    lf.write(data)
+                    bump(len(data))
+        finally:
+            rf.close()
 
     def stop_download(self, message_id: str):
-        """Request cancellation of an in-flight VPS download."""
+        """Request cancellation of an in-flight VPS download (keeps partial)."""
         self.cancelled.add(message_id)
+
+    # --- Remote delete ----------------------------------------------------
+    def _rmtree(self, sftp, path):
+        """Recursively delete a remote directory over SFTP."""
+        for attr in sftp.listdir_attr(path):
+            if attr.filename in (".", ".."):
+                continue
+            full = posixpath.join(path, attr.filename)
+            if stat_module.S_ISDIR(attr.st_mode):
+                self._rmtree(sftp, full)
+            else:
+                sftp.remove(full)
+        sftp.rmdir(path)
+
+    def delete_remote(self, remote_path: str):
+        """Permanently delete a file or directory on the VPS over SFTP."""
+        remote_path = (remote_path or "").strip()
+        if not remote_path:
+            raise ValueError("remote path is required")
+        client, sftp = self._open_sftp()
+        try:
+            st = sftp.stat(remote_path)
+            if stat_module.S_ISDIR(st.st_mode):
+                self._rmtree(sftp, remote_path)
+            else:
+                sftp.remove(remote_path)
+            logger.info(f"[vps] Deleted remote path: {remote_path}")
+        finally:
+            try:
+                sftp.close()
+            finally:
+                client.close()
 
     # --- autoSync ---------------------------------------------------------
     def snapshot_folder(self, path: str):

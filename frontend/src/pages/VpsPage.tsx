@@ -1,12 +1,15 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   HardDrive, Folder, File as FileIcon, Download as DownloadIcon, RefreshCw, Loader2,
-  CheckCircle, XCircle, StopCircle, Calendar, Lock, Square, Play,
+  CheckCircle, XCircle, StopCircle, Calendar, Square, Play, Settings, Trash2,
 } from 'lucide-react';
 import ReactTimeAgo from 'react-time-ago';
 import { useLayoutContext } from '../components/Layout';
-import { fetchVpsFiles, downloadVpsFile, type VpsFolderGroup, type VpsFileEntry } from '../api';
+import { fetchVpsFiles, downloadVpsFile, deleteVpsRemote, type VpsFileEntry, type VpsFolderGroup } from '../api';
 import { formatBytes, formatSpeed, formatTime } from '../utils/format';
+import { ConfirmDialog } from '../components/ConfirmDialog';
+import { ROUTES } from '../routes';
 import type { Download } from '../types';
 
 function statusIcon(status?: string) {
@@ -19,15 +22,18 @@ function statusIcon(status?: string) {
 }
 
 function VpsFileRow({
-  entry, live, onDownload, onStop, onRetry,
+  entry, live, onDownload, onStop, onRetry, onDeleteRemote,
 }: {
   entry: VpsFileEntry;
   live: Download | undefined;
   onDownload: (entry: VpsFileEntry) => void;
   onStop: (messageId: string) => void;
   onRetry: (id: number) => void;
+  onDeleteRemote: (entry: VpsFileEntry) => Promise<void>;
 }) {
   const [starting, setStarting] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   // Live status from the WebSocket-backed downloads list takes priority,
   // falling back to the snapshot from the file listing.
   const status = live?.status ?? entry.status;
@@ -40,12 +46,20 @@ function VpsFileRow({
     try { await onDownload(entry); } finally { setStarting(false); }
   };
 
+  const handleConfirmDelete = async () => {
+    setConfirmDelete(false);
+    setDeleting(true);
+    try { await onDeleteRemote(entry); } finally { setDeleting(false); }
+  };
+
   return (
     <div className="relative rounded-xl p-3 sm:p-4 border border-slate-700/50 bg-slate-800/30 transition-all">
       <div className="flex items-center gap-3">
         {/* Icon */}
         <div className="w-9 h-9 sm:w-10 sm:h-10 flex items-center justify-center bg-slate-700/50 rounded-lg shrink-0">
-          <FileIcon className="w-5 h-5 text-slate-300" />
+          {entry.is_dir
+            ? <Folder className="w-5 h-5 text-cyan-400" />
+            : <FileIcon className="w-5 h-5 text-slate-300" />}
         </div>
 
         {/* Name + meta */}
@@ -55,7 +69,7 @@ function VpsFileRow({
           </h3>
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500 mt-0.5">
             <span className="truncate max-w-[200px] sm:max-w-[360px]" title={entry.folder}>{entry.folder}</span>
-            <span>{formatBytes(entry.size)}</span>
+            <span>{entry.is_dir ? 'folder' : formatBytes(entry.size)}</span>
             {entry.modified && (
               <span className="flex items-center gap-1">
                 <Calendar className="w-3 h-3" />
@@ -125,17 +139,41 @@ function VpsFileRow({
               <span className="hidden sm:inline">Download</span>
             </button>
           )}
+
+          {/* Delete on the VPS (remote) - destructive, distinct from list actions */}
+          {!downloading && (
+            <button
+              onClick={() => setConfirmDelete(true)}
+              disabled={deleting}
+              className="p-2 border border-red-500/40 bg-red-500/10 hover:bg-red-500/25 text-red-400 rounded-lg transition-colors disabled:opacity-50"
+              title="Delete from VPS (permanent)"
+            >
+              {deleting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+            </button>
+          )}
         </div>
       </div>
+
+      <ConfirmDialog
+        isOpen={confirmDelete}
+        title="Delete from VPS?"
+        message={`This permanently deletes ${entry.is_dir ? 'the folder' : 'the file'} "${entry.name}" on the remote VPS${entry.is_dir ? ' and everything inside it' : ''}. This cannot be undone and does not affect files already downloaded to the server.`}
+        confirmText="Delete from VPS"
+        variant="danger"
+        onConfirm={handleConfirmDelete}
+        onCancel={() => setConfirmDelete(false)}
+      />
     </div>
   );
 }
 
 export function VpsPage() {
   const { downloads, onStop, onRetry, vpsReady } = useLayoutContext();
+  const navigate = useNavigate();
   const [groups, setGroups] = useState<VpsFolderGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [folderFilter, setFolderFilter] = useState('');
 
   const loadFiles = useCallback(async () => {
     setLoading(true);
@@ -151,11 +189,41 @@ export function VpsPage() {
 
   useEffect(() => { loadFiles(); }, [loadFiles]);
 
+  // Active folders (current connection) provide the file list & filter options.
+  const activeGroups = useMemo(() => groups.filter(g => g.active), [groups]);
+  const inactiveCount = groups.length - activeGroups.length;
+  const folderOptions = useMemo(() => activeGroups.map(g => g.path), [activeGroups]);
+  const folderErrors = useMemo(
+    () => activeGroups.filter(g => g.error).map(g => ({ path: g.path, error: g.error as string })),
+    [activeGroups],
+  );
+
+  // Flatten all files/folders across active watched folders into one list.
+  const allEntries = useMemo(
+    () => activeGroups.flatMap(g => (g.error ? [] : g.entries)),
+    [activeGroups],
+  );
+  const visibleEntries = useMemo(
+    () => (folderFilter ? allEntries.filter(e => e.folder === folderFilter) : allEntries),
+    [allEntries, folderFilter],
+  );
+
   const handleDownload = async (entry: VpsFileEntry) => {
     const res = await downloadVpsFile(entry.path, entry.size);
     if (res?.error) setError(res.error);
     // The WebSocket download:new event updates the shared downloads list,
     // which this page reads for live progress.
+  };
+
+  const handleDeleteRemote = async (entry: VpsFileEntry) => {
+    const res = await deleteVpsRemote(entry.path);
+    if (res?.error) {
+      setError(res.error);
+    } else {
+      // Drop it from the list immediately, then re-sync with the server.
+      setGroups(prev => prev.map(g => ({ ...g, entries: g.entries.filter(e => e.path !== entry.path) })));
+      loadFiles();
+    }
   };
 
   // Match a file to its live download by remote path (url) for live progress.
@@ -165,19 +233,44 @@ export function VpsPage() {
   return (
     <div className="max-w-7xl mx-auto px-3 sm:px-4 pt-2 sm:pt-4 pb-24 w-full">
       {/* Header */}
-      <div className="flex items-center justify-between mb-4 sm:mb-6">
-        <div className="flex items-center gap-2">
-          <HardDrive className="w-5 h-5 text-purple-400" />
+      <div className="flex items-center justify-between gap-3 mb-4 sm:mb-6">
+        <div className="flex items-center gap-2 min-w-0">
+          <HardDrive className="w-5 h-5 text-purple-400 shrink-0" />
           <h1 className="text-lg sm:text-xl font-semibold text-white">VPS Files</h1>
         </div>
-        <button
-          onClick={loadFiles}
-          disabled={loading}
-          className="flex items-center gap-2 bg-slate-700/50 hover:bg-slate-600/50 text-slate-300 text-sm py-2 px-3 rounded-lg transition-colors"
-        >
-          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-          <span className="hidden sm:inline">Refresh</span>
-        </button>
+        <div className="flex items-center gap-2">
+          {/* Folder filter */}
+          {folderOptions.length > 1 && (
+            <select
+              value={folderFilter}
+              onChange={(e) => setFolderFilter(e.target.value)}
+              className="bg-slate-800/50 border border-slate-700 rounded-lg py-2 px-2 sm:px-3 text-xs sm:text-sm text-white focus:outline-none focus:border-cyan-500 transition-colors cursor-pointer max-w-[160px] sm:max-w-[260px]"
+              title="Filter by watched folder"
+            >
+              <option value="">All folders</option>
+              {folderOptions.map(p => (
+                <option key={p} value={p}>{p}</option>
+              ))}
+            </select>
+          )}
+          <button
+            onClick={loadFiles}
+            disabled={loading}
+            className="flex items-center gap-2 bg-slate-700/50 hover:bg-slate-600/50 text-slate-300 text-sm py-2 px-3 rounded-lg transition-colors"
+            title="Refresh listing"
+          >
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+            <span className="hidden sm:inline">Refresh</span>
+          </button>
+          <button
+            onClick={() => navigate(ROUTES.SETTINGS_VPS)}
+            className="flex items-center gap-2 bg-slate-700/50 hover:bg-slate-600/50 text-slate-300 text-sm py-2 px-3 rounded-lg transition-colors"
+            title="VPS settings"
+          >
+            <Settings className="w-4 h-4" />
+            <span className="hidden sm:inline">Settings</span>
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -185,6 +278,13 @@ export function VpsPage() {
           {error}
         </div>
       )}
+
+      {/* Per-folder listing errors */}
+      {folderErrors.map(fe => (
+        <div key={fe.path} className="bg-red-500/10 border border-red-500/30 rounded-xl p-3 mb-3 text-red-400 text-sm">
+          <span className="font-medium">{fe.path}</span>: {fe.error}
+        </div>
+      ))}
 
       {loading ? (
         <div className="min-h-[50vh] flex items-center justify-center text-slate-400">
@@ -198,71 +298,39 @@ export function VpsPage() {
           <div className="text-center">
             <HardDrive className="w-12 h-12 mx-auto mb-4 opacity-50" />
             <p>No VPS connection or watched folders</p>
-            <p className="text-sm">Configure a VPS and add folders in Settings</p>
+            <button onClick={() => navigate(ROUTES.SETTINGS_VPS)} className="text-sm text-cyan-400 hover:text-cyan-300 mt-1">
+              Configure a VPS and add folders in Settings
+            </button>
+          </div>
+        </div>
+      ) : visibleEntries.length === 0 ? (
+        <div className="min-h-[40vh] flex items-center justify-center text-slate-400">
+          <div className="text-center">
+            <Folder className="w-12 h-12 mx-auto mb-4 opacity-50" />
+            <p>No files found</p>
           </div>
         </div>
       ) : (
-        <div className="space-y-6">
-          {groups.map((group) => {
-            const inactive = !group.active;
-            return (
-              <div key={`${group.host ?? ''}:${group.path}`}>
-                {/* Folder heading */}
-                <div className={`flex items-center gap-2 mb-2 ${inactive ? 'text-slate-500' : 'text-slate-300'}`}>
-                  <Folder className="w-4 h-4" />
-                  <span className="text-sm font-medium truncate" title={group.path}>{group.path}</span>
-                  {group.auto_sync && !inactive && (
-                    <span className="text-[10px] uppercase tracking-wide bg-purple-500/15 text-purple-300 border border-purple-500/30 rounded px-1.5 py-0.5">
-                      autoSync
-                    </span>
-                  )}
-                  {inactive && (
-                    <span className="flex items-center gap-1 text-[10px] uppercase tracking-wide bg-slate-700/50 text-slate-400 rounded px-1.5 py-0.5">
-                      <Lock className="w-3 h-3" /> other VPS
-                    </span>
-                  )}
-                </div>
-
-                {inactive ? (
-                  <div className="rounded-xl border border-slate-700/40 bg-slate-800/20 p-3 text-sm text-slate-500 opacity-60">
-                    {group.host ? `Belongs to ${group.username ?? ''}@${group.host}` : 'Belongs to a different VPS connection'} — connect to it to browse.
-                  </div>
-                ) : group.error ? (
-                  <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-400">
-                    {group.error}
-                  </div>
-                ) : group.entries.length === 0 ? (
-                  <div className="rounded-xl border border-slate-700/40 bg-slate-800/20 p-3 text-sm text-slate-500">
-                    Empty folder
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    {group.entries.map((entry) =>
-                      entry.is_dir ? (
-                        <div key={entry.path} className="flex items-center gap-3 rounded-xl p-3 border border-slate-700/40 bg-slate-800/20 text-slate-400">
-                          <div className="w-9 h-9 flex items-center justify-center bg-slate-700/40 rounded-lg shrink-0">
-                            <Folder className="w-5 h-5 text-cyan-500/70" />
-                          </div>
-                          <span className="text-sm truncate" title={entry.name}>{entry.name}</span>
-                          <span className="text-xs text-slate-600 ml-auto">folder</span>
-                        </div>
-                      ) : (
-                        <VpsFileRow
-                          key={entry.path}
-                          entry={entry}
-                          live={liveFor(entry.path)}
-                          onDownload={handleDownload}
-                          onStop={onStop}
-                          onRetry={onRetry}
-                        />
-                      )
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          })}
+        <div className="space-y-2">
+          {visibleEntries.map((entry) => (
+            <VpsFileRow
+              key={entry.path}
+              entry={entry}
+              live={liveFor(entry.path)}
+              onDownload={handleDownload}
+              onStop={onStop}
+              onRetry={onRetry}
+              onDeleteRemote={handleDeleteRemote}
+            />
+          ))}
         </div>
+      )}
+
+      {/* Note about folders on other VPS connections */}
+      {!loading && inactiveCount > 0 && (
+        <p className="text-xs text-slate-500 mt-4 text-center">
+          {inactiveCount} folder{inactiveCount !== 1 ? 's' : ''} on other VPS connections hidden.
+        </p>
       )}
     </div>
   );
