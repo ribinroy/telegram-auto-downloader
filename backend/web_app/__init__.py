@@ -5,6 +5,7 @@ import os
 import json
 import jwt
 import asyncio
+import posixpath
 from datetime import datetime, timedelta
 from pathlib import Path
 from functools import wraps
