@@ -143,13 +143,22 @@ class VpsWatchFolder(Base):
     __tablename__ = 'vps_watch_folders'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    path = Column(String(1024), unique=True, nullable=False)
+    path = Column(String(1024), nullable=False)
+    # The VPS connection this folder belongs to
+    host = Column(String(255))
+    port = Column(Integer, default=22)
+    username = Column(String(255))
+    auto_sync = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     def to_dict(self):
         return {
             'id': self.id,
             'path': self.path,
+            'host': self.host,
+            'port': self.port,
+            'username': self.username,
+            'auto_sync': bool(self.auto_sync),
             'created_at': f"{self.created_at.isoformat()}Z" if self.created_at else None,
         }
 
@@ -208,6 +217,29 @@ class DatabaseManager:
             elif 'deleted_at' not in columns:
                 conn.execute(text('ALTER TABLE downloads ADD COLUMN deleted_at TIMESTAMP'))
                 conn.commit()
+
+            # Migrate vps_watch_folders: add auto_sync + connection columns, drop the
+            # legacy unique-on-path constraint (same path can exist on different hosts).
+            if inspector.has_table('vps_watch_folders'):
+                vps_columns = [c['name'] for c in inspector.get_columns('vps_watch_folders')]
+                if 'auto_sync' not in vps_columns:
+                    conn.execute(text('ALTER TABLE vps_watch_folders ADD COLUMN auto_sync BOOLEAN DEFAULT FALSE'))
+                    conn.commit()
+                if 'host' not in vps_columns:
+                    conn.execute(text('ALTER TABLE vps_watch_folders ADD COLUMN host VARCHAR(255)'))
+                    conn.commit()
+                if 'port' not in vps_columns:
+                    conn.execute(text('ALTER TABLE vps_watch_folders ADD COLUMN port INTEGER DEFAULT 22'))
+                    conn.commit()
+                if 'username' not in vps_columns:
+                    conn.execute(text('ALTER TABLE vps_watch_folders ADD COLUMN username VARCHAR(255)'))
+                    conn.commit()
+                # Drop the legacy unique constraint on path (Postgres auto-name)
+                try:
+                    conn.execute(text('ALTER TABLE vps_watch_folders DROP CONSTRAINT IF EXISTS vps_watch_folders_path_key'))
+                    conn.commit()
+                except Exception:
+                    pass
 
     def get_session(self):
         """Get a new database session"""
@@ -608,14 +640,17 @@ class DatabaseManager:
         finally:
             self.close_session()
 
-    def add_vps_watch_folder(self, path: str):
-        """Add a watched folder. Returns its dict, or the existing one if already present."""
+    def add_vps_watch_folder(self, path: str, host: str = None, port: int = 22, username: str = None):
+        """Add a watched folder tied to a VPS connection. Returns its dict,
+        or the existing one if the same path already exists for that connection."""
         session = self.get_session()
         try:
-            existing = session.query(VpsWatchFolder).filter_by(path=path).first()
+            existing = session.query(VpsWatchFolder).filter_by(
+                path=path, host=host, username=username
+            ).first()
             if existing:
                 return existing.to_dict()
-            folder = VpsWatchFolder(path=path)
+            folder = VpsWatchFolder(path=path, host=host, port=port, username=username)
             session.add(folder)
             session.commit()
             return folder.to_dict()
@@ -632,6 +667,29 @@ class DatabaseManager:
             session.delete(folder)
             session.commit()
             return True
+        finally:
+            self.close_session()
+
+    def set_vps_watch_folder_autosync(self, folder_id: int, enabled: bool):
+        """Toggle autoSync on a watched folder. Returns its dict, or None if missing."""
+        session = self.get_session()
+        try:
+            folder = session.query(VpsWatchFolder).filter_by(id=folder_id).first()
+            if not folder:
+                return None
+            folder.auto_sync = bool(enabled)
+            session.commit()
+            return folder.to_dict()
+        finally:
+            self.close_session()
+
+    def vps_download_exists(self, remote_path: str) -> bool:
+        """Whether a non-deleted VPS download already exists for this remote path."""
+        session = self.get_session()
+        try:
+            return session.query(Download).filter_by(
+                downloaded_from='vps', url=remote_path, deleted_at=None
+            ).first() is not None
         finally:
             self.close_session()
 

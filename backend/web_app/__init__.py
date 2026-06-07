@@ -58,6 +58,23 @@ def load_vps_credentials():
     }
 
 
+def annotate_vps_folders(folders):
+    """Tag each watched folder with `active` = belongs to the currently saved
+    VPS connection. Folders from other connections stay listed but inactive."""
+    creds = load_vps_credentials()
+    cur_host = creds["host"] if creds else None
+    cur_user = creds["username"] if creds else None
+    cur_port = creds["port"] if creds else None
+    for f in folders:
+        f["active"] = bool(
+            creds
+            and f.get("host") == cur_host
+            and f.get("username") == cur_user
+            and (f.get("port") or 22) == cur_port
+        )
+    return folders
+
+
 def open_vps_sftp(timeout=10):
     """Open an SSH+SFTP session using saved credentials.
 
@@ -109,11 +126,12 @@ def token_required(f):
 
 
 class WebApp:
-    def __init__(self, download_tasks, ytdlp_downloader=None, event_loop=None, telegram_downloader=None):
+    def __init__(self, download_tasks, ytdlp_downloader=None, event_loop=None, telegram_downloader=None, vps_downloader=None):
         global socketio, _web_app
         self.download_tasks = download_tasks
         self.ytdlp_downloader = ytdlp_downloader
         self.telegram_downloader = telegram_downloader
+        self.vps_downloader = vps_downloader
         self.event_loop = event_loop
         self.app = Flask(__name__, static_folder=str(FRONTEND_DIST), static_url_path='')
         CORS(self.app, resources={r"/*": {"origins": "*"}})
@@ -425,8 +443,19 @@ class WebApp:
                 db = get_db()
                 download = db.get_download_by_id(download_id)
                 if download and download["status"] in ["failed", "stopped"]:
+                    # VPS download - restart the SFTP transfer from its remote path
+                    if download.get("downloaded_from") == "vps" and self.vps_downloader:
+                        remote_path = download.get("url")
+                        # Drop the old (failed/stopped) record so the restart isn't blocked
+                        # by the duplicate guard, then start fresh.
+                        if download.get("message_id"):
+                            db.update_download_by_message_id(
+                                download["message_id"], deleted_at=datetime.utcnow()
+                            )
+                            self.emit_deleted(download["message_id"])
+                        self.vps_downloader.start_download(remote_path, download.get("total_bytes") or 0)
                     # Check if it's a yt-dlp download (has URL)
-                    if download.get("url") and self.ytdlp_downloader and self.event_loop:
+                    elif download.get("url") and self.ytdlp_downloader and self.event_loop:
                         # Resume yt-dlp download (yt-dlp will continue from partial file)
                         message_id = download.get("message_id")
                         url = download.get("url")
@@ -484,10 +513,14 @@ class WebApp:
             is_uuid = message_id and '-' in message_id
 
             if is_uuid:
-                # yt-dlp download - stop via ytdlp_downloader
-                if self.ytdlp_downloader:
+                # VPS and yt-dlp both use UUIDs - distinguish by source
+                download = db.get_download_by_message_id(message_id)
+                if download and download.get("downloaded_from") == "vps" and self.vps_downloader:
+                    self.vps_downloader.stop_download(message_id)
+                elif self.ytdlp_downloader:
+                    # yt-dlp download - stop via ytdlp_downloader
                     self.ytdlp_downloader.stop_download(message_id)
-                # Also try to cancel from download_tasks
+                # Also try to cancel from download_tasks (yt-dlp futures)
                 task = self.download_tasks.get(message_id)
                 if task and hasattr(task, 'cancel'):
                     task.cancel()
@@ -573,10 +606,14 @@ class WebApp:
             is_uuid = message_id and '-' in message_id
 
             if is_uuid:
-                # yt-dlp download - stop via ytdlp_downloader
-                if self.ytdlp_downloader:
+                # VPS and yt-dlp both use UUIDs - distinguish by source
+                download = db.get_download_by_message_id(message_id)
+                if download and download.get("downloaded_from") == "vps" and self.vps_downloader:
+                    self.vps_downloader.stop_download(message_id)
+                elif self.ytdlp_downloader:
+                    # yt-dlp download - stop via ytdlp_downloader
                     self.ytdlp_downloader.stop_download(message_id)
-                # Also try to cancel from download_tasks
+                # Also try to cancel from download_tasks (yt-dlp futures)
                 task = self.download_tasks.get(message_id)
                 if task and hasattr(task, 'cancel'):
                     task.cancel()
@@ -1131,14 +1168,18 @@ class WebApp:
         @self.app.route("/api/settings/vps/folders", methods=["GET"])
         @token_required
         def get_vps_folders():
-            """List the watched VPS folders."""
-            return jsonify({"folders": get_db().get_vps_watch_folders()})
+            """List the watched VPS folders, tagged active for the current connection."""
+            return jsonify({"folders": annotate_vps_folders(get_db().get_vps_watch_folders())})
 
         @self.app.route("/api/settings/vps/folders", methods=["POST"])
         @token_required
         def add_vps_folders():
-            """Add one or more watched folders. Body: {paths: [...]} or {path}."""
+            """Add one or more watched folders for the currently saved connection.
+            Body: {paths: [...]} or {path}."""
             data = request.json or {}
+            creds = load_vps_credentials()
+            if not creds:
+                return jsonify({"error": "Configure and save a VPS connection first"}), 400
             paths = data.get("paths")
             if paths is None and data.get("path"):
                 paths = [data.get("path")]
@@ -1149,17 +1190,138 @@ class WebApp:
             for p in paths:
                 p = (p or "").strip()
                 if p:
-                    added.append(db.add_vps_watch_folder(p))
-            return jsonify({"folders": db.get_vps_watch_folders(), "added": added})
+                    added.append(db.add_vps_watch_folder(
+                        p, host=creds["host"], port=creds["port"], username=creds["username"],
+                    ))
+            return jsonify({"folders": annotate_vps_folders(db.get_vps_watch_folders()), "added": added})
 
         @self.app.route("/api/settings/vps/folders/<int:folder_id>", methods=["DELETE"])
         @token_required
         def delete_vps_folder(folder_id):
             """Remove a watched folder by id."""
-            ok = get_db().delete_vps_watch_folder(folder_id)
+            db = get_db()
+            folder = next((f for f in db.get_vps_watch_folders() if f["id"] == folder_id), None)
+            ok = db.delete_vps_watch_folder(folder_id)
             if not ok:
                 return jsonify({"error": "Folder not found"}), 404
-            return jsonify({"status": "deleted", "folders": get_db().get_vps_watch_folders()})
+            if folder and self.vps_downloader:
+                self.vps_downloader.forget_folder(folder["path"])
+            return jsonify({"status": "deleted", "folders": annotate_vps_folders(db.get_vps_watch_folders())})
+
+        @self.app.route("/api/settings/vps/folders/<int:folder_id>", methods=["PATCH"])
+        @token_required
+        def update_vps_folder(folder_id):
+            """Toggle autoSync on a watched folder. Body: {auto_sync: bool}."""
+            data = request.json or {}
+            enabled = bool(data.get("auto_sync"))
+            db = get_db()
+            updated = db.set_vps_watch_folder_autosync(folder_id, enabled)
+            if not updated:
+                return jsonify({"error": "Folder not found"}), 404
+            # Snapshot current files as baseline when enabling so only new files sync
+            if self.vps_downloader:
+                if enabled:
+                    self.vps_downloader.snapshot_folder(updated["path"])
+                else:
+                    self.vps_downloader.forget_folder(updated["path"])
+            return jsonify({"folder": updated, "folders": annotate_vps_folders(db.get_vps_watch_folders())})
+
+        @self.app.route("/api/vps/files", methods=["GET"])
+        @token_required
+        def list_vps_files():
+            """List live contents (non-recursive) of every watched folder over SFTP.
+
+            Returns {folders:[{path, error?, entries:[{name, path, folder, is_dir,
+            size, modified, downloaded, message_id?, status?}]}]}.
+            """
+            import stat as stat_module
+            db = get_db()
+            watch_folders = annotate_vps_folders(db.get_vps_watch_folders())
+            # Map existing VPS downloads by remote path for live status
+            existing = {}
+            for d in db.get_all_downloads():
+                if d.get("downloaded_from") == "vps" and d.get("url"):
+                    existing[d["url"]] = d
+
+            if not watch_folders:
+                return jsonify({"folders": []})
+
+            # Active folders (current connection) are fetched & shown first;
+            # inactive ones (other VPS connections) are listed but not fetched.
+            active_groups = []
+            inactive_groups = []
+            for wf in watch_folders:
+                base = {
+                    "path": wf["path"], "auto_sync": wf.get("auto_sync", False),
+                    "active": wf.get("active", False), "host": wf.get("host"),
+                    "username": wf.get("username"), "entries": [],
+                }
+                if wf.get("active"):
+                    active_groups.append((wf, base))
+                else:
+                    base["error"] = "Belongs to a different VPS connection"
+                    inactive_groups.append(base)
+
+            if not active_groups:
+                return jsonify({"folders": inactive_groups})
+
+            client = None
+            try:
+                client, sftp = open_vps_sftp()
+                for wf, group in active_groups:
+                    path = wf["path"]
+                    try:
+                        for attr in sftp.listdir_attr(path):
+                            name = attr.filename
+                            if name in (".", ".."):
+                                continue
+                            is_dir = stat_module.S_ISDIR(attr.st_mode)
+                            full = posixpath.join(path, name)
+                            entry = {
+                                "name": name,
+                                "path": full,
+                                "folder": path,
+                                "is_dir": is_dir,
+                                "size": attr.st_size,
+                                "modified": (
+                                    f"{datetime.utcfromtimestamp(attr.st_mtime).isoformat()}Z"
+                                    if attr.st_mtime else None
+                                ),
+                            }
+                            dl = existing.get(full)
+                            if dl:
+                                entry["downloaded"] = True
+                                entry["message_id"] = dl.get("message_id")
+                                entry["status"] = dl.get("status")
+                            else:
+                                entry["downloaded"] = False
+                            group["entries"].append(entry)
+                        group["entries"].sort(key=lambda e: (not e["is_dir"], e["name"].lower()))
+                    except Exception as e:
+                        group["error"] = str(e)
+                return jsonify({"folders": [g for _, g in active_groups] + inactive_groups})
+            except ValueError as e:
+                return jsonify({"error": str(e)}), 400
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
+            finally:
+                if client:
+                    client.close()
+
+        @self.app.route("/api/vps/download", methods=["POST"])
+        @token_required
+        def download_vps_file():
+            """Start downloading a single VPS file. Body: {path, size?}."""
+            if not self.vps_downloader:
+                return jsonify({"error": "VPS downloader not available"}), 503
+            data = request.json or {}
+            path = (data.get("path") or "").strip()
+            if not path:
+                return jsonify({"error": "path is required"}), 400
+            result = self.vps_downloader.start_download(path, int(data.get("size") or 0))
+            if result.get("error"):
+                return jsonify(result), 400
+            return jsonify(result)
 
         # Video file API for playback
         @self.app.route("/api/video/check/<int:download_id>", methods=["GET"])

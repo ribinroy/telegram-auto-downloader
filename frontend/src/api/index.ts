@@ -418,6 +418,11 @@ export async function browseVps(path?: string): Promise<VpsBrowseResult> {
 export interface VpsWatchFolder {
   id: number;
   path: string;
+  host: string | null;
+  port: number | null;
+  username: string | null;
+  auto_sync: boolean;
+  active?: boolean;
   created_at: string | null;
 }
 
@@ -458,6 +463,68 @@ export async function deleteVpsFolder(id: number): Promise<VpsWatchFolder[]> {
   }
   const data = await response.json();
   return data.folders || [];
+}
+
+export async function setVpsFolderAutoSync(id: number, autoSync: boolean): Promise<VpsWatchFolder[]> {
+  const response = await fetch(`${API_BASE}/api/settings/vps/folders/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ auto_sync: autoSync }),
+  });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  const data = await response.json();
+  return data.folders || [];
+}
+
+// VPS file listing (live, non-recursive contents of watched folders)
+export interface VpsFileEntry {
+  name: string;
+  path: string;
+  folder: string;
+  is_dir: boolean;
+  size: number;
+  modified: string | null;
+  downloaded: boolean;
+  message_id?: string;
+  status?: string;
+}
+
+export interface VpsFolderGroup {
+  path: string;
+  auto_sync: boolean;
+  active: boolean;
+  host?: string | null;
+  username?: string | null;
+  error?: string;
+  entries: VpsFileEntry[];
+}
+
+export async function fetchVpsFiles(): Promise<VpsFolderGroup[]> {
+  const response = await fetch(`${API_BASE}/api/vps/files`, {
+    headers: getAuthHeaders(),
+  });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  const data = await response.json();
+  return data.folders || [];
+}
+
+export async function downloadVpsFile(path: string, size?: number): Promise<{ error?: string; id?: number; message_id?: string }> {
+  const response = await fetch(`${API_BASE}/api/vps/download`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ path, size: size ?? 0 }),
+  });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  return response.json();
 }
 
 // Analytics API

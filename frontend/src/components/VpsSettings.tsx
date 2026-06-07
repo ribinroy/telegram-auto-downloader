@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Loader2, AlertCircle, CheckCircle, Check, Plug, FolderPlus, Folder, Trash2, Unplug, Server } from 'lucide-react';
 import {
   fetchVpsConfig, saveVpsConfig, testVpsConnection, deleteVpsConfig,
-  fetchVpsFolders, addVpsFolders, deleteVpsFolder,
+  fetchVpsFolders, addVpsFolders, deleteVpsFolder, setVpsFolderAutoSync,
   type VpsConfig, type VpsWatchFolder,
 } from '../api';
 import { VpsFolderBrowser } from './VpsFolderBrowser';
@@ -150,6 +150,15 @@ export function VpsSettings() {
       setFolders(await deleteVpsFolder(id));
     } catch {
       setFoldersError('Failed to remove folder');
+    }
+  };
+
+  const handleToggleAutoSync = async (folder: VpsWatchFolder) => {
+    setFoldersError(null);
+    try {
+      setFolders(await setVpsFolderAutoSync(folder.id, !folder.auto_sync));
+    } catch {
+      setFoldersError('Failed to update autoSync');
     }
   };
 
@@ -354,19 +363,47 @@ export function VpsSettings() {
           </div>
         ) : (
           <div className="space-y-2">
-            {folders.map((f) => (
-              <div key={f.id} className="flex items-center gap-2 bg-slate-700/30 rounded-lg p-2.5">
-                <Folder className="w-4 h-4 text-cyan-400 shrink-0" />
-                <span className="text-sm text-slate-200 truncate flex-1" title={f.path}>{f.path}</span>
-                <button
-                  onClick={() => handleDeleteFolder(f.id)}
-                  className="p-1.5 bg-slate-600/50 hover:bg-red-500/20 text-slate-400 hover:text-red-400 rounded-lg transition-colors shrink-0"
-                  title="Remove folder"
+            {folders.map((f) => {
+              const inactive = f.active === false;
+              return (
+                <div
+                  key={f.id}
+                  className={`flex items-center gap-2 rounded-lg p-2.5 ${inactive ? 'bg-slate-800/30 opacity-60' : 'bg-slate-700/30'}`}
                 >
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              </div>
-            ))}
+                  <Folder className={`w-4 h-4 shrink-0 ${inactive ? 'text-slate-500' : 'text-cyan-400'}`} />
+                  <div className="flex-1 min-w-0">
+                    <span className={`block text-sm truncate ${inactive ? 'text-slate-400' : 'text-slate-200'}`} title={f.path}>{f.path}</span>
+                    {inactive && (
+                      <span className="text-[11px] text-slate-500">
+                        {f.username ? `${f.username}@${f.host}` : f.host} — connect to this VPS to manage
+                      </span>
+                    )}
+                  </div>
+                  {/* autoSync toggle - only for folders on the current connection */}
+                  <button
+                    onClick={() => handleToggleAutoSync(f)}
+                    disabled={inactive}
+                    title={inactive ? 'Connect to this VPS to change autoSync' : (f.auto_sync ? 'autoSync on — checks hourly for new files' : 'autoSync off')}
+                    className={`flex items-center gap-1.5 text-xs px-2 py-1 rounded-lg transition-colors shrink-0 disabled:cursor-not-allowed ${
+                      f.auto_sync && !inactive
+                        ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+                        : 'bg-slate-600/40 text-slate-400 border border-transparent'
+                    }`}
+                  >
+                    <span className={`w-2 h-2 rounded-full ${f.auto_sync && !inactive ? 'bg-purple-400' : 'bg-slate-500'}`} />
+                    autoSync
+                  </button>
+                  <button
+                    onClick={() => handleDeleteFolder(f.id)}
+                    disabled={inactive}
+                    className="p-1.5 bg-slate-600/50 hover:bg-red-500/20 text-slate-400 hover:text-red-400 rounded-lg transition-colors shrink-0 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-slate-600/50 disabled:hover:text-slate-400"
+                    title="Remove folder"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              );
+            })}
           </div>
         )}
       </div>

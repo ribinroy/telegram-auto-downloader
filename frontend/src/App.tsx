@@ -7,6 +7,7 @@ import { Layout } from './components/Layout';
 import { DownloadsPage } from './pages/DownloadsPage';
 import { AnalyticsPage } from './pages/AnalyticsPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { VpsPage } from './pages/VpsPage';
 import { ROUTES } from './routes';
 
 function App() {
@@ -43,6 +44,7 @@ function App() {
         <Route path={ROUTES.DOWNLOADS} element={<DownloadsPage />} />
         <Route path={ROUTES.ANALYTICS} element={<AnalyticsPage />} />
         <Route path={ROUTES.SETTINGS} element={<SettingsPage />} />
+        <Route path={ROUTES.VPS} element={<VpsPage />} />
       </Route>
     </Routes>
   );
