@@ -3,16 +3,13 @@ import { Loader2, AlertCircle, CheckCircle, Key, FolderCog, Plus, Trash2, Shield
 import { updatePassword, fetchMappings, addMapping, updateMapping, deleteMapping, fetchCookies, saveCookies, syncThumbnails, getYtdlpVersion, upgradeYtdlp } from '../api';
 import type { SyncThumbnailsResult } from '../api';
 import type { DownloadTypeMap } from '../types';
-import { ConfirmDialog } from './ConfirmDialog';
-
-interface SettingsPageProps {
-  showMappings?: boolean;
-  onMappingsChanged?: () => void;
-}
+import { ConfirmDialog } from '../components/ConfirmDialog';
+import { useLayoutContext } from '../components/Layout';
 
 type TabType = 'password' | 'mappings' | 'cookies' | 'jobs';
 
-export function SettingsPage({ showMappings = false, onMappingsChanged }: SettingsPageProps) {
+export function SettingsPage() {
+  const { showSecured: showMappings, loadSecuredMappingIds: onMappingsChanged } = useLayoutContext();
   const [activeTab, setActiveTab] = useState<TabType>('password');
 
   // Password state
@@ -283,65 +280,59 @@ export function SettingsPage({ showMappings = false, onMappingsChanged }: Settin
     setDeleteConfirmId(null);
   };
 
+  const tabs: { id: TabType; label: string; description: string; icon: typeof Key; show: boolean }[] = [
+    { id: 'password', label: 'Password', description: 'Change your account password', icon: Key, show: true },
+    { id: 'mappings', label: 'Mappings', description: 'Per-source folders & quality', icon: FolderCog, show: showMappings },
+    { id: 'cookies', label: 'Cookies', description: 'yt-dlp browser cookies', icon: Cookie, show: true },
+    { id: 'jobs', label: 'Jobs', description: 'Maintenance & tools', icon: Wrench, show: true },
+  ];
+  const visibleTabs = tabs.filter(t => t.show);
+  const activeTabMeta = visibleTabs.find(t => t.id === activeTab) ?? visibleTabs[0];
+
   return (
-    <div className="max-w-2xl mx-auto px-3 sm:px-4 py-4 sm:py-6">
+    <div className="w-full px-3 sm:px-6 py-4 sm:py-6">
       <div className="mb-4 sm:mb-6">
         <h1 className="text-xl sm:text-2xl font-bold text-white">Settings</h1>
         <p className="text-slate-400 text-xs sm:text-sm">Manage your preferences and configuration</p>
       </div>
 
-      {/* Tabs */}
-      <div className="flex border-b border-slate-700 mb-4 sm:mb-6 overflow-x-auto">
-        <button
-          onClick={() => setActiveTab('password')}
-          className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2.5 sm:py-3 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap ${
-            activeTab === 'password'
-              ? 'text-cyan-400 border-b-2 border-cyan-400'
-              : 'text-slate-400 hover:text-white'
-          }`}
-        >
-          <Key className="w-4 h-4" />
-          Password
-        </button>
-        {showMappings && (
-          <button
-            onClick={() => setActiveTab('mappings')}
-            className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2.5 sm:py-3 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap ${
-              activeTab === 'mappings'
-                ? 'text-cyan-400 border-b-2 border-cyan-400'
-                : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            <FolderCog className="w-4 h-4" />
-            Mappings
-          </button>
-        )}
-        <button
-          onClick={() => setActiveTab('cookies')}
-          className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2.5 sm:py-3 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap ${
-            activeTab === 'cookies'
-              ? 'text-cyan-400 border-b-2 border-cyan-400'
-              : 'text-slate-400 hover:text-white'
-          }`}
-        >
-          <Cookie className="w-4 h-4" />
-          Cookies
-        </button>
-        <button
-          onClick={() => setActiveTab('jobs')}
-          className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2.5 sm:py-3 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap ${
-            activeTab === 'jobs'
-              ? 'text-cyan-400 border-b-2 border-cyan-400'
-              : 'text-slate-400 hover:text-white'
-          }`}
-        >
-          <Wrench className="w-4 h-4" />
-          Jobs
-        </button>
-      </div>
+      <div className="flex flex-col md:flex-row gap-4 sm:gap-6">
+        {/* Sidebar tabs */}
+        <nav className="md:w-64 md:shrink-0 flex md:flex-col gap-1 overflow-x-auto md:overflow-visible border-b md:border-b-0 border-slate-700 pb-2 md:pb-0">
+          {visibleTabs.map(tab => {
+            const Icon = tab.icon;
+            const active = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`flex items-center gap-3 px-3 sm:px-4 py-2.5 sm:py-3 rounded-lg text-left transition-colors whitespace-nowrap md:whitespace-normal ${
+                  active
+                    ? 'bg-cyan-500/15 text-cyan-400 md:border md:border-cyan-500/30'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-700/40'
+                }`}
+              >
+                <Icon className="w-4 h-4 shrink-0" />
+                <span className="flex flex-col">
+                  <span className="text-sm font-medium">{tab.label}</span>
+                  <span className={`hidden md:block text-xs ${active ? 'text-cyan-400/70' : 'text-slate-500'}`}>
+                    {tab.description}
+                  </span>
+                </span>
+              </button>
+            );
+          })}
+        </nav>
 
-      {/* Content */}
-      <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-4 sm:p-6">
+        {/* Content */}
+        <div className="flex-1 min-w-0 bg-slate-800/50 border border-slate-700 rounded-xl p-4 sm:p-6">
+          <div className="hidden md:flex items-center gap-2 mb-5 pb-4 border-b border-slate-700/60">
+            <activeTabMeta.icon className="w-5 h-5 text-cyan-400" />
+            <div>
+              <h2 className="text-base font-semibold text-white leading-tight">{activeTabMeta.label}</h2>
+              <p className="text-xs text-slate-400">{activeTabMeta.description}</p>
+            </div>
+          </div>
         {activeTab === 'password' && (
           <>
             {passwordSuccess && (
@@ -817,6 +808,7 @@ export function SettingsPage({ showMappings = false, onMappingsChanged }: Settin
             </div>
           </>
         )}
+        </div>
       </div>
 
       {/* Delete confirmation dialog */}
