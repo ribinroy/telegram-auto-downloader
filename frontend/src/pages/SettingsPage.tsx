@@ -773,16 +773,20 @@ export function SettingsPage() {
             <div className={`flex items-center gap-2 rounded-lg p-3 mb-4 text-sm border ${
               vpsConfig?.configured
                 ? 'bg-green-500/10 border-green-500/40 text-green-400'
-                : 'bg-slate-700/40 border-slate-600 text-slate-400'
+                : vpsConfig
+                  ? 'bg-slate-700/40 border-slate-600 text-slate-400'
+                  : 'bg-amber-500/10 border-amber-500/40 text-amber-400'
             }`}>
-              <span className={`w-2 h-2 rounded-full ${vpsConfig?.configured ? 'bg-green-400' : 'bg-slate-500'}`} />
+              <span className={`w-2 h-2 rounded-full ${vpsConfig?.configured ? 'bg-green-400' : vpsConfig ? 'bg-slate-500' : 'bg-amber-400'}`} />
               {vpsConfig?.configured ? (
                 <span>
                   Configured — <span className="font-medium text-white">{vpsConfig.username}@{vpsConfig.host}:{vpsConfig.port}</span>
                   {vpsConfig.has_password ? ' (password saved)' : ' (no password saved)'}
                 </span>
-              ) : (
+              ) : vpsConfig ? (
                 <span>Not configured yet. Enter your VPS details below.</span>
+              ) : (
+                <span>Couldn't load saved configuration. Check the connection and try again.</span>
               )}
             </div>
 
