@@ -290,7 +290,7 @@ export function SettingsPage() {
   const activeTabMeta = visibleTabs.find(t => t.id === activeTab) ?? visibleTabs[0];
 
   return (
-    <div className="w-full px-3 sm:px-6 py-4 sm:py-6">
+    <div className="max-w-7xl mx-auto px-3 sm:px-4 py-4 sm:py-6 w-full">
       <div className="mb-4 sm:mb-6">
         <h1 className="text-xl sm:text-2xl font-bold text-white">Settings</h1>
         <p className="text-slate-400 text-xs sm:text-sm">Manage your preferences and configuration</p>
