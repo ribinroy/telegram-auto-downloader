@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { Search, Download, Loader2, Plus, X } from 'lucide-react';
 import { useLayoutContext } from '../components/Layout';
 import { DownloadItem } from '../components/DownloadItem';
@@ -7,7 +7,7 @@ import type { SortBy, SortOrder } from '../api';
 
 export function DownloadsPage() {
   const {
-    downloads, totalResults, loading, loadingMore, hasMore, error,
+    downloads, totalResults, loading, loadingMore, error,
     search, setSearch, debouncedSearch,
     sortBy, setSortBy, sortOrder, setSortOrder,
     authors, selectedAuthor, setSelectedAuthor,
