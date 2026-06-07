@@ -40,6 +40,31 @@ def decrypt_secret(token: str) -> str:
         return ''
 
 
+def resolve_label(source, override_label_id=None):
+    """Resolve the label dict for a download: an explicit override wins,
+    otherwise the source's default label, otherwise None."""
+    from backend.database import get_db
+    db = get_db()
+    if override_label_id:
+        label = db.get_label(override_label_id)
+        if label:
+            return label
+    return db.get_default_label_for_source(source)
+
+
+def label_folder(label, default: Path) -> Path:
+    """Return the label's folder (created if needed), or `default` if the
+    label has no usable folder."""
+    if label and label.get('folder'):
+        try:
+            folder = Path(label['folder'])
+            folder.mkdir(parents=True, exist_ok=True)
+            return folder
+        except (OSError, PermissionError):
+            pass
+    return default
+
+
 def save_state(downloads, downloads_json_path):
     """Save download state to JSON file"""
     with open(downloads_json_path, "w") as f:

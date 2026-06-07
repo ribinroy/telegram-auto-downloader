@@ -87,11 +87,12 @@ class VpsDownloader:
                 web_app.emit_stats()
 
     # --- Download ---------------------------------------------------------
-    def start_download(self, remote_path: str, size: int = 0) -> dict:
+    def start_download(self, remote_path: str, size: int = 0, label_id: int = None) -> dict:
         """Create a download record and kick off the SFTP transfer in a thread.
 
         Works for both files and directories (directories are downloaded
         recursively, preserving structure)."""
+        from backend.utils import resolve_label
         db = get_db()
         remote_path = (remote_path or "").strip()
         if not remote_path:
@@ -101,6 +102,10 @@ class VpsDownloader:
 
         message_id = generate_uuid()
         filename = posixpath.basename(remote_path.rstrip("/")) or remote_path
+
+        # Resolve the connected label (override → 'vps' source default → none)
+        label = resolve_label('vps', label_id)
+        resolved_label_id = label['id'] if label else None
 
         new_download = db.add_download(
             file=filename,
@@ -115,6 +120,7 @@ class VpsDownloader:
             downloaded_from='vps',
             url=remote_path,
             author=None,
+            label_id=resolved_label_id,
         )
         metrics.record_download_started('vps')
         self.emit_new_download(new_download)
@@ -146,10 +152,10 @@ class VpsDownloader:
         self.download_tasks[message_id] = thread
         thread.start()
 
-    def _local_destination(self, remote_path: str) -> Path:
-        """Mirror the remote folder structure under DOWNLOAD_DIR/VPS."""
+    def _local_destination(self, remote_path: str, base: Path = None) -> Path:
+        """Mirror the remote folder structure under `base` (default DOWNLOAD_DIR/VPS)."""
         rel = remote_path.lstrip("/")
-        return DOWNLOAD_DIR / "VPS" / rel
+        return (base or (DOWNLOAD_DIR / "VPS")) / rel
 
     def _walk(self, sftp, root, out):
         """Recursively collect (remote_file, size) tuples under a directory."""
@@ -163,10 +169,16 @@ class VpsDownloader:
                 out.append((full, attr.st_size or 0))
 
     def _download(self, remote_path: str, message_id: str):
+        from backend.utils import label_folder
         db = get_db()
         start_time = datetime.now()
         client = None
         try:
+            # Destination base: the connected label's folder, else DOWNLOAD_DIR/VPS
+            dl_record = db.get_download_by_message_id(message_id)
+            label = db.get_label(dl_record.get('label_id')) if dl_record else None
+            base = label_folder(label, DOWNLOAD_DIR / "VPS")
+
             client, sftp = self._open_sftp()
             st = sftp.stat(remote_path)
             is_dir = stat_module.S_ISDIR(st.st_mode)
@@ -182,7 +194,7 @@ class VpsDownloader:
             # Resume: count bytes already present locally
             transferred = [0]
             for rfile, rsize in files:
-                lp = self._local_destination(rfile)
+                lp = self._local_destination(rfile, base)
                 if lp.exists():
                     ls = lp.stat().st_size
                     transferred[0] += min(ls, rsize) if rsize else ls
@@ -212,7 +224,7 @@ class VpsDownloader:
             for rfile, rsize in files:
                 if message_id in self.cancelled:
                     raise _Cancelled()
-                lp = self._local_destination(rfile)
+                lp = self._local_destination(rfile, base)
                 lp.parent.mkdir(parents=True, exist_ok=True)
                 self._transfer_file(sftp, rfile, lp, rsize, bump)
 

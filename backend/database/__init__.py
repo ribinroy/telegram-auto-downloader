@@ -41,6 +41,7 @@ class Download(Base):
     file_meta = Column(Text, nullable=True)  # JSON metadata: video/audio details for video files
     thumb_count = Column(Integer, default=0)  # Number of generated thumbnail images
     status_msg_id = Column(Integer, nullable=True)  # Telegram status message ID for progress updates
+    label_id = Column(Integer, nullable=True)  # Label this download is connected to (destination)
 
     def to_dict(self):
         """Convert model to dictionary"""
@@ -64,7 +65,8 @@ class Download(Base):
             'deleted_at': f"{self.deleted_at.isoformat()}Z" if self.deleted_at else None,
             'file_meta': json.loads(self.file_meta) if self.file_meta else None,
             'thumb_count': self.thumb_count or 0,
-            'status_msg_id': self.status_msg_id
+            'status_msg_id': self.status_msg_id,
+            'label_id': self.label_id,
         }
 
 
@@ -109,6 +111,43 @@ class DownloadTypeMap(Base):
             'created_at': f"{self.created_at.isoformat()}Z" if self.created_at else None,
             'updated_at': f"{self.updated_at.isoformat()}Z" if self.updated_at else None
         }
+
+
+class Label(Base):
+    """A named download destination: a folder (+ default quality) that downloads
+    can be connected to. Replaces per-source folder mappings."""
+    __tablename__ = 'labels'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(100), unique=True, nullable=False)
+    folder = Column(String(255), nullable=True)
+    quality = Column(String(20), nullable=True)  # Default quality e.g. "720p", "1080p"
+    is_hidden = Column(Boolean, default=False)    # Drives the secured/hidden view
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'name': self.name,
+            'folder': self.folder,
+            'quality': self.quality,
+            'is_hidden': bool(self.is_hidden),
+            'created_at': f"{self.created_at.isoformat()}Z" if self.created_at else None,
+            'updated_at': f"{self.updated_at.isoformat()}Z" if self.updated_at else None,
+        }
+
+
+class SourceLabel(Base):
+    """The default label for a download source (e.g. 'telegram', 'vps', 'youtube')."""
+    __tablename__ = 'source_labels'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    source = Column(String(100), unique=True, nullable=False)
+    label_id = Column(Integer, nullable=False)
+
+    def to_dict(self):
+        return {'id': self.id, 'source': self.source, 'label_id': self.label_id}
 
 
 class User(Base):
@@ -241,6 +280,47 @@ class DatabaseManager:
                 except Exception:
                     pass
 
+            # Add labels.label_id link on downloads
+            if 'label_id' not in columns:
+                conn.execute(text('ALTER TABLE downloads ADD COLUMN label_id INTEGER'))
+                conn.commit()
+
+        # One-time backfill: convert existing download_type_maps into labels
+        self._backfill_labels()
+
+    def _backfill_labels(self):
+        """Migrate legacy download_type_maps into labels + per-source defaults,
+        then tag existing downloads with their label. Runs once (no-op if labels exist)."""
+        session = self.get_session()
+        try:
+            if session.query(Label).count() > 0:
+                return  # already migrated
+            maps = session.query(DownloadTypeMap).all()
+            if not maps:
+                return
+            source_to_label = {}
+            for m in maps:
+                label = Label(
+                    name=m.downloaded_from,
+                    folder=m.folder,
+                    quality=m.quality,
+                    is_hidden=bool(m.is_secured),
+                )
+                session.add(label)
+                session.flush()  # assign label.id
+                session.add(SourceLabel(source=m.downloaded_from, label_id=label.id))
+                source_to_label[m.downloaded_from] = label.id
+            # Tag existing downloads with the label of their source
+            for src, lid in source_to_label.items():
+                session.query(Download).filter_by(downloaded_from=src).update(
+                    {Download.label_id: lid}, synchronize_session=False
+                )
+            session.commit()
+        except Exception:
+            session.rollback()
+        finally:
+            self.close_session()
+
     def get_session(self):
         """Get a new database session"""
         return self.Session()
@@ -251,7 +331,8 @@ class DatabaseManager:
 
     def add_download(self, file, status='downloading', progress=0, speed=0,
                      error=None, downloaded_bytes=0, total_bytes=0, pending_time=None,
-                     message_id=None, downloaded_from='telegram', url=None, author=None):
+                     message_id=None, downloaded_from='telegram', url=None, author=None,
+                     label_id=None):
         """Add a new download entry"""
         session = self.get_session()
         try:
@@ -272,7 +353,8 @@ class DatabaseManager:
                 pending_time=pending_time,
                 downloaded_from=downloaded_from,
                 url=url,
-                author=author
+                author=author,
+                label_id=label_id,
             )
             session.add(download)
             session.commit()
@@ -627,6 +709,121 @@ class DatabaseManager:
             session.delete(mapping)
             session.commit()
             return True
+        finally:
+            self.close_session()
+
+    # --- Labels ---
+    def get_labels(self):
+        """All labels, ordered by name."""
+        session = self.get_session()
+        try:
+            return [l.to_dict() for l in session.query(Label).order_by(Label.name).all()]
+        finally:
+            self.close_session()
+
+    def get_label(self, label_id: int):
+        """A single label by id, or None."""
+        if label_id is None:
+            return None
+        session = self.get_session()
+        try:
+            label = session.query(Label).filter_by(id=label_id).first()
+            return label.to_dict() if label else None
+        finally:
+            self.close_session()
+
+    def add_label(self, name: str, folder: str = None, quality: str = None, is_hidden: bool = False):
+        """Create a label. Returns its dict, or {'error': ...} if the name exists."""
+        session = self.get_session()
+        try:
+            if session.query(Label).filter_by(name=name).first():
+                return {'error': 'A label with this name already exists'}
+            label = Label(name=name, folder=folder, quality=quality, is_hidden=bool(is_hidden))
+            session.add(label)
+            session.commit()
+            return label.to_dict()
+        finally:
+            self.close_session()
+
+    def update_label(self, label_id: int, **kwargs):
+        """Update a label's fields."""
+        session = self.get_session()
+        try:
+            label = session.query(Label).filter_by(id=label_id).first()
+            if not label:
+                return {'error': 'Label not found'}
+            for key, value in kwargs.items():
+                if key in ('name', 'folder', 'quality', 'is_hidden'):
+                    setattr(label, key, value)
+            label.updated_at = datetime.utcnow()
+            session.commit()
+            return label.to_dict()
+        finally:
+            self.close_session()
+
+    def delete_label(self, label_id: int):
+        """Delete a label; clears it from downloads and source defaults."""
+        session = self.get_session()
+        try:
+            label = session.query(Label).filter_by(id=label_id).first()
+            if not label:
+                return False
+            session.query(Download).filter_by(label_id=label_id).update(
+                {Download.label_id: None}, synchronize_session=False
+            )
+            session.query(SourceLabel).filter_by(label_id=label_id).delete(synchronize_session=False)
+            session.delete(label)
+            session.commit()
+            return True
+        finally:
+            self.close_session()
+
+    def get_hidden_label_ids(self):
+        """IDs of labels marked hidden (drive the secured view)."""
+        session = self.get_session()
+        try:
+            return [l.id for l in session.query(Label).filter_by(is_hidden=True).all()]
+        finally:
+            self.close_session()
+
+    # --- Source default labels ---
+    def get_source_labels(self):
+        """All source -> default label associations."""
+        session = self.get_session()
+        try:
+            return [s.to_dict() for s in session.query(SourceLabel).order_by(SourceLabel.source).all()]
+        finally:
+            self.close_session()
+
+    def set_source_label(self, source: str, label_id):
+        """Set (or clear, if label_id is None) the default label for a source."""
+        session = self.get_session()
+        try:
+            existing = session.query(SourceLabel).filter_by(source=source).first()
+            if label_id is None:
+                if existing:
+                    session.delete(existing)
+                    session.commit()
+                return {'source': source, 'label_id': None}
+            if existing:
+                existing.label_id = label_id
+            else:
+                existing = SourceLabel(source=source, label_id=label_id)
+                session.add(existing)
+            session.commit()
+            return existing.to_dict()
+        finally:
+            self.close_session()
+
+    def get_default_label_for_source(self, source: str):
+        """Resolve the default label dict for a source, or None."""
+        session = self.get_session()
+        try:
+            sl = session.query(SourceLabel).filter_by(source=source).first()
+            if not sl:
+                return None
+            label = session.query(Label).filter_by(id=sl.label_id).first()
+            return label.to_dict() if label else None
         finally:
             self.close_session()
 
