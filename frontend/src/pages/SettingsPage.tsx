@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
-import { Loader2, AlertCircle, CheckCircle, Key, FolderCog, Plus, Trash2, Shield, ShieldOff, Pencil, Check, Cookie, Wrench, Server, Plug } from 'lucide-react';
-import { updatePassword, fetchMappings, addMapping, updateMapping, deleteMapping, fetchCookies, saveCookies, syncThumbnails, getYtdlpVersion, upgradeYtdlp, fetchVpsConfig, saveVpsConfig, testVpsConnection } from '../api';
-import type { SyncThumbnailsResult, VpsConfig } from '../api';
+import { Loader2, AlertCircle, CheckCircle, Key, FolderCog, Plus, Trash2, Shield, ShieldOff, Pencil, Check, Cookie, Wrench, Server } from 'lucide-react';
+import { updatePassword, fetchMappings, addMapping, updateMapping, deleteMapping, fetchCookies, saveCookies, syncThumbnails, getYtdlpVersion, upgradeYtdlp } from '../api';
+import type { SyncThumbnailsResult } from '../api';
 import type { DownloadTypeMap } from '../types';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { VpsSettings } from '../components/VpsSettings';
 import { useLayoutContext } from '../components/Layout';
 
 type TabType = 'password' | 'mappings' | 'cookies' | 'jobs' | 'vps';
@@ -60,20 +61,6 @@ export function SettingsPage() {
   const [ytdlpResult, setYtdlpResult] = useState<{ old_version?: string; new_version?: string; upgraded?: boolean } | null>(null);
   const [ytdlpError, setYtdlpError] = useState<string | null>(null);
 
-  // VPS connection state
-  const [vpsConfig, setVpsConfig] = useState<VpsConfig | null>(null);
-  const [vpsHost, setVpsHost] = useState('');
-  const [vpsPort, setVpsPort] = useState('22');
-  const [vpsUsername, setVpsUsername] = useState('');
-  const [vpsPassword, setVpsPassword] = useState('');
-  const [vpsRemotePath, setVpsRemotePath] = useState('');
-  const [vpsLoading, setVpsLoading] = useState(false);
-  const [vpsSaving, setVpsSaving] = useState(false);
-  const [vpsTesting, setVpsTesting] = useState(false);
-  const [vpsError, setVpsError] = useState<string | null>(null);
-  const [vpsSuccess, setVpsSuccess] = useState<string | null>(null);
-  const [vpsTestResult, setVpsTestResult] = useState<{ success: boolean; message?: string; error?: string } | null>(null);
-
   // Load mappings when tab changes to mappings
   useEffect(() => {
     if (activeTab === 'mappings') {
@@ -94,75 +81,6 @@ export function SettingsPage() {
       getYtdlpVersion().then(r => setYtdlpVersion(r.version)).catch(() => {});
     }
   }, [activeTab]);
-
-  // Load VPS config when tab changes to vps
-  useEffect(() => {
-    if (activeTab === 'vps') {
-      loadVpsConfig();
-    }
-  }, [activeTab]);
-
-  const loadVpsConfig = async () => {
-    setVpsLoading(true);
-    setVpsError(null);
-    setVpsTestResult(null);
-    try {
-      const cfg = await fetchVpsConfig();
-      setVpsConfig(cfg);
-      setVpsHost(cfg.host || '');
-      setVpsPort(String(cfg.port || 22));
-      setVpsUsername(cfg.username || '');
-      setVpsRemotePath(cfg.remote_path || '');
-      setVpsPassword('');
-    } catch {
-      setVpsError('Failed to load VPS configuration');
-    } finally {
-      setVpsLoading(false);
-    }
-  };
-
-  const buildVpsInput = () => ({
-    host: vpsHost.trim(),
-    port: parseInt(vpsPort, 10) || 22,
-    username: vpsUsername.trim(),
-    remote_path: vpsRemotePath.trim(),
-    ...(vpsPassword ? { password: vpsPassword } : {}),
-  });
-
-  const handleTestVps = async () => {
-    setVpsTesting(true);
-    setVpsError(null);
-    setVpsTestResult(null);
-    try {
-      const result = await testVpsConnection(buildVpsInput());
-      setVpsTestResult(result);
-    } catch {
-      setVpsTestResult({ success: false, error: 'Failed to run connection test' });
-    } finally {
-      setVpsTesting(false);
-    }
-  };
-
-  const handleSaveVps = async () => {
-    setVpsSaving(true);
-    setVpsError(null);
-    setVpsSuccess(null);
-    try {
-      const result = await saveVpsConfig(buildVpsInput());
-      if (result.error) {
-        setVpsError(result.error);
-      } else {
-        setVpsSuccess('VPS connection saved');
-        setVpsPassword('');
-        await loadVpsConfig();
-        setTimeout(() => setVpsSuccess(null), 3000);
-      }
-    } catch {
-      setVpsError('Failed to save VPS configuration');
-    } finally {
-      setVpsSaving(false);
-    }
-  };
 
   const loadCookies = async () => {
     setCookiesLoading(true);
@@ -767,153 +685,7 @@ export function SettingsPage() {
           </>
         )}
 
-        {activeTab === 'vps' && (
-          <>
-            {/* Connection status banner */}
-            <div className={`flex items-center gap-2 rounded-lg p-3 mb-4 text-sm border ${
-              vpsConfig?.configured
-                ? 'bg-green-500/10 border-green-500/40 text-green-400'
-                : vpsConfig
-                  ? 'bg-slate-700/40 border-slate-600 text-slate-400'
-                  : 'bg-amber-500/10 border-amber-500/40 text-amber-400'
-            }`}>
-              <span className={`w-2 h-2 rounded-full ${vpsConfig?.configured ? 'bg-green-400' : vpsConfig ? 'bg-slate-500' : 'bg-amber-400'}`} />
-              {vpsConfig?.configured ? (
-                <span>
-                  Configured — <span className="font-medium text-white">{vpsConfig.username}@{vpsConfig.host}:{vpsConfig.port}</span>
-                  {vpsConfig.has_password ? ' (password saved)' : ' (no password saved)'}
-                </span>
-              ) : vpsConfig ? (
-                <span>Not configured yet. Enter your VPS details below.</span>
-              ) : (
-                <span>Couldn't load saved configuration. Check the connection and try again.</span>
-              )}
-            </div>
-
-            {vpsSuccess && (
-              <div className="flex items-center gap-2 bg-green-500/20 border border-green-500/50 rounded-lg p-3 mb-4 text-green-400 text-sm">
-                <CheckCircle className="w-4 h-4 shrink-0" />
-                <span>{vpsSuccess}</span>
-              </div>
-            )}
-
-            {vpsError && (
-              <div className="flex items-center gap-2 bg-red-500/20 border border-red-500/50 rounded-lg p-3 mb-4 text-red-400 text-sm">
-                <AlertCircle className="w-4 h-4 shrink-0" />
-                <span>{vpsError}</span>
-              </div>
-            )}
-
-            <p className="text-sm text-slate-400 mb-4">
-              Connect to a remote server over SSH/SFTP to browse and download files from a watched folder.
-            </p>
-
-            {vpsLoading ? (
-              <div className="flex items-center justify-center py-8">
-                <Loader2 className="w-6 h-6 text-cyan-500 animate-spin" />
-              </div>
-            ) : (
-              <form onSubmit={(e) => { e.preventDefault(); handleSaveVps(); }} className="space-y-3">
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  <div className="sm:col-span-2">
-                    <label className="block text-sm text-slate-400 mb-1">Host</label>
-                    <input
-                      type="text"
-                      value={vpsHost}
-                      onChange={(e) => setVpsHost(e.target.value)}
-                      placeholder="e.g., your-box.seedhost.eu"
-                      className="w-full bg-slate-700/50 border border-slate-600 rounded-lg py-2 px-3 text-white placeholder-slate-400 focus:outline-none focus:border-cyan-500 transition-colors"
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm text-slate-400 mb-1">Port</label>
-                    <input
-                      type="number"
-                      value={vpsPort}
-                      onChange={(e) => setVpsPort(e.target.value)}
-                      placeholder="22"
-                      className="w-full bg-slate-700/50 border border-slate-600 rounded-lg py-2 px-3 text-white placeholder-slate-400 focus:outline-none focus:border-cyan-500 transition-colors"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-sm text-slate-400 mb-1">Username</label>
-                  <input
-                    type="text"
-                    value={vpsUsername}
-                    onChange={(e) => setVpsUsername(e.target.value)}
-                    placeholder="e.g., myuser"
-                    autoComplete="off"
-                    className="w-full bg-slate-700/50 border border-slate-600 rounded-lg py-2 px-3 text-white placeholder-slate-400 focus:outline-none focus:border-cyan-500 transition-colors"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm text-slate-400 mb-1">Password</label>
-                  <input
-                    type="password"
-                    value={vpsPassword}
-                    onChange={(e) => setVpsPassword(e.target.value)}
-                    placeholder={vpsConfig?.has_password ? '•••••••• (leave blank to keep saved password)' : 'SSH password'}
-                    autoComplete="new-password"
-                    className="w-full bg-slate-700/50 border border-slate-600 rounded-lg py-2 px-3 text-white placeholder-slate-400 focus:outline-none focus:border-cyan-500 transition-colors"
-                  />
-                  <p className="text-xs text-slate-500 mt-1">
-                    Stored encrypted at rest (Fernet, keyed off your JWT secret). Never sent back to the browser.
-                  </p>
-                </div>
-
-                <div>
-                  <label className="block text-sm text-slate-400 mb-1">Watch Folder (remote path)</label>
-                  <input
-                    type="text"
-                    value={vpsRemotePath}
-                    onChange={(e) => setVpsRemotePath(e.target.value)}
-                    placeholder="e.g., /home/myuser/downloads"
-                    className="w-full bg-slate-700/50 border border-slate-600 rounded-lg py-2 px-3 text-white placeholder-slate-400 focus:outline-none focus:border-cyan-500 transition-colors"
-                  />
-                  <p className="text-xs text-slate-500 mt-1">
-                    Optional — if set, Test will also verify this folder is listable.
-                  </p>
-                </div>
-
-                {vpsTestResult && (
-                  <div className={`flex items-center gap-2 border rounded-lg p-3 text-sm ${
-                    vpsTestResult.success
-                      ? 'bg-green-500/20 border-green-500/50 text-green-400'
-                      : 'bg-red-500/20 border-red-500/50 text-red-400'
-                  }`}>
-                    {vpsTestResult.success ? <CheckCircle className="w-4 h-4 shrink-0" /> : <AlertCircle className="w-4 h-4 shrink-0" />}
-                    <span>{vpsTestResult.success ? vpsTestResult.message : vpsTestResult.error}</span>
-                  </div>
-                )}
-
-                <div className="flex gap-2 pt-1">
-                  <button
-                    type="button"
-                    onClick={handleTestVps}
-                    disabled={vpsTesting || vpsSaving || !vpsHost.trim() || !vpsUsername.trim()}
-                    className="flex-1 bg-slate-600 hover:bg-slate-500 text-white font-medium py-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                  >
-                    {vpsTesting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plug className="w-4 h-4" />}
-                    Test
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={vpsSaving || vpsTesting || !vpsHost.trim() || !vpsUsername.trim()}
-                    className="flex-1 bg-cyan-600 hover:bg-cyan-700 text-white font-medium py-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                  >
-                    {vpsSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
-                    Done
-                  </button>
-                </div>
-              </form>
-            )}
-          </>
-        )}
+        {activeTab === 'vps' && <VpsSettings />}
 
         {activeTab === 'jobs' && (
           <>

@@ -377,6 +377,77 @@ export async function testVpsConnection(config: VpsConfigInput): Promise<{ succe
   return response.json();
 }
 
+export interface VpsBrowseEntry {
+  name: string;
+  path: string;
+  is_dir: boolean;
+}
+
+export interface VpsBrowseResult {
+  path?: string;
+  parent?: string | null;
+  entries?: VpsBrowseEntry[];
+  error?: string;
+}
+
+export async function browseVps(path?: string): Promise<VpsBrowseResult> {
+  const response = await fetch(`${API_BASE}/api/settings/vps/browse`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ path: path ?? '' }),
+  });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  return response.json();
+}
+
+export interface VpsWatchFolder {
+  id: number;
+  path: string;
+  created_at: string | null;
+}
+
+export async function fetchVpsFolders(): Promise<VpsWatchFolder[]> {
+  const response = await fetch(`${API_BASE}/api/settings/vps/folders`, {
+    headers: getAuthHeaders(),
+  });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  const data = await response.json();
+  return data.folders || [];
+}
+
+export async function addVpsFolders(paths: string[]): Promise<VpsWatchFolder[]> {
+  const response = await fetch(`${API_BASE}/api/settings/vps/folders`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ paths }),
+  });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  const data = await response.json();
+  return data.folders || [];
+}
+
+export async function deleteVpsFolder(id: number): Promise<VpsWatchFolder[]> {
+  const response = await fetch(`${API_BASE}/api/settings/vps/folders/${id}`, {
+    method: 'DELETE',
+    headers: getAuthHeaders(),
+  });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  const data = await response.json();
+  return data.folders || [];
+}
+
 // Analytics API
 export async function fetchAnalytics(days: number = 30, groupBy: 'day' | 'hour' = 'day', includeDeleted: boolean = false): Promise<AnalyticsData> {
   const params = new URLSearchParams();

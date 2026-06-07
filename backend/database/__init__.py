@@ -138,6 +138,22 @@ class User(Base):
         return self.password_hash == self.hash_password(password)
 
 
+class VpsWatchFolder(Base):
+    """A remote VPS folder selected for watching/browsing."""
+    __tablename__ = 'vps_watch_folders'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    path = Column(String(1024), unique=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'path': self.path,
+            'created_at': f"{self.created_at.isoformat()}Z" if self.created_at else None,
+        }
+
+
 class DatabaseManager:
     """Database manager for handling all database operations"""
 
@@ -564,6 +580,43 @@ class DatabaseManager:
             if not mapping:
                 return False
             session.delete(mapping)
+            session.commit()
+            return True
+        finally:
+            self.close_session()
+
+    # --- VPS watch folders ---
+    def get_vps_watch_folders(self):
+        """Return all watched VPS folders, ordered by path."""
+        session = self.get_session()
+        try:
+            folders = session.query(VpsWatchFolder).order_by(VpsWatchFolder.path).all()
+            return [f.to_dict() for f in folders]
+        finally:
+            self.close_session()
+
+    def add_vps_watch_folder(self, path: str):
+        """Add a watched folder. Returns its dict, or the existing one if already present."""
+        session = self.get_session()
+        try:
+            existing = session.query(VpsWatchFolder).filter_by(path=path).first()
+            if existing:
+                return existing.to_dict()
+            folder = VpsWatchFolder(path=path)
+            session.add(folder)
+            session.commit()
+            return folder.to_dict()
+        finally:
+            self.close_session()
+
+    def delete_vps_watch_folder(self, folder_id: int):
+        """Delete a watched folder by id. Returns True if deleted."""
+        session = self.get_session()
+        try:
+            folder = session.query(VpsWatchFolder).filter_by(id=folder_id).first()
+            if not folder:
+                return False
+            session.delete(folder)
             session.commit()
             return True
         finally:

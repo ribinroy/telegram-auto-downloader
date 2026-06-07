@@ -34,6 +34,51 @@ def get_socketio():
     return socketio
 
 
+def load_vps_credentials():
+    """Load saved VPS connection credentials (password decrypted).
+
+    Returns a dict {host, port, username, password} or None if not configured.
+    """
+    from backend.utils import decrypt_secret
+    raw = get_db().get_setting("vps_config")
+    if not raw:
+        return None
+    try:
+        cfg = json.loads(raw)
+    except Exception:
+        return None
+    host = cfg.get("host")
+    if not host:
+        return None
+    return {
+        "host": host,
+        "port": int(cfg.get("port") or 22),
+        "username": cfg.get("username", ""),
+        "password": decrypt_secret(cfg.get("password_enc", "")),
+    }
+
+
+def open_vps_sftp(timeout=10):
+    """Open an SSH+SFTP session using saved credentials.
+
+    Returns (client, sftp). Raises ValueError if not configured, or
+    paramiko/socket errors on connection failure. Caller must close client.
+    """
+    import paramiko
+    creds = load_vps_credentials()
+    if not creds:
+        raise ValueError("VPS connection is not configured")
+    if not creds["password"]:
+        raise ValueError("No saved password for the VPS connection")
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    client.connect(
+        hostname=creds["host"], port=creds["port"], username=creds["username"],
+        password=creds["password"], timeout=timeout, allow_agent=False, look_for_keys=False,
+    )
+    return client, client.open_sftp()
+
+
 def get_web_app():
     """Get the global web app instance"""
     return _web_app
@@ -1030,6 +1075,84 @@ class WebApp:
                 return jsonify({"success": False, "error": str(e)})
             finally:
                 client.close()
+
+        @self.app.route("/api/settings/vps/browse", methods=["POST"])
+        @token_required
+        def browse_vps():
+            """List the contents of a remote directory over SFTP (on demand).
+
+            Body: {path?} — absolute path to list; defaults to the login home.
+            Returns {path, parent, entries:[{name, path, is_dir}]} with
+            directories first. Uses the saved VPS credentials.
+            """
+            import stat as stat_module
+            import posixpath
+            data = request.json or {}
+            req_path = (data.get("path") or "").strip()
+
+            client = None
+            try:
+                client, sftp = open_vps_sftp()
+                # Resolve target path (default to login home directory)
+                path = sftp.normalize(req_path) if req_path else sftp.normalize(".")
+                entries = []
+                for attr in sftp.listdir_attr(path):
+                    name = attr.filename
+                    if name in (".", ".."):
+                        continue
+                    is_dir = stat_module.S_ISDIR(attr.st_mode)
+                    entries.append({
+                        "name": name,
+                        "path": posixpath.join(path, name),
+                        "is_dir": is_dir,
+                    })
+                entries.sort(key=lambda e: (not e["is_dir"], e["name"].lower()))
+                parent = posixpath.dirname(path.rstrip("/")) or "/"
+                return jsonify({
+                    "path": path,
+                    "parent": None if path in ("/", "") else parent,
+                    "entries": entries,
+                })
+            except ValueError as e:
+                return jsonify({"error": str(e)}), 400
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
+            finally:
+                if client:
+                    client.close()
+
+        @self.app.route("/api/settings/vps/folders", methods=["GET"])
+        @token_required
+        def get_vps_folders():
+            """List the watched VPS folders."""
+            return jsonify({"folders": get_db().get_vps_watch_folders()})
+
+        @self.app.route("/api/settings/vps/folders", methods=["POST"])
+        @token_required
+        def add_vps_folders():
+            """Add one or more watched folders. Body: {paths: [...]} or {path}."""
+            data = request.json or {}
+            paths = data.get("paths")
+            if paths is None and data.get("path"):
+                paths = [data.get("path")]
+            if not paths or not isinstance(paths, list):
+                return jsonify({"error": "Provide 'paths' (list) or 'path'"}), 400
+            db = get_db()
+            added = []
+            for p in paths:
+                p = (p or "").strip()
+                if p:
+                    added.append(db.add_vps_watch_folder(p))
+            return jsonify({"folders": db.get_vps_watch_folders(), "added": added})
+
+        @self.app.route("/api/settings/vps/folders/<int:folder_id>", methods=["DELETE"])
+        @token_required
+        def delete_vps_folder(folder_id):
+            """Remove a watched folder by id."""
+            ok = get_db().delete_vps_watch_folder(folder_id)
+            if not ok:
+                return jsonify({"error": "Folder not found"}), 404
+            return jsonify({"status": "deleted", "folders": get_db().get_vps_watch_folders()})
 
         # Video file API for playback
         @self.app.route("/api/video/check/<int:download_id>", methods=["GET"])
