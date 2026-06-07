@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react';
-import { Loader2, AlertCircle, CheckCircle, Check, Plug, FolderPlus, Folder, Trash2 } from 'lucide-react';
+import { Loader2, AlertCircle, CheckCircle, Check, Plug, FolderPlus, Folder, Trash2, Unplug, Server } from 'lucide-react';
 import {
-  fetchVpsConfig, saveVpsConfig, testVpsConnection,
+  fetchVpsConfig, saveVpsConfig, testVpsConnection, deleteVpsConfig,
   fetchVpsFolders, addVpsFolders, deleteVpsFolder,
   type VpsConfig, type VpsWatchFolder,
 } from '../api';
 import { VpsFolderBrowser } from './VpsFolderBrowser';
+import { ConfirmDialog } from './ConfirmDialog';
 
 export function VpsSettings() {
   // Connection config
@@ -20,6 +21,8 @@ export function VpsSettings() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<{ success: boolean; message?: string; error?: string } | null>(null);
+  const [removing, setRemoving] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState(false);
 
   // Watched folders
   const [folders, setFolders] = useState<VpsWatchFolder[]>([]);
@@ -107,6 +110,29 @@ export function VpsSettings() {
     }
   };
 
+  const handleRemove = async () => {
+    setConfirmRemove(false);
+    setRemoving(true);
+    setError(null);
+    setSuccess(null);
+    setTestResult(null);
+    try {
+      const result = await deleteVpsConfig();
+      if (result.error) {
+        setError(result.error);
+      } else {
+        setPassword('');
+        await loadConfig();
+        setSuccess('VPS connection removed');
+        setTimeout(() => setSuccess(null), 3000);
+      }
+    } catch {
+      setError('Failed to remove VPS connection');
+    } finally {
+      setRemoving(false);
+    }
+  };
+
   const handleAddFolders = async (paths: string[]) => {
     setBrowserOpen(false);
     if (paths.length === 0) return;
@@ -127,27 +153,42 @@ export function VpsSettings() {
     }
   };
 
+  const statusPill = config?.configured ? (
+    <span
+      className="flex items-center gap-1.5 text-xs bg-green-500/15 text-green-400 border border-green-500/30 rounded-full px-2.5 py-1 shrink-0"
+      title={`${config.username}@${config.host}:${config.port}${config.has_password ? ' (password saved)' : ' (no password saved)'}`}
+    >
+      <span className="w-1.5 h-1.5 rounded-full bg-green-400" />
+      Configured
+    </span>
+  ) : config ? (
+    <span className="flex items-center gap-1.5 text-xs bg-slate-700/60 text-slate-400 border border-slate-600 rounded-full px-2.5 py-1 shrink-0">
+      <span className="w-1.5 h-1.5 rounded-full bg-slate-500" />
+      Not configured
+    </span>
+  ) : (
+    <span className="flex items-center gap-1.5 text-xs bg-amber-500/15 text-amber-400 border border-amber-500/30 rounded-full px-2.5 py-1 shrink-0">
+      <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+      Unavailable
+    </span>
+  );
+
   return (
     <>
-      {/* Connection status banner */}
-      <div className={`flex items-center gap-2 rounded-lg p-3 mb-4 text-sm border ${
-        config?.configured
-          ? 'bg-green-500/10 border-green-500/40 text-green-400'
-          : config
-            ? 'bg-slate-700/40 border-slate-600 text-slate-400'
-            : 'bg-amber-500/10 border-amber-500/40 text-amber-400'
-      }`}>
-        <span className={`w-2 h-2 rounded-full ${config?.configured ? 'bg-green-400' : config ? 'bg-slate-500' : 'bg-amber-400'}`} />
-        {config?.configured ? (
-          <span>
-            Configured — <span className="font-medium text-white">{config.username}@{config.host}:{config.port}</span>
-            {config.has_password ? ' (password saved)' : ' (no password saved)'}
-          </span>
-        ) : config ? (
-          <span>Not configured yet. Enter your VPS details below.</span>
-        ) : (
-          <span>Couldn't load saved configuration. Check the connection and try again.</span>
-        )}
+      {/* Title row with status to the right */}
+      <div className="flex items-center justify-between gap-3 mb-5 pb-4 border-b border-slate-700/60">
+        <div className="flex items-center gap-2 min-w-0">
+          <Server className="w-5 h-5 text-cyan-400 shrink-0" />
+          <div className="min-w-0">
+            <h2 className="text-base font-semibold text-white leading-tight">VPS Connection</h2>
+            <p className="text-xs text-slate-400 truncate">
+              {config?.configured
+                ? `${config.username}@${config.host}:${config.port}`
+                : 'Remote SSH/SFTP server'}
+            </p>
+          </div>
+        </div>
+        {!loading && statusPill}
       </div>
 
       {success && (
@@ -256,6 +297,18 @@ export function VpsSettings() {
               Done
             </button>
           </div>
+
+          {config?.configured && (
+            <button
+              type="button"
+              onClick={() => setConfirmRemove(true)}
+              disabled={removing || saving || testing}
+              className="w-full bg-red-500/10 hover:bg-red-500/20 border border-red-500/40 text-red-400 font-medium py-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+            >
+              {removing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Unplug className="w-4 h-4" />}
+              Remove connection
+            </button>
+          )}
         </form>
       )}
 
@@ -323,6 +376,16 @@ export function VpsSettings() {
         onClose={() => setBrowserOpen(false)}
         onConfirm={handleAddFolders}
         alreadyAdded={folders.map(f => f.path)}
+      />
+
+      <ConfirmDialog
+        isOpen={confirmRemove}
+        title="Remove VPS connection?"
+        message="This deletes the saved host, username and password. Your watched folders are kept, but browsing is disabled until you reconnect."
+        confirmText="Remove"
+        variant="danger"
+        onConfirm={handleRemove}
+        onCancel={() => setConfirmRemove(false)}
       />
     </>
   );

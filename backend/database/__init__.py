@@ -405,6 +405,19 @@ class DatabaseManager:
         finally:
             self.close_session()
 
+    def delete_setting(self, key):
+        """Delete a setting by key. Returns True if a row was removed."""
+        session = self.get_session()
+        try:
+            setting = session.query(Settings).filter_by(key=key).first()
+            if not setting:
+                return False
+            session.delete(setting)
+            session.commit()
+            return True
+        finally:
+            self.close_session()
+
     def get_all_settings(self):
         """Get all settings as a dictionary"""
         session = self.get_session()

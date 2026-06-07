@@ -377,6 +377,18 @@ export async function testVpsConnection(config: VpsConfigInput): Promise<{ succe
   return response.json();
 }
 
+export async function deleteVpsConfig(): Promise<{ status?: string; configured?: boolean; error?: string }> {
+  const response = await fetch(`${API_BASE}/api/settings/vps`, {
+    method: 'DELETE',
+    headers: getAuthHeaders(),
+  });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  return response.json();
+}
+
 export interface VpsBrowseEntry {
   name: string;
   path: string;

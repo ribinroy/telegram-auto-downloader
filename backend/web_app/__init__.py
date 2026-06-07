@@ -1015,6 +1015,13 @@ class WebApp:
                 "has_password": bool(decrypt_secret(password_enc)),
             })
 
+        @self.app.route("/api/settings/vps", methods=["DELETE"])
+        @token_required
+        def delete_vps_config():
+            """Remove the saved VPS connection (credentials). Watched folders are kept."""
+            get_db().delete_setting("vps_config")
+            return jsonify({"status": "deleted", "configured": False})
+
         @self.app.route("/api/settings/vps/test", methods=["POST"])
         @token_required
         def test_vps_connection():
