@@ -717,95 +717,76 @@ class WebApp:
             return jsonify(result)
 
         # Download type mappings API
-        @self.app.route("/api/mappings", methods=["GET"])
+        # --- Labels (download destinations) ---
+        @self.app.route("/api/labels", methods=["GET"])
         @token_required
-        def get_mappings():
-            """Get all download type mappings"""
-            db = get_db()
-            return jsonify(db.get_all_download_type_maps())
+        def get_labels():
+            """All labels."""
+            return jsonify(get_db().get_labels())
 
-        @self.app.route("/api/mappings/secured", methods=["GET"])
+        @self.app.route("/api/labels/hidden-ids", methods=["GET"])
         @token_required
-        def get_secured_sources():
-            """Get list of secured source types"""
-            db = get_db()
-            return jsonify(db.get_secured_sources())
+        def get_hidden_label_ids():
+            """IDs of hidden labels (drive the secured view)."""
+            return jsonify(get_db().get_hidden_label_ids())
 
-        @self.app.route("/api/mappings/secured-ids", methods=["GET"])
+        @self.app.route("/api/labels", methods=["POST"])
         @token_required
-        def get_secured_mapping_ids():
-            """Get list of secured mapping IDs"""
-            db = get_db()
-            return jsonify(db.get_secured_mapping_ids())
-
-        @self.app.route("/api/mappings/source/<source>", methods=["GET"])
-        @token_required
-        def get_mapping_by_source(source):
-            """Get mapping for a specific source"""
-            from backend.config import DOWNLOAD_DIR
-            db = get_db()
-            mapping = db.get_download_type_map(source)
-            if mapping:
-                mapping["download_folder"] = mapping.get("folder") or str(DOWNLOAD_DIR / "Videos")
-                return jsonify(mapping)
-            return jsonify({"download_folder": str(DOWNLOAD_DIR / "Videos")})
-
-        @self.app.route("/api/mappings", methods=["POST"])
-        @token_required
-        def add_mapping():
-            """Add a new download type mapping"""
-            data = request.json
-            downloaded_from = data.get("downloaded_from")
-            is_secured = data.get("is_secured", False)
-            folder = data.get("folder")
-            quality = data.get("quality")
-
-            if not downloaded_from:
-                return jsonify({"error": "downloaded_from is required"}), 400
-
-            db = get_db()
-            result = db.add_download_type_map(downloaded_from, is_secured, folder, quality)
-
-            if 'error' in result:
+        def add_label():
+            """Create a label. Body: {name, folder?, quality?, is_hidden?}."""
+            data = request.json or {}
+            name = (data.get("name") or "").strip()
+            if not name:
+                return jsonify({"error": "name is required"}), 400
+            result = get_db().add_label(
+                name,
+                folder=(data.get("folder") or None),
+                quality=(data.get("quality") or None),
+                is_hidden=bool(data.get("is_hidden", False)),
+            )
+            if isinstance(result, dict) and result.get("error"):
                 return jsonify(result), 400
-
             return jsonify(result)
 
-        @self.app.route("/api/mappings/<int:map_id>", methods=["PUT"])
+        @self.app.route("/api/labels/<int:label_id>", methods=["PUT"])
         @token_required
-        def update_mapping(map_id):
-            """Update a download type mapping"""
-            data = request.json
-            db = get_db()
-
-            update_data = {}
-            if "downloaded_from" in data:
-                update_data["downloaded_from"] = data["downloaded_from"]
-            if "is_secured" in data:
-                update_data["is_secured"] = data["is_secured"]
-            if "folder" in data:
-                update_data["folder"] = data["folder"]
-            if "quality" in data:
-                update_data["quality"] = data["quality"]
-
-            result = db.update_download_type_map(map_id, **update_data)
-
-            if isinstance(result, dict) and 'error' in result:
+        def update_label(label_id):
+            """Update a label. Body may include name/folder/quality/is_hidden."""
+            data = request.json or {}
+            update = {}
+            for key in ("name", "folder", "quality", "is_hidden"):
+                if key in data:
+                    update[key] = data[key]
+            result = get_db().update_label(label_id, **update)
+            if isinstance(result, dict) and result.get("error"):
                 return jsonify(result), 400
-
             return jsonify(result)
 
-        @self.app.route("/api/mappings/<int:map_id>", methods=["DELETE"])
+        @self.app.route("/api/labels/<int:label_id>", methods=["DELETE"])
         @token_required
-        def delete_mapping(map_id):
-            """Delete a download type mapping"""
-            db = get_db()
-            success = db.delete_download_type_map(map_id)
-
-            if not success:
-                return jsonify({"error": "Mapping not found"}), 404
-
+        def delete_label(label_id):
+            """Delete a label (detaches it from downloads + source defaults)."""
+            if not get_db().delete_label(label_id):
+                return jsonify({"error": "Label not found"}), 404
             return jsonify({"status": "deleted"})
+
+        # --- Source -> default label ---
+        @self.app.route("/api/source-labels", methods=["GET"])
+        @token_required
+        def get_source_labels():
+            """All source -> default label associations."""
+            return jsonify(get_db().get_source_labels())
+
+        @self.app.route("/api/source-labels", methods=["POST"])
+        @token_required
+        def set_source_label():
+            """Set/clear a source's default label. Body: {source, label_id|null}."""
+            data = request.json or {}
+            source = (data.get("source") or "").strip()
+            if not source:
+                return jsonify({"error": "source is required"}), 400
+            result = get_db().set_source_label(source, data.get("label_id"))
+            return jsonify(result)
 
         # Analytics API
         @self.app.route("/api/analytics", methods=["GET"])
