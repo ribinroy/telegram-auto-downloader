@@ -1,12 +1,12 @@
 import { useState, useEffect } from 'react';
-import { Loader2, AlertCircle, CheckCircle, Key, FolderCog, Plus, Trash2, Shield, ShieldOff, Pencil, Check, Cookie, Wrench } from 'lucide-react';
-import { updatePassword, fetchMappings, addMapping, updateMapping, deleteMapping, fetchCookies, saveCookies, syncThumbnails, getYtdlpVersion, upgradeYtdlp } from '../api';
-import type { SyncThumbnailsResult } from '../api';
+import { Loader2, AlertCircle, CheckCircle, Key, FolderCog, Plus, Trash2, Shield, ShieldOff, Pencil, Check, Cookie, Wrench, Server, Plug } from 'lucide-react';
+import { updatePassword, fetchMappings, addMapping, updateMapping, deleteMapping, fetchCookies, saveCookies, syncThumbnails, getYtdlpVersion, upgradeYtdlp, fetchVpsConfig, saveVpsConfig, testVpsConnection } from '../api';
+import type { SyncThumbnailsResult, VpsConfig } from '../api';
 import type { DownloadTypeMap } from '../types';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { useLayoutContext } from '../components/Layout';
 
-type TabType = 'password' | 'mappings' | 'cookies' | 'jobs';
+type TabType = 'password' | 'mappings' | 'cookies' | 'jobs' | 'vps';
 
 export function SettingsPage() {
   const { showSecured: showMappings, loadSecuredMappingIds: onMappingsChanged } = useLayoutContext();
