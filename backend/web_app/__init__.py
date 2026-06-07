@@ -163,7 +163,7 @@ class WebApp:
             print("Client disconnected")
 
     def get_downloads_data(self, search='', filter_type='all', sort_by='created_at', sort_order='desc',
-                           limit=30, offset=0, exclude_mapping_ids=None, author=None):
+                           limit=30, offset=0, exclude_mapping_ids=None, author=None, exclude_label_ids=None):
         """Get downloads data (paginated)
 
         Args:
@@ -179,12 +179,8 @@ class WebApp:
         db = get_db()
         all_downloads = db.get_all_downloads()
 
-        # Get sources to exclude based on mapping IDs
-        excluded_sources = []
-        if exclude_mapping_ids:
-            all_mappings = db.get_all_download_type_maps()
-            mapping_by_id = {m['id']: m for m in all_mappings}
-            excluded_sources = [mapping_by_id[mid]['downloaded_from'] for mid in exclude_mapping_ids if mid in mapping_by_id]
+        # Labels to hide from the default view (the "secured" set)
+        excluded_label_ids = set(exclude_label_ids or [])
 
         query = search.lower().strip()
         if query:
@@ -212,9 +208,9 @@ class WebApp:
         else:
             filtered_list = all_downloads
 
-        # Filter out excluded sources
-        if excluded_sources:
-            filtered_list = [d for d in filtered_list if d.get("downloaded_from") not in excluded_sources]
+        # Filter out downloads connected to hidden labels
+        if excluded_label_ids:
+            filtered_list = [d for d in filtered_list if d.get("label_id") not in excluded_label_ids]
 
         # Filter by author
         if author:
@@ -416,11 +412,13 @@ class WebApp:
             sort_order = request.args.get("sort_order", "desc")  # 'asc' or 'desc'
             limit = request.args.get("limit", 30, type=int)
             offset = request.args.get("offset", 0, type=int)
-            # Parse exclude_mapping_ids as comma-separated list of integers
-            exclude_ids_str = request.args.get("exclude_mapping_ids", "")
-            exclude_mapping_ids = [int(x) for x in exclude_ids_str.split(",") if x.strip().isdigit()] if exclude_ids_str else None
+            # Parse exclude_label_ids as comma-separated list of integers (hidden labels)
+            exclude_ids_str = request.args.get("exclude_label_ids", "")
+            exclude_label_ids = [int(x) for x in exclude_ids_str.split(",") if x.strip().isdigit()] if exclude_ids_str else None
             author = request.args.get("author", "").strip() or None
-            return jsonify(self.get_downloads_data(search, filter_type, sort_by, sort_order, limit, offset, exclude_mapping_ids, author))
+            return jsonify(self.get_downloads_data(search, filter_type, sort_by, sort_order, limit, offset,
+                                                   exclude_mapping_ids=None, author=author,
+                                                   exclude_label_ids=exclude_label_ids))
 
         @self.app.route("/api/authors", methods=["GET"])
         @token_required
@@ -765,8 +763,12 @@ class WebApp:
         @self.app.route("/api/labels/<int:label_id>", methods=["DELETE"])
         @token_required
         def delete_label(label_id):
-            """Delete a label (detaches it from downloads + source defaults)."""
-            if not get_db().delete_label(label_id):
+            """Delete a label (detaches it from downloads + source defaults).
+            System labels cannot be deleted."""
+            result = get_db().delete_label(label_id)
+            if isinstance(result, dict) and result.get("error"):
+                return jsonify(result), 400
+            if not result:
                 return jsonify({"error": "Label not found"}), 404
             return jsonify({"status": "deleted"})
 

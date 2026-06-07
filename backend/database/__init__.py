@@ -123,6 +123,7 @@ class Label(Base):
     folder = Column(String(255), nullable=True)
     quality = Column(String(20), nullable=True)  # Default quality e.g. "720p", "1080p"
     is_hidden = Column(Boolean, default=False)    # Drives the secured/hidden view
+    is_system = Column(Boolean, default=False)    # Built-in label; cannot be deleted
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow)
 
@@ -133,6 +134,7 @@ class Label(Base):
             'folder': self.folder,
             'quality': self.quality,
             'is_hidden': bool(self.is_hidden),
+            'is_system': bool(self.is_system),
             'created_at': f"{self.created_at.isoformat()}Z" if self.created_at else None,
             'updated_at': f"{self.updated_at.isoformat()}Z" if self.updated_at else None,
         }
@@ -285,8 +287,35 @@ class DatabaseManager:
                 conn.execute(text('ALTER TABLE downloads ADD COLUMN label_id INTEGER'))
                 conn.commit()
 
+            # Ensure labels.is_system exists (for DBs created before this column)
+            if inspector.has_table('labels'):
+                label_cols = [c['name'] for c in inspector.get_columns('labels')]
+                if 'is_system' not in label_cols:
+                    conn.execute(text('ALTER TABLE labels ADD COLUMN is_system BOOLEAN DEFAULT FALSE'))
+                    conn.commit()
+
         # One-time backfill: convert existing download_type_maps into labels
         self._backfill_labels()
+        # Ensure built-in (system) labels exist
+        self._seed_system_labels()
+
+    def _seed_system_labels(self):
+        """Create built-in labels that must always exist and can't be deleted."""
+        session = self.get_session()
+        try:
+            existing = session.query(Label).filter_by(name='Hidden').first()
+            if existing:
+                if not existing.is_system:
+                    existing.is_system = True
+                    session.commit()
+                return
+            session.add(Label(name='Hidden', folder=None, quality=None,
+                              is_hidden=True, is_system=True))
+            session.commit()
+        except Exception:
+            session.rollback()
+        finally:
+            self.close_session()
 
     def _backfill_labels(self):
         """Migrate legacy download_type_maps into labels + per-source defaults,
@@ -733,12 +762,13 @@ class DatabaseManager:
             self.close_session()
 
     def add_label(self, name: str, folder: str = None, quality: str = None, is_hidden: bool = False):
-        """Create a label. Returns its dict, or {'error': ...} if the name exists."""
+        """Create a (user) label. Returns its dict, or {'error': ...} if the name exists."""
         session = self.get_session()
         try:
             if session.query(Label).filter_by(name=name).first():
                 return {'error': 'A label with this name already exists'}
-            label = Label(name=name, folder=folder, quality=quality, is_hidden=bool(is_hidden))
+            label = Label(name=name, folder=folder, quality=quality,
+                          is_hidden=bool(is_hidden), is_system=False)
             session.add(label)
             session.commit()
             return label.to_dict()
@@ -762,12 +792,17 @@ class DatabaseManager:
             self.close_session()
 
     def delete_label(self, label_id: int):
-        """Delete a label; clears it from downloads and source defaults."""
+        """Delete a label; clears it from downloads and source defaults.
+
+        Returns True on success, False if not found, or {'error': ...} if the
+        label is a protected system label."""
         session = self.get_session()
         try:
             label = session.query(Label).filter_by(id=label_id).first()
             if not label:
                 return False
+            if label.is_system:
+                return {'error': 'System labels cannot be deleted'}
             session.query(Download).filter_by(label_id=label_id).update(
                 {Download.label_id: None}, synchronize_session=False
             )
