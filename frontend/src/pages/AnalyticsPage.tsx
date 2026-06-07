@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { ArrowLeft, Loader2, Download, CheckCircle, XCircle, TrendingUp, HardDrive, Calendar, Clock, User } from 'lucide-react';
+import { Loader2, Download, CheckCircle, XCircle, TrendingUp, HardDrive, Calendar, Clock, User } from 'lucide-react';
 import { fetchAnalytics } from '../api';
 import { formatBytes } from '../utils/format';
 import type { AnalyticsData } from '../types';
@@ -19,13 +19,9 @@ import {
   Legend,
 } from 'recharts';
 
-interface AnalyticsPageProps {
-  onBack: () => void;
-}
-
 const COLORS = ['#06b6d4', '#8b5cf6', '#f59e0b', '#10b981', '#ef4444', '#ec4899', '#6366f1', '#14b8a6'];
 
-export function AnalyticsPage({ onBack }: AnalyticsPageProps) {
+export function AnalyticsPage() {
   const [data, setData] = useState<AnalyticsData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -108,25 +104,17 @@ export function AnalyticsPage({ onBack }: AnalyticsPageProps) {
   };
 
   return (
-    <div className="h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex flex-col overflow-hidden">
+    <div className="flex flex-col" style={{ height: 'calc(100vh - 3.5rem)' }}>
       <div className="max-w-7xl mx-auto px-3 sm:px-4 py-4 sm:py-6 w-full flex flex-col flex-1 min-h-0">
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-0 mb-4 sm:mb-6">
-          <div className="flex items-center gap-3 sm:gap-4">
-            <button
-              onClick={onBack}
-              className="p-2 bg-slate-700/50 hover:bg-slate-600/50 text-slate-400 hover:text-white rounded-lg transition-colors"
-            >
-              <ArrowLeft className="w-5 h-5" />
-            </button>
-            <div>
-              <h1 className="text-xl sm:text-2xl font-bold text-white">Analytics</h1>
-              <p className="text-slate-400 text-xs sm:text-sm">Download statistics and trends</p>
-            </div>
+          <div>
+            <h1 className="text-xl sm:text-2xl font-bold text-white">Analytics</h1>
+            <p className="text-slate-400 text-xs sm:text-sm">Download statistics and trends</p>
           </div>
 
           {/* Period selector */}
-          <div className="flex items-center gap-2 sm:gap-3 ml-11 sm:ml-0">
+          <div className="flex items-center gap-2 sm:gap-3">
             <select
               value={days}
               onChange={(e) => setDays(Number(e.target.value))}
@@ -466,3 +454,4 @@ export function AnalyticsPage({ onBack }: AnalyticsPageProps) {
     </div>
   );
 }
+
