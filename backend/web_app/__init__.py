@@ -60,12 +60,20 @@ def load_vps_credentials():
 
 def annotate_vps_folders(folders):
     """Tag each watched folder with `active` = belongs to the currently saved
-    VPS connection. Folders from other connections stay listed but inactive."""
+    VPS connection. Folders from other connections stay listed but inactive.
+
+    Legacy folders created before connection-binding (no host recorded) are
+    adopted into the current connection so they keep working."""
     creds = load_vps_credentials()
     cur_host = creds["host"] if creds else None
     cur_user = creds["username"] if creds else None
     cur_port = creds["port"] if creds else None
+    db = get_db()
     for f in folders:
+        # Adopt legacy host-less folders into the current connection
+        if creds and not f.get("host"):
+            db.set_vps_watch_folder_connection(f["id"], cur_host, cur_port, cur_user)
+            f["host"], f["port"], f["username"] = cur_host, cur_port, cur_user
         f["active"] = bool(
             creds
             and f.get("host") == cur_host

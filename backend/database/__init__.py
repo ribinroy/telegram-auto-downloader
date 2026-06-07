@@ -670,6 +670,21 @@ class DatabaseManager:
         finally:
             self.close_session()
 
+    def set_vps_watch_folder_connection(self, folder_id: int, host, port, username):
+        """Backfill the VPS connection on a watched folder (for legacy rows)."""
+        session = self.get_session()
+        try:
+            folder = session.query(VpsWatchFolder).filter_by(id=folder_id).first()
+            if not folder:
+                return None
+            folder.host = host
+            folder.port = port
+            folder.username = username
+            session.commit()
+            return folder.to_dict()
+        finally:
+            self.close_session()
+
     def set_vps_watch_folder_autosync(self, folder_id: int, enabled: bool):
         """Toggle autoSync on a watched folder. Returns its dict, or None if missing."""
         session = self.get_session()

@@ -350,6 +350,20 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
                   </div>
                 </div>
               )}
+              {/* VPS files - only when configured with watched folders */}
+              {vpsReady && (
+                <div className="group relative">
+                  <button
+                    onClick={() => navigate(ROUTES.VPS)}
+                    className={`p-2 hover:bg-slate-600/50 text-slate-400 hover:text-white rounded-lg transition-colors ${location.pathname === ROUTES.VPS ? 'bg-slate-600/50 text-white' : 'bg-slate-700/50'}`}
+                  >
+                    <HardDrive className="w-4 h-4" />
+                  </button>
+                  <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
+                    VPS files
+                  </div>
+                </div>
+              )}
               {/* Settings */}
               <div className="group relative">
                 <button
