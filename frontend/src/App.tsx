@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import { Search, Download, Wifi, WifiOff, Loader2, HardDrive, Clock, Zap, LogOut, Settings, Plus, BarChart3, X } from 'lucide-react';
 import { formatBytes, formatSpeed } from './utils/format';
 import { fetchDownloads, fetchStats, fetchAuthors, retryDownload, stopDownload, pauseDownload, resumeDownload, deleteDownload, verifyToken, clearToken, getToken, fetchSecuredMappingIds, type SortBy, type SortOrder } from './api';
 import { connectSocket, disconnectSocket, type ProgressUpdate, type StatusUpdate, type DeletedUpdate, type MetaUpdate } from './api/socket';
 import { DownloadItem } from './components/DownloadItem';
 import { LoginPage } from './components/LoginPage';
-import { SettingsDialog } from './components/SettingsDialog';
+import { SettingsPage } from './components/SettingsPage';
 import { AddUrlModal } from './components/AddUrlModal';
 import { AnalyticsPage } from './components/AnalyticsPage';
 import { ToastContainer, useToast } from './components/Toast';
@@ -59,7 +60,8 @@ function App() {
 const PAGE_SIZE = 30;
 
 function MainApp({ onLogout }: { onLogout: () => void }) {
-  const [currentPage, setCurrentPage] = useState<'downloads' | 'analytics'>('downloads');
+  const navigate = useNavigate();
+  const location = useLocation();
   const [downloads, setDownloads] = useState<DownloadType[]>([]);
   const [totalResults, setTotalResults] = useState(0);
   const [securedMappingIds, setSecuredMappingIds] = useState<number[]>([]);
@@ -67,7 +69,6 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
   const [showSecured, setShowSecured] = useState(false);
   const [secretClickCount, setSecretClickCount] = useState(0);
   const secretClickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [addUrlOpen, setAddUrlOpen] = useState(false);
   const { toasts, addToast, dismissToast } = useToast();
   const downloadsRef = useRef<Map<string, DownloadType>>(new Map());
@@ -421,97 +422,95 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
     return () => document.removeEventListener('paste', handlePaste);
   }, [addUrlOpen]);
 
-  // Show analytics page if selected
-  if (currentPage === 'analytics') {
-    return <AnalyticsPage onBack={() => setCurrentPage('downloads')} />;
-  }
-
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
-      {/* Fixed Header */}
-      <div className="fixed top-0 left-0 right-0 z-40 bg-slate-900/80 backdrop-blur-xl border-b border-slate-700/50">
-        <div className="max-w-7xl mx-auto px-3 sm:px-4 py-2">
-          <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2 sm:gap-3">
-            <div className="p-2 sm:p-3 rounded-xl">
-              <img src="/logo.png" alt="DownLee logo" className="w-6 h-6 sm:w-8 sm:h-8" />
-            </div>
-          </div>
-          <div className="flex items-center gap-1.5 sm:gap-3">
-            {/* Total Downloaded - hidden on mobile */}
-            <div className="hidden sm:flex group relative items-center gap-2 px-3 py-1.5 bg-slate-700/50 rounded-lg cursor-default min-w-[100px]">
-              <HardDrive className="w-4 h-4 text-green-400" />
-              <span className="text-sm text-green-400 tabular-nums">{formatBytes(stats.total_downloaded)}</span>
-              <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
-                Downloaded
-              </div>
-            </div>
-            {/* Pending - value only on mobile, icon+value on desktop */}
-            <div className="group relative flex items-center gap-1 sm:gap-2 px-2 sm:px-3 py-1.5 bg-slate-700/50 rounded-lg cursor-default sm:min-w-[100px]">
-              <Clock className="hidden sm:block w-4 h-4 text-yellow-400" />
-              <span className="text-xs sm:text-sm text-yellow-400 tabular-nums">{formatBytes(stats.pending_bytes)}</span>
-              <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
-                Pending
-              </div>
-            </div>
-            {/* Speed - value only on mobile, icon+value on desktop */}
-            <div className="group relative flex items-center gap-1 sm:gap-2 px-2 sm:px-3 py-1.5 bg-slate-700/50 rounded-lg cursor-default sm:min-w-[110px]">
-              <Zap className="hidden sm:block w-4 h-4 text-purple-400" />
-              <span className="text-xs sm:text-sm text-purple-400 tabular-nums">{formatSpeed(stats.total_speed)}</span>
-              <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
-                Speed
-              </div>
-            </div>
-            {/* Connection status - secret click target */}
-            <div
-              onClick={handleSecretClick}
-              className={`flex items-center gap-1 sm:gap-2 px-2 sm:px-3 py-1.5 rounded-lg sm:min-w-[80px] cursor-default select-none ${connected ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}
-            >
-              {connected ? <Wifi className="w-4 h-4" /> : <WifiOff className="w-4 h-4" />}
-              <span className="hidden sm:inline text-sm">{connected ? 'Live' : 'Offline'}</span>
-            </div>
-            {/* Analytics button - only visible when secured sources are shown */}
-            {showSecured && (
-              <div className="group relative">
-                <button
-                  onClick={() => setCurrentPage('analytics')}
-                  className="p-2 bg-slate-700/50 hover:bg-slate-600/50 text-slate-400 hover:text-white rounded-lg transition-colors"
-                >
-                  <BarChart3 className="w-4 h-4" />
-                </button>
-                <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
-                  Analytics
-                </div>
-              </div>
-            )}
-            {/* Settings button */}
-            <div className="group relative">
-              <button
-                onClick={() => setSettingsOpen(true)}
-                className="p-2 bg-slate-700/50 hover:bg-slate-600/50 text-slate-400 hover:text-white rounded-lg transition-colors"
-              >
-                <Settings className="w-4 h-4" />
-              </button>
-              <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
-                Settings
-              </div>
-            </div>
-            {/* Logout button */}
-            <div className="group relative">
-              <button
-                onClick={onLogout}
-                className="p-2 bg-slate-700/50 hover:bg-slate-600/50 text-slate-400 hover:text-white rounded-lg transition-colors"
-              >
-                <LogOut className="w-4 h-4" />
-              </button>
-              <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
-                Sign out
-              </div>
-            </div>
-          </div>
+  const header = (
+    <div className="fixed top-0 left-0 right-0 z-40 bg-slate-900/80 backdrop-blur-xl border-b border-slate-700/50">
+      <div className="max-w-7xl mx-auto px-3 sm:px-4 py-2">
+        <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2 sm:gap-3">
+          <div className="p-2 sm:p-3 rounded-xl cursor-pointer" onClick={() => navigate('/')}>
+            <img src="/logo.png" alt="DownLee logo" className="w-6 h-6 sm:w-8 sm:h-8" />
           </div>
         </div>
+        <div className="flex items-center gap-1.5 sm:gap-3">
+          {/* Total Downloaded - hidden on mobile */}
+          <div className="hidden sm:flex group relative items-center gap-2 px-3 py-1.5 bg-slate-700/50 rounded-lg cursor-default min-w-[100px]">
+            <HardDrive className="w-4 h-4 text-green-400" />
+            <span className="text-sm text-green-400 tabular-nums">{formatBytes(stats.total_downloaded)}</span>
+            <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
+              Downloaded
+            </div>
+          </div>
+          {/* Pending - value only on mobile, icon+value on desktop */}
+          <div className="group relative flex items-center gap-1 sm:gap-2 px-2 sm:px-3 py-1.5 bg-slate-700/50 rounded-lg cursor-default sm:min-w-[100px]">
+            <Clock className="hidden sm:block w-4 h-4 text-yellow-400" />
+            <span className="text-xs sm:text-sm text-yellow-400 tabular-nums">{formatBytes(stats.pending_bytes)}</span>
+            <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
+              Pending
+            </div>
+          </div>
+          {/* Speed - value only on mobile, icon+value on desktop */}
+          <div className="group relative flex items-center gap-1 sm:gap-2 px-2 sm:px-3 py-1.5 bg-slate-700/50 rounded-lg cursor-default sm:min-w-[110px]">
+            <Zap className="hidden sm:block w-4 h-4 text-purple-400" />
+            <span className="text-xs sm:text-sm text-purple-400 tabular-nums">{formatSpeed(stats.total_speed)}</span>
+            <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
+              Speed
+            </div>
+          </div>
+          {/* Connection status - secret click target */}
+          <div
+            onClick={handleSecretClick}
+            className={`flex items-center gap-1 sm:gap-2 px-2 sm:px-3 py-1.5 rounded-lg sm:min-w-[80px] cursor-default select-none ${connected ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}
+          >
+            {connected ? <Wifi className="w-4 h-4" /> : <WifiOff className="w-4 h-4" />}
+            <span className="hidden sm:inline text-sm">{connected ? 'Live' : 'Offline'}</span>
+          </div>
+          {/* Analytics button - only visible when secured sources are shown */}
+          {showSecured && (
+            <div className="group relative">
+              <button
+                onClick={() => navigate('/analytics')}
+                className={`p-2 hover:bg-slate-600/50 text-slate-400 hover:text-white rounded-lg transition-colors ${location.pathname === '/analytics' ? 'bg-slate-600/50 text-white' : 'bg-slate-700/50'}`}
+              >
+                <BarChart3 className="w-4 h-4" />
+              </button>
+              <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
+                Analytics
+              </div>
+            </div>
+          )}
+          {/* Settings button */}
+          <div className="group relative">
+            <button
+              onClick={() => navigate('/settings')}
+              className={`p-2 hover:bg-slate-600/50 text-slate-400 hover:text-white rounded-lg transition-colors ${location.pathname === '/settings' ? 'bg-slate-600/50 text-white' : 'bg-slate-700/50'}`}
+            >
+              <Settings className="w-4 h-4" />
+            </button>
+            <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
+              Settings
+            </div>
+          </div>
+          {/* Logout button */}
+          <div className="group relative">
+            <button
+              onClick={onLogout}
+              className="p-2 bg-slate-700/50 hover:bg-slate-600/50 text-slate-400 hover:text-white rounded-lg transition-colors"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
+            <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
+              Sign out
+            </div>
+          </div>
+        </div>
+        </div>
       </div>
+    </div>
+  );
+
+  const downloadsPage = (
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
+      {header}
 
       {/* Main Content - with top padding for fixed header */}
       <div className="max-w-7xl mx-auto px-3 sm:px-4 pt-16 sm:pt-20 pb-24 w-full">
@@ -678,17 +677,6 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
         </div>
       </div>
 
-      {/* Settings Dialog */}
-      <SettingsDialog
-        isOpen={settingsOpen}
-        onClose={() => {
-          setSettingsOpen(false);
-          // Reload secured mapping IDs in case mappings were changed
-          loadSecuredMappingIds();
-        }}
-        showMappings={showSecured}
-      />
-
       {/* Add URL Modal */}
       <AddUrlModal
         isOpen={addUrlOpen}
@@ -702,6 +690,30 @@ function MainApp({ onLogout }: { onLogout: () => void }) {
       {/* Toast Notifications */}
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
     </div>
+  );
+
+  return (
+    <Routes>
+      <Route path="/" element={downloadsPage} />
+      <Route path="/analytics" element={
+        <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
+          {header}
+          <div className="pt-14 sm:pt-16">
+            <AnalyticsPage />
+          </div>
+          <ToastContainer toasts={toasts} onDismiss={dismissToast} />
+        </div>
+      } />
+      <Route path="/settings" element={
+        <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
+          {header}
+          <div className="pt-14 sm:pt-16">
+            <SettingsPage showMappings={showSecured} onMappingsChanged={loadSecuredMappingIds} />
+          </div>
+          <ToastContainer toasts={toasts} onDismiss={dismissToast} />
+        </div>
+      } />
+    </Routes>
   );
 }
 

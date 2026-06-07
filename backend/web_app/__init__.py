@@ -1250,7 +1250,9 @@ class WebApp:
 
         @self.app.errorhandler(404)
         def not_found(e):
-            # For SPA routing, serve index.html for non-API routes
+            # Return JSON 404 for API routes, serve index.html for SPA routes
+            if request.path.startswith('/api/') or request.path == '/metrics':
+                return jsonify({'error': 'Not found'}), 404
             return send_from_directory(self.app.static_folder, 'index.html')
 
     def run(self):
