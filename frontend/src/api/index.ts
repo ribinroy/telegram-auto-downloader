@@ -488,11 +488,11 @@ export async function fetchVpsFiles(): Promise<VpsFolderGroup[]> {
   return data.folders || [];
 }
 
-export async function downloadVpsFile(path: string, size?: number): Promise<{ error?: string; id?: number; message_id?: string }> {
+export async function downloadVpsFile(path: string, size?: number, label_id?: number | null): Promise<{ error?: string; id?: number; message_id?: string }> {
   const response = await fetch(`${API_BASE}/api/vps/download`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-    body: JSON.stringify({ path, size: size ?? 0 }),
+    body: JSON.stringify({ path, size: size ?? 0, label_id: label_id ?? null }),
   });
   if (response.status === 401) {
     clearToken();
