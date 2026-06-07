@@ -1,4 +1,4 @@
-import type { DownloadsResponse, Stats, UrlCheckResult, Download, DownloadTypeMap, AnalyticsData } from '../types';
+import type { DownloadsResponse, Stats, UrlCheckResult, Download, Label, SourceLabel, AnalyticsData } from '../types';
 
 const API_BASE = import.meta.env.DEV ? 'http://192.168.0.135:4444' : '';
 const TOKEN_KEY = 'auth_token';
@@ -72,7 +72,7 @@ export interface FetchDownloadsOptions {
   sortOrder?: SortOrder;
   limit?: number;
   offset?: number;
-  excludeMappingIds?: number[];
+  excludeLabelIds?: number[];
   author?: string;
 }
 
@@ -84,7 +84,7 @@ export async function fetchDownloads(options: FetchDownloadsOptions = {}): Promi
     sortOrder = 'desc',
     limit = 30,
     offset = 0,
-    excludeMappingIds,
+    excludeLabelIds,
     author,
   } = options;
 
@@ -95,8 +95,8 @@ export async function fetchDownloads(options: FetchDownloadsOptions = {}): Promi
   params.set('sort_order', sortOrder);
   params.set('limit', limit.toString());
   params.set('offset', offset.toString());
-  if (excludeMappingIds && excludeMappingIds.length > 0) {
-    params.set('exclude_mapping_ids', excludeMappingIds.join(','));
+  if (excludeLabelIds && excludeLabelIds.length > 0) {
+    params.set('exclude_label_ids', excludeLabelIds.join(','));
   }
   if (author) params.set('author', author);
 
@@ -187,6 +187,7 @@ export interface DownloadOptions {
   ext?: string;
   filesize?: number;
   resolution?: string;
+  label_id?: number | null;
 }
 
 export async function downloadUrl(options: DownloadOptions): Promise<Download | { error: string }> {
@@ -202,98 +203,71 @@ export async function downloadUrl(options: DownloadOptions): Promise<Download | 
   return response.json();
 }
 
-// Download type mappings API
-export async function fetchMappings(): Promise<DownloadTypeMap[]> {
-  const response = await fetch(`${API_BASE}/api/mappings`, {
-    headers: getAuthHeaders(),
-  });
-  if (response.status === 401) {
-    clearToken();
-    window.location.reload();
-  }
+// Labels API
+export async function fetchLabels(): Promise<Label[]> {
+  const response = await fetch(`${API_BASE}/api/labels`, { headers: getAuthHeaders() });
+  if (response.status === 401) { clearToken(); window.location.reload(); }
   return response.json();
 }
 
-export async function fetchSecuredSources(): Promise<string[]> {
-  const response = await fetch(`${API_BASE}/api/mappings/secured`, {
-    headers: getAuthHeaders(),
-  });
-  if (response.status === 401) {
-    clearToken();
-    window.location.reload();
-  }
+export async function fetchHiddenLabelIds(): Promise<number[]> {
+  const response = await fetch(`${API_BASE}/api/labels/hidden-ids`, { headers: getAuthHeaders() });
+  if (response.status === 401) { clearToken(); window.location.reload(); }
   return response.json();
 }
 
-export async function fetchSecuredMappingIds(): Promise<number[]> {
-  const response = await fetch(`${API_BASE}/api/mappings/secured-ids`, {
-    headers: getAuthHeaders(),
-  });
-  if (response.status === 401) {
-    clearToken();
-    window.location.reload();
-  }
-  return response.json();
-}
-
-export async function fetchMappingBySource(source: string): Promise<Partial<DownloadTypeMap> & { download_folder?: string } | null> {
-  const response = await fetch(`${API_BASE}/api/mappings/source/${encodeURIComponent(source)}`, {
-    headers: getAuthHeaders(),
-  });
-  if (response.status === 401) {
-    clearToken();
-    window.location.reload();
-  }
-  return response.json();
-}
-
-export async function addMapping(
-  downloaded_from: string,
-  is_secured: boolean,
-  folder: string | null,
-  quality: string | null = null
-): Promise<DownloadTypeMap | { error: string }> {
-  const response = await fetch(`${API_BASE}/api/mappings`, {
+export async function createLabel(
+  data: { name: string; folder?: string | null; quality?: string | null; is_hidden?: boolean }
+): Promise<Label | { error: string }> {
+  const response = await fetch(`${API_BASE}/api/labels`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-    body: JSON.stringify({ downloaded_from, is_secured, folder, quality }),
+    body: JSON.stringify(data),
   });
-  if (response.status === 401) {
-    clearToken();
-    window.location.reload();
-  }
+  if (response.status === 401) { clearToken(); window.location.reload(); }
   return response.json();
 }
 
-export async function updateMapping(
+export async function updateLabel(
   id: number,
-  data: Partial<{ downloaded_from: string; is_secured: boolean; folder: string | null; quality: string | null }>
-): Promise<DownloadTypeMap | { error: string }> {
-  const response = await fetch(`${API_BASE}/api/mappings/${id}`, {
+  data: Partial<{ name: string; folder: string | null; quality: string | null; is_hidden: boolean }>
+): Promise<Label | { error: string }> {
+  const response = await fetch(`${API_BASE}/api/labels/${id}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
     body: JSON.stringify(data),
   });
-  if (response.status === 401) {
-    clearToken();
-    window.location.reload();
-  }
+  if (response.status === 401) { clearToken(); window.location.reload(); }
   return response.json();
 }
 
-export async function deleteMapping(id: number): Promise<void> {
-  const response = await fetch(`${API_BASE}/api/mappings/${id}`, {
+export async function deleteLabel(id: number): Promise<void> {
+  const response = await fetch(`${API_BASE}/api/labels/${id}`, {
     method: 'DELETE',
     headers: getAuthHeaders(),
   });
-  if (response.status === 401) {
-    clearToken();
-    window.location.reload();
-  }
+  if (response.status === 401) { clearToken(); window.location.reload(); }
   if (!response.ok) {
     const error = await response.json();
-    throw new Error(error.error || 'Failed to delete mapping');
+    throw new Error(error.error || 'Failed to delete label');
   }
+}
+
+// Source -> default label API
+export async function fetchSourceLabels(): Promise<SourceLabel[]> {
+  const response = await fetch(`${API_BASE}/api/source-labels`, { headers: getAuthHeaders() });
+  if (response.status === 401) { clearToken(); window.location.reload(); }
+  return response.json();
+}
+
+export async function setSourceLabel(source: string, label_id: number | null): Promise<SourceLabel | { source: string; label_id: null }> {
+  const response = await fetch(`${API_BASE}/api/source-labels`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ source, label_id }),
+  });
+  if (response.status === 401) { clearToken(); window.location.reload(); }
+  return response.json();
 }
 
 // Cookies API for yt-dlp authentication

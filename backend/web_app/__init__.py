@@ -638,10 +638,9 @@ class WebApp:
                         DOWNLOAD_DIR / file_name,
                         DOWNLOAD_DIR / "Videos" / file_name,
                     ]
-                    if downloaded_from:
-                        mapping = db.get_download_type_map(downloaded_from)
-                        if mapping and mapping.get("folder"):
-                            possible_paths.insert(0, Path(mapping["folder"]) / file_name)
+                    label = db.get_label(download.get("label_id"))
+                    if label and label.get("folder"):
+                        possible_paths.insert(0, Path(label["folder"]) / file_name)
 
                     for file_path in possible_paths:
                         if file_path.exists():
@@ -686,6 +685,7 @@ class WebApp:
             ext = data.get("ext")
             filesize = data.get("filesize")
             resolution = data.get("resolution")
+            label_id = data.get("label_id")
 
             if not url:
                 return jsonify({"error": "URL is required"}), 400
@@ -706,7 +706,8 @@ class WebApp:
                 ext=ext,
                 filesize=filesize,
                 resolution=resolution,
-                author=author
+                author=author,
+                label_id=label_id,
             )
 
             if 'error' in result:
@@ -1295,14 +1296,15 @@ class WebApp:
         @self.app.route("/api/vps/download", methods=["POST"])
         @token_required
         def download_vps_file():
-            """Start downloading a single VPS file. Body: {path, size?}."""
+            """Start downloading a single VPS file/folder. Body: {path, size?, label_id?}."""
             if not self.vps_downloader:
                 return jsonify({"error": "VPS downloader not available"}), 503
             data = request.json or {}
             path = (data.get("path") or "").strip()
             if not path:
                 return jsonify({"error": "path is required"}), 400
-            result = self.vps_downloader.start_download(path, int(data.get("size") or 0))
+            result = self.vps_downloader.start_download(
+                path, int(data.get("size") or 0), label_id=data.get("label_id"))
             if result.get("error"):
                 return jsonify(result), 400
             return jsonify(result)
@@ -1351,12 +1353,10 @@ class WebApp:
                 DOWNLOAD_DIR / "Videos" / file_name,
             ]
 
-            # Also check if there's a custom folder mapping
-            downloaded_from = download.get("downloaded_from")
-            if downloaded_from:
-                mapping = db.get_download_type_map(downloaded_from)
-                if mapping and mapping.get("folder"):
-                    possible_paths.insert(0, Path(mapping["folder"]) / file_name)
+            # Also check the download's connected label folder
+            label = db.get_label(download.get("label_id"))
+            if label and label.get("folder"):
+                possible_paths.insert(0, Path(label["folder"]) / file_name)
 
             for file_path in possible_paths:
                 if file_path.exists():
@@ -1417,11 +1417,9 @@ class WebApp:
                 DOWNLOAD_DIR / "Videos" / file_name,
             ]
 
-            downloaded_from = download.get("downloaded_from")
-            if downloaded_from:
-                mapping = db.get_download_type_map(downloaded_from)
-                if mapping and mapping.get("folder"):
-                    possible_paths.insert(0, Path(mapping["folder"]) / file_name)
+            label = db.get_label(download.get("label_id"))
+            if label and label.get("folder"):
+                possible_paths.insert(0, Path(label["folder"]) / file_name)
 
             for path in possible_paths:
                 if path.exists():
@@ -1623,7 +1621,7 @@ class WebApp:
                 dl_id = dl['id']
                 thumb_dir = SCREENSHOTS_DIR / str(dl_id)
                 has_thumbs = thumb_dir.exists() and any(thumb_dir.glob('*.jpg'))
-                file_path = find_file(file_name, dl.get('downloaded_from'))
+                file_path = find_file(file_name, dl.get('downloaded_from'), dl.get('label_id'))
 
                 # File missing, thumbnails exist → delete orphans
                 if not file_path and has_thumbs:

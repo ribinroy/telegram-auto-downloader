@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { X, Link, Loader2, AlertCircle, CheckCircle, Download, Folder } from 'lucide-react';
-import { checkUrl, downloadUrl, fetchMappingBySource } from '../api';
-import type { UrlCheckResult, VideoFormat } from '../types';
+import { X, Link, Loader2, AlertCircle, CheckCircle, Download, Folder, Tag } from 'lucide-react';
+import { checkUrl, downloadUrl, fetchLabels, fetchSourceLabels } from '../api';
+import type { UrlCheckResult, VideoFormat, Label } from '../types';
 import { formatBytes } from '../utils/format';
 
 // Extract domain/source from URL (e.g., youtube.com -> youtube)
@@ -42,7 +42,8 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
   const [selectedFormat, setSelectedFormat] = useState<VideoFormat | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [customFilename, setCustomFilename] = useState('');
-  const [downloadFolder, setDownloadFolder] = useState<string | null>(null);
+  const [labels, setLabels] = useState<Label[]>([]);
+  const [selectedLabelId, setSelectedLabelId] = useState<number | null>(null);
   const hasAutoChecked = useRef(false);
   const filenameInputRef = useRef<HTMLInputElement>(null);
 
@@ -53,7 +54,6 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
     setError(null);
     setCheckResult(null);
     setSelectedFormat(null);
-    setDownloadFolder(null);
 
     try {
       const result = await checkUrl(urlToCheck.trim());
@@ -62,33 +62,28 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
         setError(result.error || 'URL not supported');
       }
 
-      // Fetch mapping for folder display and default quality
+      // Resolve the source's default label (for folder display + default quality)
       const source = getSourceFromUrl(urlToCheck);
-      if (source) {
-        try {
-          const fetchedMapping = await fetchMappingBySource(source);
-          if (fetchedMapping?.download_folder) {
-            setDownloadFolder(fetchedMapping.download_folder);
-          }
+      let defaultLabel: Label | undefined;
+      try {
+        const [allLabels, srcLabels] = await Promise.all([fetchLabels(), fetchSourceLabels()]);
+        setLabels(allLabels);
+        const def = srcLabels.find(s => s.source === source);
+        defaultLabel = def ? allLabels.find(l => l.id === def.label_id) : undefined;
+        setSelectedLabelId(defaultLabel?.id ?? null);
+      } catch {
+        // Ignore label fetch errors
+      }
 
-          if (result.formats && result.formats.length > 0) {
-            let defaultFormat: VideoFormat | null = null;
-            if (fetchedMapping?.quality) {
-              const targetQuality = fetchedMapping.quality.toLowerCase().replace('p', '');
-              defaultFormat = result.formats.find(f =>
-                f.resolution?.toLowerCase().replace('p', '') === targetQuality
-              ) || null;
-            }
-            setSelectedFormat(defaultFormat || result.formats[0]);
-          }
-        } catch {
-          // Ignore mapping fetch errors, just use default
-          if (result.formats && result.formats.length > 0) {
-            setSelectedFormat(result.formats[0]);
-          }
+      if (result.formats && result.formats.length > 0) {
+        let defaultFormat: VideoFormat | null = null;
+        if (defaultLabel?.quality) {
+          const targetQuality = defaultLabel.quality.toLowerCase().replace('p', '');
+          defaultFormat = result.formats.find(f =>
+            f.resolution?.toLowerCase().replace('p', '') === targetQuality
+          ) || null;
         }
-      } else if (result.formats && result.formats.length > 0) {
-        setSelectedFormat(result.formats[0]);
+        setSelectedFormat(defaultFormat || result.formats[0]);
       }
     } catch {
       setError('Failed to check URL');
@@ -159,6 +154,7 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
         ext: selectedFormat?.ext || checkResult.ext,
         filesize: selectedFormat?.filesize || checkResult.filesize,
         resolution: selectedFormat?.resolution,
+        label_id: selectedLabelId,
       });
     } catch {
       // Error will be shown in the download list
@@ -173,7 +169,7 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
     setChecking(false);
     setCustomFilename('');
     setDownloading(false);
-    setDownloadFolder(null);
+    setSelectedLabelId(null);
     onClose();
   };
 

@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { Outlet, useNavigate, useLocation, useOutletContext } from 'react-router-dom';
 import { Wifi, WifiOff, HardDrive, Clock, Zap, LogOut, Settings, BarChart3 } from 'lucide-react';
 import { formatBytes, formatSpeed } from '../utils/format';
-import { fetchDownloads, fetchStats, fetchAuthors, retryDownload, stopDownload, pauseDownload, resumeDownload, deleteDownload, fetchSecuredMappingIds, fetchVpsConfig, fetchVpsFolders, type SortBy, type SortOrder } from '../api';
+import { fetchDownloads, fetchStats, fetchAuthors, retryDownload, stopDownload, pauseDownload, resumeDownload, deleteDownload, fetchHiddenLabelIds, fetchVpsConfig, fetchVpsFolders, type SortBy, type SortOrder } from '../api';
 import { connectSocket, disconnectSocket, type ProgressUpdate, type StatusUpdate, type DeletedUpdate, type MetaUpdate } from '../api/socket';
 import { ToastContainer, useToast } from './Toast';
 import { ROUTES } from '../routes';
@@ -38,7 +38,7 @@ export interface LayoutContext {
   pastedUrl: string | null;
   setPastedUrl: (url: string | null) => void;
   showSecured: boolean;
-  loadSecuredMappingIds: () => Promise<void>;
+  loadHiddenLabelIds: () => Promise<void>;
   vpsReady: boolean;
 }
 
@@ -67,9 +67,9 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
   const [authors, setAuthors] = useState<string[]>([]);
   const [selectedAuthor, setSelectedAuthor] = useState<string>('');
 
-  // Secured state
-  const [securedMappingIds, setSecuredMappingIds] = useState<number[]>([]);
-  const [securedMappingIdsLoaded, setSecuredMappingIdsLoaded] = useState(false);
+  // Secured/hidden state (driven by hidden labels)
+  const [hiddenLabelIds, setHiddenLabelIds] = useState<number[]>([]);
+  const [hiddenLabelIdsLoaded, setHiddenLabelIdsLoaded] = useState(false);
   const [showSecured, setShowSecured] = useState(false);
   const [secretClickCount, setSecretClickCount] = useState(0);
   const secretClickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -172,10 +172,10 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
     if (reset) setLoading(true); else setLoadingMore(true);
     try {
       const offset = reset ? 0 : downloads.length;
-      const excludeIds = showSecured ? undefined : securedMappingIds;
+      const excludeIds = showSecured ? undefined : hiddenLabelIds;
       const data = await fetchDownloads({
         search: debouncedSearch, filter: 'all', sortBy, sortOrder,
-        limit: PAGE_SIZE, offset, excludeMappingIds: excludeIds,
+        limit: PAGE_SIZE, offset, excludeLabelIds: excludeIds,
         author: selectedAuthor || undefined,
       });
       if (reset) {
@@ -199,21 +199,21 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
       setLoading(false);
       setLoadingMore(false);
     }
-  }, [debouncedSearch, sortBy, sortOrder, showSecured, securedMappingIds, selectedAuthor, downloads.length]);
+  }, [debouncedSearch, sortBy, sortOrder, showSecured, hiddenLabelIds, selectedAuthor, downloads.length]);
 
   const loadMore = useCallback(() => {
     if (!loadingMore && hasMore) loadDownloads(false);
   }, [loadDownloads, loadingMore, hasMore]);
 
-  // Fetch secured mapping IDs
-  const loadSecuredMappingIds = useCallback(async () => {
+  // Fetch hidden label IDs (drive the secured view)
+  const loadHiddenLabelIds = useCallback(async () => {
     try {
-      const ids = await fetchSecuredMappingIds();
-      setSecuredMappingIds(ids);
+      const ids = await fetchHiddenLabelIds();
+      setHiddenLabelIds(ids);
     } catch {
-      console.error('Failed to fetch secured mapping IDs');
+      console.error('Failed to fetch hidden label IDs');
     } finally {
-      setSecuredMappingIdsLoaded(true);
+      setHiddenLabelIdsLoaded(true);
     }
   }, []);
 
@@ -237,17 +237,17 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
 
   // Load initial data
   useEffect(() => {
-    loadSecuredMappingIds();
+    loadHiddenLabelIds();
     loadStats();
     loadAuthors();
     loadVpsReady();
-  }, [loadSecuredMappingIds, loadStats, loadAuthors, loadVpsReady]);
+  }, [loadHiddenLabelIds, loadStats, loadAuthors, loadVpsReady]);
 
   // Reload downloads when filters change
   useEffect(() => {
-    if (securedMappingIdsLoaded) loadDownloads(true);
+    if (hiddenLabelIdsLoaded) loadDownloads(true);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedSearch, sortBy, sortOrder, showSecured, securedMappingIds, securedMappingIdsLoaded, selectedAuthor]);
+  }, [debouncedSearch, sortBy, sortOrder, showSecured, hiddenLabelIds, hiddenLabelIdsLoaded, selectedAuthor]);
 
   // Download actions
   const onRetry = async (id: number) => { await retryDownload(id); };
@@ -288,7 +288,7 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
     authors, selectedAuthor, setSelectedAuthor,
     loadMore, onRetry, onStop, onPause, onResume, onDelete,
     addUrlOpen, setAddUrlOpen, pastedUrl, setPastedUrl,
-    showSecured, loadSecuredMappingIds,
+    showSecured, loadHiddenLabelIds,
     vpsReady,
   };
 

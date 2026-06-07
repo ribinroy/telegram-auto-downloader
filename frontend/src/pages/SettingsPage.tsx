@@ -1,19 +1,18 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Loader2, AlertCircle, CheckCircle, Key, FolderCog, Plus, Trash2, Shield, ShieldOff, Pencil, Check, Cookie, Wrench, Server } from 'lucide-react';
-import { updatePassword, fetchMappings, addMapping, updateMapping, deleteMapping, fetchCookies, saveCookies, syncThumbnails, getYtdlpVersion, upgradeYtdlp } from '../api';
+import { Loader2, AlertCircle, CheckCircle, Key, Tag, Cookie, Wrench, Server } from 'lucide-react';
+import { updatePassword, fetchCookies, saveCookies, syncThumbnails, getYtdlpVersion, upgradeYtdlp } from '../api';
 import type { SyncThumbnailsResult } from '../api';
-import type { DownloadTypeMap } from '../types';
-import { ConfirmDialog } from '../components/ConfirmDialog';
 import { VpsSettings } from '../components/VpsSettings';
+import { LabelsSettings } from '../components/LabelsSettings';
 import { useLayoutContext } from '../components/Layout';
 import { settingsTab } from '../routes';
 
-type TabType = 'password' | 'mappings' | 'cookies' | 'jobs' | 'vps';
-const TAB_IDS: TabType[] = ['password', 'mappings', 'cookies', 'vps', 'jobs'];
+type TabType = 'password' | 'labels' | 'cookies' | 'jobs' | 'vps';
+const TAB_IDS: TabType[] = ['password', 'labels', 'cookies', 'vps', 'jobs'];
 
 export function SettingsPage() {
-  const { showSecured: showMappings, loadSecuredMappingIds: onMappingsChanged } = useLayoutContext();
+  const { loadHiddenLabelIds: onLabelsChanged } = useLayoutContext();
   const { tab } = useParams<{ tab?: string }>();
   const navigate = useNavigate();
   const isValidTab = (t?: string): t is TabType => !!t && (TAB_IDS as string[]).includes(t);
@@ -37,28 +36,6 @@ export function SettingsPage() {
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [passwordSuccess, setPasswordSuccess] = useState(false);
 
-  // Mappings state
-  const [mappings, setMappings] = useState<DownloadTypeMap[]>([]);
-  const [mappingsLoading, setMappingsLoading] = useState(false);
-  const [mappingsError, setMappingsError] = useState<string | null>(null);
-
-  // New mapping form
-  const [showAddForm, setShowAddForm] = useState(false);
-  const [newDownloadedFrom, setNewDownloadedFrom] = useState('');
-  const [newIsSecured, setNewIsSecured] = useState(false);
-  const [newFolder, setNewFolder] = useState('');
-  const [newQuality, setNewQuality] = useState('');
-  const [addingMapping, setAddingMapping] = useState(false);
-
-  // Edit mapping state
-  const [editingId, setEditingId] = useState<number | null>(null);
-  const [editFolder, setEditFolder] = useState('');
-  const [editQuality, setEditQuality] = useState('');
-  const [savingEdit, setSavingEdit] = useState(false);
-
-  // Delete confirmation
-  const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null);
-
   // Cookies state
   const [cookiesContent, setCookiesContent] = useState('');
   const [cookiesLoading, setCookiesLoading] = useState(false);
@@ -76,13 +53,6 @@ export function SettingsPage() {
   const [ytdlpUpgrading, setYtdlpUpgrading] = useState(false);
   const [ytdlpResult, setYtdlpResult] = useState<{ old_version?: string; new_version?: string; upgraded?: boolean } | null>(null);
   const [ytdlpError, setYtdlpError] = useState<string | null>(null);
-
-  // Load mappings when tab changes to mappings
-  useEffect(() => {
-    if (activeTab === 'mappings') {
-      loadMappings();
-    }
-  }, [activeTab]);
 
   // Load cookies when tab changes to cookies
   useEffect(() => {
@@ -163,19 +133,6 @@ export function SettingsPage() {
     }
   };
 
-  const loadMappings = async () => {
-    setMappingsLoading(true);
-    setMappingsError(null);
-    try {
-      const data = await fetchMappings();
-      setMappings(data);
-    } catch {
-      setMappingsError('Failed to load mappings');
-    } finally {
-      setMappingsLoading(false);
-    }
-  };
-
   const handlePasswordSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setPasswordError(null);
@@ -205,101 +162,9 @@ export function SettingsPage() {
     }
   };
 
-  const handleAddMapping = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newDownloadedFrom.trim()) return;
-
-    setAddingMapping(true);
-    setMappingsError(null);
-    try {
-      const result = await addMapping(
-        newDownloadedFrom.trim().toLowerCase(),
-        newIsSecured,
-        newFolder.trim() || null,
-        newQuality.trim() || null
-      );
-      if ('error' in result) {
-        setMappingsError(result.error);
-      } else {
-        setMappings(prev => [...prev, result].sort((a, b) => a.downloaded_from.localeCompare(b.downloaded_from)));
-        setNewDownloadedFrom('');
-        setNewIsSecured(false);
-        setNewFolder('');
-        setNewQuality('');
-        setShowAddForm(false);
-        onMappingsChanged?.();
-      }
-    } catch {
-      setMappingsError('Failed to add mapping');
-    } finally {
-      setAddingMapping(false);
-    }
-  };
-
-  const handleToggleSecured = async (mapping: DownloadTypeMap) => {
-    try {
-      const result = await updateMapping(mapping.id, { is_secured: !mapping.is_secured });
-      if ('error' in result) {
-        setMappingsError(result.error);
-      } else {
-        setMappings(prev => prev.map(m => m.id === mapping.id ? result : m));
-        onMappingsChanged?.();
-      }
-    } catch {
-      setMappingsError('Failed to update mapping');
-    }
-  };
-
-  const handleStartEdit = (mapping: DownloadTypeMap) => {
-    setEditingId(mapping.id);
-    setEditFolder(mapping.folder || '');
-    setEditQuality(mapping.quality || '');
-  };
-
-  const handleCancelEdit = () => {
-    setEditingId(null);
-    setEditFolder('');
-    setEditQuality('');
-  };
-
-  const handleSaveEdit = async (id: number) => {
-    setSavingEdit(true);
-    setMappingsError(null);
-    try {
-      const result = await updateMapping(id, {
-        folder: editFolder.trim() || null,
-        quality: editQuality.trim() || null
-      });
-      if ('error' in result) {
-        setMappingsError(result.error);
-      } else {
-        setMappings(prev => prev.map(m => m.id === id ? result : m));
-        setEditingId(null);
-        setEditFolder('');
-        setEditQuality('');
-        onMappingsChanged?.();
-      }
-    } catch {
-      setMappingsError('Failed to update mapping');
-    } finally {
-      setSavingEdit(false);
-    }
-  };
-
-  const handleDeleteMapping = async (id: number) => {
-    try {
-      await deleteMapping(id);
-      setMappings(prev => prev.filter(m => m.id !== id));
-      onMappingsChanged?.();
-    } catch (err) {
-      setMappingsError(err instanceof Error ? err.message : 'Failed to delete mapping');
-    }
-    setDeleteConfirmId(null);
-  };
-
   const tabs: { id: TabType; label: string; description: string; icon: typeof Key; show: boolean }[] = [
     { id: 'password', label: 'Password', description: 'Change your account password', icon: Key, show: true },
-    { id: 'mappings', label: 'Mappings', description: 'Per-source folders & quality', icon: FolderCog, show: showMappings },
+    { id: 'labels', label: 'Labels', description: 'Destinations & defaults', icon: Tag, show: true },
     { id: 'cookies', label: 'Cookies', description: 'yt-dlp browser cookies', icon: Cookie, show: true },
     { id: 'vps', label: 'VPS Connection', description: 'Remote SSH/SFTP server', icon: Server, show: true },
     { id: 'jobs', label: 'Jobs', description: 'Maintenance & tools', icon: Wrench, show: true },
@@ -421,229 +286,7 @@ export function SettingsPage() {
           </>
         )}
 
-        {activeTab === 'mappings' && showMappings && (
-          <>
-            {mappingsError && (
-              <div className="flex items-center gap-2 bg-red-500/20 border border-red-500/50 rounded-lg p-3 mb-4 text-red-400 text-sm">
-                <AlertCircle className="w-4 h-4 shrink-0" />
-                <span>{mappingsError}</span>
-              </div>
-            )}
-
-            <p className="text-sm text-slate-400 mb-4">
-              Configure download sources. Secured sources are hidden from the download list.
-            </p>
-
-            {!showAddForm && (
-              <button
-                onClick={() => setShowAddForm(true)}
-                className="flex items-center gap-2 text-sm text-cyan-400 hover:text-cyan-300 mb-4"
-              >
-                <Plus className="w-4 h-4" />
-                Add Mapping
-              </button>
-            )}
-
-            {showAddForm && (
-              <form onSubmit={handleAddMapping} className="bg-slate-700/30 rounded-lg p-3 mb-4 space-y-3">
-                <div>
-                  <label className="block text-sm text-slate-400 mb-1">Source (domain or identifier)</label>
-                  <input
-                    type="text"
-                    value={newDownloadedFrom}
-                    onChange={(e) => setNewDownloadedFrom(e.target.value)}
-                    placeholder="e.g., youtube, twitter, tiktok"
-                    className="w-full bg-slate-800 border border-slate-600 rounded-lg py-2 px-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 transition-colors"
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm text-slate-400 mb-1">Folder (optional, full path)</label>
-                  <input
-                    type="text"
-                    value={newFolder}
-                    onChange={(e) => setNewFolder(e.target.value)}
-                    placeholder="e.g., /mnt/storage/Videos"
-                    className="w-full bg-slate-800 border border-slate-600 rounded-lg py-2 px-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 transition-colors"
-                  />
-                  <p className="text-xs text-slate-500 mt-1">
-                    Run <code className="bg-slate-800 px-1 rounded">sudo chmod 777 /path/to/folder</code> to ensure write permissions
-                  </p>
-                </div>
-                <div>
-                  <label className="block text-sm text-slate-400 mb-1">Default Quality (optional)</label>
-                  <input
-                    type="text"
-                    value={newQuality}
-                    onChange={(e) => setNewQuality(e.target.value)}
-                    placeholder="e.g., 720p, 1080p, 480p"
-                    className="w-full bg-slate-800 border border-slate-600 rounded-lg py-2 px-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 transition-colors"
-                  />
-                  <p className="text-xs text-slate-500 mt-1">
-                    Auto-select this quality when downloading from this source
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    id="newIsSecured"
-                    checked={newIsSecured}
-                    onChange={(e) => setNewIsSecured(e.target.checked)}
-                    className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-cyan-500 focus:ring-cyan-500 focus:ring-offset-0"
-                  />
-                  <label htmlFor="newIsSecured" className="text-sm text-slate-300">
-                    Hide downloads from this source
-                  </label>
-                </div>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowAddForm(false);
-                      setNewDownloadedFrom('');
-                      setNewIsSecured(false);
-                      setNewFolder('');
-                      setNewQuality('');
-                    }}
-                    className="flex-1 py-2 bg-slate-600 hover:bg-slate-500 text-white text-sm rounded-lg transition-colors"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={addingMapping || !newDownloadedFrom.trim()}
-                    className="flex-1 py-2 bg-cyan-600 hover:bg-cyan-500 disabled:bg-cyan-800 disabled:cursor-not-allowed text-white text-sm rounded-lg transition-colors flex items-center justify-center gap-2"
-                  >
-                    {addingMapping ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Add'}
-                  </button>
-                </div>
-              </form>
-            )}
-
-            {mappingsLoading ? (
-              <div className="flex items-center justify-center py-8">
-                <Loader2 className="w-6 h-6 text-cyan-500 animate-spin" />
-              </div>
-            ) : mappings.length === 0 ? (
-              <div className="text-center py-8 text-slate-400">
-                <FolderCog className="w-8 h-8 mx-auto mb-2 opacity-50" />
-                <p className="text-sm">No mappings configured</p>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {mappings.map((mapping) => (
-                  <div
-                    key={mapping.id}
-                    className="bg-slate-700/30 rounded-lg p-3"
-                  >
-                    {editingId === mapping.id ? (
-                      <div className="space-y-2">
-                        <div className="flex items-center gap-2">
-                          <span className="text-white font-medium">{mapping.downloaded_from}</span>
-                          {mapping.is_secured && (
-                            <span className="px-1.5 py-0.5 text-xs bg-red-500/20 text-red-400 rounded">
-                              Hidden
-                            </span>
-                          )}
-                        </div>
-                        <div>
-                          <label className="block text-xs text-slate-500 mb-1">Folder</label>
-                          <input
-                            type="text"
-                            value={editFolder}
-                            onChange={(e) => setEditFolder(e.target.value)}
-                            placeholder="Folder path (optional)"
-                            className="w-full bg-slate-800 border border-slate-600 rounded-lg py-1.5 px-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 transition-colors"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs text-slate-500 mb-1">Default Quality</label>
-                          <input
-                            type="text"
-                            value={editQuality}
-                            onChange={(e) => setEditQuality(e.target.value)}
-                            placeholder="e.g., 720p, 1080p"
-                            className="w-full bg-slate-800 border border-slate-600 rounded-lg py-1.5 px-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 transition-colors"
-                          />
-                        </div>
-                        <div className="flex gap-2">
-                          <button
-                            onClick={handleCancelEdit}
-                            className="flex-1 py-1.5 bg-slate-600 hover:bg-slate-500 text-white text-sm rounded-lg transition-colors"
-                          >
-                            Cancel
-                          </button>
-                          <button
-                            onClick={() => handleSaveEdit(mapping.id)}
-                            disabled={savingEdit}
-                            className="flex-1 py-1.5 bg-cyan-600 hover:bg-cyan-500 disabled:bg-cyan-800 text-white text-sm rounded-lg transition-colors flex items-center justify-center gap-1"
-                          >
-                            {savingEdit ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
-                            Save
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="flex items-center justify-between">
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="text-white font-medium truncate">{mapping.downloaded_from}</span>
-                            {mapping.is_secured && (
-                              <span className="px-1.5 py-0.5 text-xs bg-red-500/20 text-red-400 rounded">
-                                Hidden
-                              </span>
-                            )}
-                            {mapping.quality && (
-                              <span className="px-1.5 py-0.5 text-xs bg-cyan-500/20 text-cyan-400 rounded">
-                                {mapping.quality}
-                              </span>
-                            )}
-                          </div>
-                          {mapping.folder && (
-                            <p className="text-xs text-slate-400 truncate mt-0.5">
-                              Folder: {mapping.folder}
-                            </p>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-2 ml-2">
-                          <button
-                            onClick={() => handleStartEdit(mapping)}
-                            className="p-2 bg-slate-600/50 hover:bg-slate-600 text-slate-400 hover:text-white rounded-lg transition-colors"
-                            title="Edit mapping"
-                          >
-                            <Pencil className="w-4 h-4" />
-                          </button>
-                          <button
-                            onClick={() => handleToggleSecured(mapping)}
-                            className={`p-2 rounded-lg transition-colors ${
-                              mapping.is_secured
-                                ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
-                                : 'bg-slate-600/50 text-slate-400 hover:bg-slate-600'
-                            }`}
-                            title={mapping.is_secured ? 'Show in list' : 'Hide from list'}
-                          >
-                            {mapping.is_secured ? (
-                              <Shield className="w-4 h-4" />
-                            ) : (
-                              <ShieldOff className="w-4 h-4" />
-                            )}
-                          </button>
-                          <button
-                            onClick={() => setDeleteConfirmId(mapping.id)}
-                            className="p-2 bg-slate-600/50 hover:bg-red-500/20 text-slate-400 hover:text-red-400 rounded-lg transition-colors"
-                            title="Delete mapping"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </>
-        )}
+        {activeTab === 'labels' && <LabelsSettings onChange={onLabelsChanged} />}
 
         {activeTab === 'cookies' && (
           <>
@@ -832,17 +475,6 @@ export function SettingsPage() {
         )}
         </div>
       </div>
-
-      {/* Delete confirmation dialog */}
-      <ConfirmDialog
-        isOpen={deleteConfirmId !== null}
-        title="Delete Mapping?"
-        message="This will remove the mapping configuration. Downloads from this source will no longer be hidden."
-        confirmText="Delete"
-        variant="danger"
-        onConfirm={() => deleteConfirmId && handleDeleteMapping(deleteConfirmId)}
-        onCancel={() => setDeleteConfirmId(null)}
-      />
     </div>
   );
 }
