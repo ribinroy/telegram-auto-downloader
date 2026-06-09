@@ -144,10 +144,10 @@ class TelegramDownloader:
 
         kind = get_media_folder(msg.file.mime_type)
 
-        # Route to the default label for the 'telegram' source, else DOWNLOAD_DIR/<kind>
-        from backend.utils import resolve_label, label_folder
-        label = resolve_label('telegram')
-        folder = label_folder(label, DOWNLOAD_DIR / kind)
+        # Route to the 'telegram' source's configured folder, else DOWNLOAD_DIR/<kind>
+        from backend.utils import resolve_spec, spec_folder
+        spec = resolve_spec('telegram')
+        folder = spec_folder(spec, DOWNLOAD_DIR / kind)
         folder.mkdir(parents=True, exist_ok=True)
 
         path = folder / filename
@@ -334,11 +334,10 @@ class TelegramDownloader:
 
         db = get_db()
 
-        # Route to the default label for the 'telegram' source, else DOWNLOAD_DIR/<kind>
-        from backend.utils import resolve_label, label_folder
-        label = resolve_label('telegram')
-        label_id = label['id'] if label else None
-        folder = label_folder(label, DOWNLOAD_DIR / kind)
+        # Route to the 'telegram' source's configured folder, else DOWNLOAD_DIR/<kind>
+        from backend.utils import resolve_spec, spec_folder
+        spec = resolve_spec('telegram')
+        folder = spec_folder(spec, DOWNLOAD_DIR / kind)
         folder.mkdir(parents=True, exist_ok=True)
 
         filename = event.file.name or f"{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -369,7 +368,6 @@ class TelegramDownloader:
             pending_time=None,
             message_id=event.id,
             author=author,
-            label_id=label_id,
         )
 
         # Emit new download event

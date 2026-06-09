@@ -15,11 +15,11 @@ import {
   ExternalLink,
   User,
   Image,
-  Tag,
+  EyeOff,
   FolderOpen
 } from 'lucide-react';
 import ReactTimeAgo from 'react-time-ago';
-import type { Download, Label } from '../types';
+import type { Download } from '../types';
 import { formatBytes, formatTime, formatSpeed } from '../utils/format';
 import { ConfirmDialog } from './ConfirmDialog';
 import { VideoPlayerModal } from './VideoPlayerModal';
@@ -28,7 +28,6 @@ import { checkVideoFile, getVideoStreamUrl, getThumbUrl } from '../api';
 
 interface DownloadItemProps {
   download: Download;
-  label?: Label;  // The label this download is connected to (for display)
   onRetry: (id: number) => void;
   onStop: (message_id: string) => void;
   onPause: (message_id: string) => void;
@@ -210,7 +209,7 @@ function parseAuthor(author: string | null): { displayName: string; tooltip: str
   return { displayName: author, tooltip: author };
 }
 
-export function DownloadItem({ download, label, onRetry, onStop, onPause, onResume, onDelete }: DownloadItemProps) {
+export function DownloadItem({ download, onRetry, onStop, onPause, onResume, onDelete }: DownloadItemProps) {
   const [confirmAction, setConfirmAction] = useState<'stop' | 'delete' | null>(null);
   const [videoPlayerOpen, setVideoPlayerOpen] = useState(false);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
@@ -364,17 +363,18 @@ export function DownloadItem({ download, label, onRetry, onStop, onPause, onResu
     }
   };
 
-  // Label name + destination folder chip, reused wherever the size/bytes are shown
-  const labelChip = label ? (
+  // Destination folder + hidden chip, reused wherever the size/bytes are shown
+  const labelChip = (download.dest_folder || download.hidden) ? (
     <span className="flex items-center gap-1.5 min-w-0 max-w-full">
-      <span className="flex items-center gap-1 text-xs text-cyan-300 bg-cyan-500/10 border border-cyan-500/20 rounded px-1.5 py-0.5 shrink-0">
-        <Tag className="w-3 h-3" />
-        {label.name}
-      </span>
-      {label.folder && (
-        <span className="flex items-center gap-1 text-xs min-w-0" title={label.folder}>
+      {download.hidden && (
+        <span className="flex items-center gap-1 text-xs text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded px-1.5 py-0.5 shrink-0" title="Hidden from the default view">
+          <EyeOff className="w-3 h-3" />
+        </span>
+      )}
+      {download.dest_folder && (
+        <span className="flex items-center gap-1 text-xs min-w-0" title={download.dest_folder}>
           <FolderOpen className="w-3 h-3 shrink-0" />
-          <span className="truncate">{label.folder}</span>
+          <span className="truncate">{download.dest_folder}</span>
         </span>
       )}
     </span>
@@ -575,7 +575,7 @@ export function DownloadItem({ download, label, onRetry, onStop, onPause, onResu
               </div>
             </div>
           )}
-          {!showProgressBar && (download.status === 'done' || label) && (
+          {!showProgressBar && (download.status === 'done' || labelChip) && (
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-400 mb-2">
               {download.status === 'done' && <span>Size: {formatBytes(download.total_bytes)}</span>}
               {labelChip}

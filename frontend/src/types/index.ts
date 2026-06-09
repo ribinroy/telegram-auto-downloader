@@ -36,7 +36,8 @@ export interface Download {
   author: string | null;  // username:id for telegram, username for downlee
   file_meta: FileMeta | null;  // Video/audio metadata for video files
   thumb_count: number;  // Number of thumbnail images available
-  label_id?: number | null;  // Label this download is connected to
+  hidden?: boolean;  // Computed: source/watchfolder is secured
+  dest_folder?: string | null;  // Computed: configured destination folder
 }
 
 export interface VideoFormat {
@@ -80,23 +81,15 @@ export interface DownloadsResponse {
   total: number;
 }
 
-export interface Label {
+/** Per-source download specs: destination folder, default quality, hide. */
+export interface SourceMapping {
   id: number;
-  name: string;
+  downloaded_from: string;
+  is_secured: boolean;
   folder: string | null;
   quality: string | null;
-  is_hidden: boolean;
-  is_system: boolean;
   created_at: string | null;
   updated_at: string | null;
-}
-
-export interface SourceLabel {
-  id?: number;
-  source: string;
-  /** null = source-wide default; set = per-path override (e.g. a VPS folder). */
-  path?: string | null;
-  label_id: number | null;
 }
 
 // Analytics types

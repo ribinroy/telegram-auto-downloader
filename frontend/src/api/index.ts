@@ -1,4 +1,4 @@
-import type { DownloadsResponse, Stats, UrlCheckResult, Download, Label, SourceLabel, AnalyticsData } from '../types';
+import type { DownloadsResponse, Stats, UrlCheckResult, Download, SourceMapping, AnalyticsData } from '../types';
 
 const API_BASE = import.meta.env.DEV ? 'http://192.168.0.135:4444' : '';
 const TOKEN_KEY = 'auth_token';
@@ -72,7 +72,7 @@ export interface FetchDownloadsOptions {
   sortOrder?: SortOrder;
   limit?: number;
   offset?: number;
-  excludeLabelIds?: number[];
+  includeHidden?: boolean;
   author?: string;
 }
 
@@ -84,7 +84,7 @@ export async function fetchDownloads(options: FetchDownloadsOptions = {}): Promi
     sortOrder = 'desc',
     limit = 30,
     offset = 0,
-    excludeLabelIds,
+    includeHidden,
     author,
   } = options;
 
@@ -95,9 +95,7 @@ export async function fetchDownloads(options: FetchDownloadsOptions = {}): Promi
   params.set('sort_order', sortOrder);
   params.set('limit', limit.toString());
   params.set('offset', offset.toString());
-  if (excludeLabelIds && excludeLabelIds.length > 0) {
-    params.set('exclude_label_ids', excludeLabelIds.join(','));
-  }
+  if (includeHidden) params.set('include_hidden', 'true');
   if (author) params.set('author', author);
 
   const url = `${API_BASE}/api/downloads?${params.toString()}`;
@@ -187,7 +185,6 @@ export interface DownloadOptions {
   ext?: string;
   filesize?: number;
   resolution?: string;
-  label_id?: number | null;
 }
 
 export async function downloadUrl(options: DownloadOptions): Promise<Download | { error: string }> {
@@ -203,23 +200,17 @@ export async function downloadUrl(options: DownloadOptions): Promise<Download | 
   return response.json();
 }
 
-// Labels API
-export async function fetchLabels(): Promise<Label[]> {
-  const response = await fetch(`${API_BASE}/api/labels`, { headers: getAuthHeaders() });
+// Per-source download specs (mappings) API
+export async function fetchMappings(): Promise<SourceMapping[]> {
+  const response = await fetch(`${API_BASE}/api/mappings`, { headers: getAuthHeaders() });
   if (response.status === 401) { clearToken(); window.location.reload(); }
   return response.json();
 }
 
-export async function fetchHiddenLabelIds(): Promise<number[]> {
-  const response = await fetch(`${API_BASE}/api/labels/hidden-ids`, { headers: getAuthHeaders() });
-  if (response.status === 401) { clearToken(); window.location.reload(); }
-  return response.json();
-}
-
-export async function createLabel(
-  data: { name: string; folder?: string | null; quality?: string | null; is_hidden?: boolean }
-): Promise<Label | { error: string }> {
-  const response = await fetch(`${API_BASE}/api/labels`, {
+export async function createMapping(
+  data: { downloaded_from: string; folder?: string | null; quality?: string | null; is_secured?: boolean }
+): Promise<SourceMapping | { error: string }> {
+  const response = await fetch(`${API_BASE}/api/mappings`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
     body: JSON.stringify(data),
@@ -228,11 +219,11 @@ export async function createLabel(
   return response.json();
 }
 
-export async function updateLabel(
+export async function updateMapping(
   id: number,
-  data: Partial<{ name: string; folder: string | null; quality: string | null; is_hidden: boolean }>
-): Promise<Label | { error: string }> {
-  const response = await fetch(`${API_BASE}/api/labels/${id}`, {
+  data: Partial<{ downloaded_from: string; folder: string | null; quality: string | null; is_secured: boolean }>
+): Promise<SourceMapping | { error: string }> {
+  const response = await fetch(`${API_BASE}/api/mappings/${id}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
     body: JSON.stringify(data),
@@ -241,33 +232,16 @@ export async function updateLabel(
   return response.json();
 }
 
-export async function deleteLabel(id: number): Promise<void> {
-  const response = await fetch(`${API_BASE}/api/labels/${id}`, {
+export async function deleteMapping(id: number): Promise<void> {
+  const response = await fetch(`${API_BASE}/api/mappings/${id}`, {
     method: 'DELETE',
     headers: getAuthHeaders(),
   });
   if (response.status === 401) { clearToken(); window.location.reload(); }
   if (!response.ok) {
     const error = await response.json();
-    throw new Error(error.error || 'Failed to delete label');
+    throw new Error(error.error || 'Failed to delete mapping');
   }
-}
-
-// Source -> default label API
-export async function fetchSourceLabels(): Promise<SourceLabel[]> {
-  const response = await fetch(`${API_BASE}/api/source-labels`, { headers: getAuthHeaders() });
-  if (response.status === 401) { clearToken(); window.location.reload(); }
-  return response.json();
-}
-
-export async function setSourceLabel(source: string, label_id: number | null, path?: string | null): Promise<SourceLabel | { source: string; label_id: null }> {
-  const response = await fetch(`${API_BASE}/api/source-labels`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-    body: JSON.stringify({ source, label_id, path: path ?? null }),
-  });
-  if (response.status === 401) { clearToken(); window.location.reload(); }
-  return response.json();
 }
 
 // Cookies API for yt-dlp authentication
@@ -410,6 +384,8 @@ export interface VpsWatchFolder {
   port: number | null;
   username: string | null;
   auto_sync: boolean;
+  folder: string | null;       // local destination folder for this watched folder
+  is_secured: boolean;         // hide downloads from this folder in the default view
   active?: boolean;
   created_at: string | null;
 }
@@ -453,18 +429,21 @@ export async function deleteVpsFolder(id: number): Promise<VpsWatchFolder[]> {
   return data.folders || [];
 }
 
-export async function setVpsFolderAutoSync(id: number, autoSync: boolean): Promise<VpsWatchFolder[]> {
+export async function updateVpsFolder(
+  id: number,
+  data: Partial<{ auto_sync: boolean; folder: string | null; is_secured: boolean }>
+): Promise<VpsWatchFolder[]> {
   const response = await fetch(`${API_BASE}/api/settings/vps/folders/${id}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-    body: JSON.stringify({ auto_sync: autoSync }),
+    body: JSON.stringify(data),
   });
   if (response.status === 401) {
     clearToken();
     window.location.reload();
   }
-  const data = await response.json();
-  return data.folders || [];
+  const result = await response.json();
+  return result.folders || [];
 }
 
 // VPS file listing (live, non-recursive contents of watched folders)
@@ -502,11 +481,11 @@ export async function fetchVpsFiles(): Promise<VpsFolderGroup[]> {
   return data.folders || [];
 }
 
-export async function downloadVpsFile(path: string, size?: number, label_id?: number | null): Promise<{ error?: string; id?: number; message_id?: string }> {
+export async function downloadVpsFile(path: string, size?: number): Promise<{ error?: string; id?: number; message_id?: string }> {
   const response = await fetch(`${API_BASE}/api/vps/download`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-    body: JSON.stringify({ path, size: size ?? 0, label_id: label_id ?? null }),
+    body: JSON.stringify({ path, size: size ?? 0 }),
   });
   if (response.status === 401) {
     clearToken();

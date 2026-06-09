@@ -108,18 +108,22 @@ def extract_meta(probe_data: dict) -> dict:
     return meta
 
 
-def find_file(file_name: str, downloaded_from: str = None, label_id: int = None) -> Path | None:
+def find_file(file_name: str, downloaded_from: str = None, url: str = None) -> Path | None:
     """Find the physical file on disk, checking common locations and the
-    download's connected label folder."""
-    db = get_db()
+    source's configured destination folder. For VPS downloads pass the
+    remote path as `url` so per-watchfolder destinations are checked too."""
+    from backend.utils import resolve_spec
     possible_paths = [
         DOWNLOAD_DIR / file_name,
         DOWNLOAD_DIR / "Videos" / file_name,
     ]
 
-    label = db.get_label(label_id)
-    if label and label.get("folder"):
-        possible_paths.insert(0, Path(label["folder"]) / file_name)
+    if downloaded_from == 'vps':
+        possible_paths.insert(0, DOWNLOAD_DIR / "VPS" / file_name)
+    spec = resolve_spec(downloaded_from or 'telegram',
+                        path=url if downloaded_from == 'vps' else None)
+    if spec.get("folder"):
+        possible_paths.insert(0, Path(spec["folder"]) / file_name)
 
     for p in possible_paths:
         if p.exists():
@@ -149,7 +153,7 @@ async def extract_and_store_meta(message_id) -> bool:
     if not filename or not is_video_file(filename):
         return False
 
-    file_path = find_file(filename, download.get('downloaded_from'), download.get('label_id'))
+    file_path = find_file(filename, download.get('downloaded_from'), download.get('url'))
     if not file_path:
         return False
 
@@ -321,6 +325,6 @@ async def poll_and_extract_meta(message_id):
         return
 
     filename = download.get('file')
-    file_path = find_file(filename, download.get('downloaded_from'), download.get('label_id'))
+    file_path = find_file(filename, download.get('downloaded_from'), download.get('url'))
     if file_path:
         await generate_thumbnails(download.get('id'), str(file_path), duration)

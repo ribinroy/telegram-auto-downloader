@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { Outlet, useNavigate, useLocation, useOutletContext } from 'react-router-dom';
 import { Wifi, WifiOff, HardDrive, Clock, Zap, LogOut, Settings, BarChart3 } from 'lucide-react';
 import { formatBytes, formatSpeed } from '../utils/format';
-import { fetchDownloads, fetchStats, fetchAuthors, retryDownload, stopDownload, pauseDownload, resumeDownload, deleteDownload, fetchHiddenLabelIds, fetchVpsConfig, fetchVpsFolders, type SortBy, type SortOrder } from '../api';
+import { fetchDownloads, fetchStats, fetchAuthors, retryDownload, stopDownload, pauseDownload, resumeDownload, deleteDownload, fetchVpsConfig, fetchVpsFolders, type SortBy, type SortOrder } from '../api';
 import { connectSocket, disconnectSocket, type ProgressUpdate, type StatusUpdate, type DeletedUpdate, type MetaUpdate } from '../api/socket';
 import { ToastContainer, useToast } from './Toast';
 import { ROUTES } from '../routes';
@@ -38,7 +38,7 @@ export interface LayoutContext {
   pastedUrl: string | null;
   setPastedUrl: (url: string | null) => void;
   showSecured: boolean;
-  loadHiddenLabelIds: () => Promise<void>;
+  refreshDownloads: () => void;
   vpsReady: boolean;
 }
 
@@ -67,9 +67,7 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
   const [authors, setAuthors] = useState<string[]>([]);
   const [selectedAuthor, setSelectedAuthor] = useState<string>('');
 
-  // Secured/hidden state (driven by hidden labels)
-  const [hiddenLabelIds, setHiddenLabelIds] = useState<number[]>([]);
-  const [hiddenLabelIdsLoaded, setHiddenLabelIdsLoaded] = useState(false);
+  // Secured/hidden state (driven by secured sources/folders)
   const [showSecured, setShowSecured] = useState(false);
   const [secretClickCount, setSecretClickCount] = useState(0);
   const secretClickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -172,10 +170,9 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
     if (reset) setLoading(true); else setLoadingMore(true);
     try {
       const offset = reset ? 0 : downloads.length;
-      const excludeIds = showSecured ? undefined : hiddenLabelIds;
       const data = await fetchDownloads({
         search: debouncedSearch, filter: 'all', sortBy, sortOrder,
-        limit: PAGE_SIZE, offset, excludeLabelIds: excludeIds,
+        limit: PAGE_SIZE, offset, includeHidden: showSecured,
         author: selectedAuthor || undefined,
       });
       if (reset) {
@@ -199,23 +196,11 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
       setLoading(false);
       setLoadingMore(false);
     }
-  }, [debouncedSearch, sortBy, sortOrder, showSecured, hiddenLabelIds, selectedAuthor, downloads.length]);
+  }, [debouncedSearch, sortBy, sortOrder, showSecured, selectedAuthor, downloads.length]);
 
   const loadMore = useCallback(() => {
     if (!loadingMore && hasMore) loadDownloads(false);
   }, [loadDownloads, loadingMore, hasMore]);
-
-  // Fetch hidden label IDs (drive the secured view)
-  const loadHiddenLabelIds = useCallback(async () => {
-    try {
-      const ids = await fetchHiddenLabelIds();
-      setHiddenLabelIds(ids);
-    } catch {
-      console.error('Failed to fetch hidden label IDs');
-    } finally {
-      setHiddenLabelIdsLoaded(true);
-    }
-  }, []);
 
   const loadStats = useCallback(async () => {
     try { setStats(await fetchStats()); } catch { console.error('Failed to fetch stats'); }
@@ -237,17 +222,16 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
 
   // Load initial data
   useEffect(() => {
-    loadHiddenLabelIds();
     loadStats();
     loadAuthors();
     loadVpsReady();
-  }, [loadHiddenLabelIds, loadStats, loadAuthors, loadVpsReady]);
+  }, [loadStats, loadAuthors, loadVpsReady]);
 
-  // Reload downloads when filters change
+  // Load downloads on mount and when filters change
   useEffect(() => {
-    if (hiddenLabelIdsLoaded) loadDownloads(true);
+    loadDownloads(true);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedSearch, sortBy, sortOrder, showSecured, hiddenLabelIds, hiddenLabelIdsLoaded, selectedAuthor]);
+  }, [debouncedSearch, sortBy, sortOrder, showSecured, selectedAuthor]);
 
   // Download actions
   const onRetry = async (id: number) => { await retryDownload(id); };
@@ -288,7 +272,7 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
     authors, selectedAuthor, setSelectedAuthor,
     loadMore, onRetry, onStop, onPause, onResume, onDelete,
     addUrlOpen, setAddUrlOpen, pastedUrl, setPastedUrl,
-    showSecured, loadHiddenLabelIds,
+    showSecured, refreshDownloads: () => loadDownloads(true),
     vpsReady,
   };
 

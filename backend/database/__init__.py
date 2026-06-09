@@ -5,7 +5,7 @@ import json
 import hashlib
 import uuid
 from datetime import datetime
-from sqlalchemy import create_engine, Column, Integer, BigInteger, String, Float, DateTime, Text, Boolean, UniqueConstraint
+from sqlalchemy import create_engine, Column, Integer, BigInteger, String, Float, DateTime, Text, Boolean
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, scoped_session
 
@@ -41,7 +41,6 @@ class Download(Base):
     file_meta = Column(Text, nullable=True)  # JSON metadata: video/audio details for video files
     thumb_count = Column(Integer, default=0)  # Number of generated thumbnail images
     status_msg_id = Column(Integer, nullable=True)  # Telegram status message ID for progress updates
-    label_id = Column(Integer, nullable=True)  # Label this download is connected to (destination)
 
     def to_dict(self):
         """Convert model to dictionary"""
@@ -66,7 +65,6 @@ class Download(Base):
             'file_meta': json.loads(self.file_meta) if self.file_meta else None,
             'thumb_count': self.thumb_count or 0,
             'status_msg_id': self.status_msg_id,
-            'label_id': self.label_id,
         }
 
 
@@ -113,52 +111,6 @@ class DownloadTypeMap(Base):
         }
 
 
-class Label(Base):
-    """A named download destination: a folder (+ default quality) that downloads
-    can be connected to. Replaces per-source folder mappings."""
-    __tablename__ = 'labels'
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    name = Column(String(100), unique=True, nullable=False)
-    folder = Column(String(255), nullable=True)
-    quality = Column(String(20), nullable=True)  # Default quality e.g. "720p", "1080p"
-    is_hidden = Column(Boolean, default=False)    # Drives the secured/hidden view
-    is_system = Column(Boolean, default=False)    # Built-in label; cannot be deleted
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow)
-
-    def to_dict(self):
-        return {
-            'id': self.id,
-            'name': self.name,
-            'folder': self.folder,
-            'quality': self.quality,
-            'is_hidden': bool(self.is_hidden),
-            'is_system': bool(self.is_system),
-            'created_at': f"{self.created_at.isoformat()}Z" if self.created_at else None,
-            'updated_at': f"{self.updated_at.isoformat()}Z" if self.updated_at else None,
-        }
-
-
-class SourceLabel(Base):
-    """A label binding for a download source (e.g. 'telegram', 'vps', 'youtube').
-
-    With path=NULL it is the source-wide default. With a path set it is a
-    per-path override (used for VPS: each watched folder can have its own label);
-    a download under that path uses this label instead of the source default.
-    """
-    __tablename__ = 'source_labels'
-    __table_args__ = (UniqueConstraint('source', 'path', name='uq_source_labels_source_path'),)
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    source = Column(String(100), nullable=False)
-    path = Column(String(1024), nullable=True)
-    label_id = Column(Integer, nullable=False)
-
-    def to_dict(self):
-        return {'id': self.id, 'source': self.source, 'path': self.path, 'label_id': self.label_id}
-
-
 class User(Base):
     """User model for authentication"""
     __tablename__ = 'users'
@@ -197,6 +149,9 @@ class VpsWatchFolder(Base):
     port = Column(Integer, default=22)
     username = Column(String(255))
     auto_sync = Column(Boolean, default=False)
+    # Per-folder download specs: local destination + hide from the default view
+    folder = Column(String(255), nullable=True)
+    is_secured = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     def to_dict(self):
@@ -207,6 +162,8 @@ class VpsWatchFolder(Base):
             'port': self.port,
             'username': self.username,
             'auto_sync': bool(self.auto_sync),
+            'folder': self.folder,
+            'is_secured': bool(self.is_secured),
             'created_at': f"{self.created_at.isoformat()}Z" if self.created_at else None,
         }
 
@@ -266,8 +223,9 @@ class DatabaseManager:
                 conn.execute(text('ALTER TABLE downloads ADD COLUMN deleted_at TIMESTAMP'))
                 conn.commit()
 
-            # Migrate vps_watch_folders: add auto_sync + connection columns, drop the
-            # legacy unique-on-path constraint (same path can exist on different hosts).
+            # Migrate vps_watch_folders: add auto_sync + connection + per-folder
+            # spec columns, drop the legacy unique-on-path constraint (same path
+            # can exist on different hosts).
             if inspector.has_table('vps_watch_folders'):
                 vps_columns = [c['name'] for c in inspector.get_columns('vps_watch_folders')]
                 if 'auto_sync' not in vps_columns:
@@ -282,89 +240,54 @@ class DatabaseManager:
                 if 'username' not in vps_columns:
                     conn.execute(text('ALTER TABLE vps_watch_folders ADD COLUMN username VARCHAR(255)'))
                     conn.commit()
-                # Drop the legacy unique constraint on path (Postgres auto-name)
-                try:
-                    conn.execute(text('ALTER TABLE vps_watch_folders DROP CONSTRAINT IF EXISTS vps_watch_folders_path_key'))
+                if 'folder' not in vps_columns:
+                    conn.execute(text('ALTER TABLE vps_watch_folders ADD COLUMN folder VARCHAR(255)'))
                     conn.commit()
-                except Exception:
-                    pass
-
-            # Add labels.label_id link on downloads
-            if 'label_id' not in columns:
-                conn.execute(text('ALTER TABLE downloads ADD COLUMN label_id INTEGER'))
-                conn.commit()
-
-            # source_labels: add per-path overrides (e.g. per-VPS-folder labels).
-            # Add the `path` column and drop the legacy unique-on-source constraint
-            # so a source can have a default row (path NULL) plus per-path rows.
-            if inspector.has_table('source_labels'):
-                sl_columns = [c['name'] for c in inspector.get_columns('source_labels')]
-                if 'path' not in sl_columns:
-                    conn.execute(text('ALTER TABLE source_labels ADD COLUMN path VARCHAR(1024)'))
-                    conn.commit()
-                try:
-                    conn.execute(text('ALTER TABLE source_labels DROP CONSTRAINT IF EXISTS source_labels_source_key'))
-                    conn.commit()
-                except Exception:
-                    pass
-
-            # Ensure labels.is_system exists (for DBs created before this column)
-            if inspector.has_table('labels'):
-                label_cols = [c['name'] for c in inspector.get_columns('labels')]
-                if 'is_system' not in label_cols:
-                    conn.execute(text('ALTER TABLE labels ADD COLUMN is_system BOOLEAN DEFAULT FALSE'))
+                if 'is_secured' not in vps_columns:
+                    conn.execute(text('ALTER TABLE vps_watch_folders ADD COLUMN is_secured BOOLEAN DEFAULT FALSE'))
                     conn.commit()
 
-        # One-time backfill: convert existing download_type_maps into labels
-        self._backfill_labels()
-        # Ensure built-in (system) labels exist
-        self._seed_system_labels()
+        # One-time reverse migration: fold the retired labels system back into
+        # per-source mappings and per-watchfolder specs.
+        self._migrate_labels_to_specs()
 
-    def _seed_system_labels(self):
-        """Create built-in labels that must always exist and can't be deleted."""
+    def _migrate_labels_to_specs(self):
+        """Copy label bindings back into download_type_maps (source-wide) and
+        vps_watch_folders (per-folder). The legacy labels/source_labels tables
+        are left in place but unused. Idempotent via a settings marker."""
+        from sqlalchemy import text, inspect
+
+        inspector = inspect(self.engine)
+        if not inspector.has_table('labels') or not inspector.has_table('source_labels'):
+            return
         session = self.get_session()
         try:
-            existing = session.query(Label).filter_by(name='Hidden').first()
-            if existing:
-                if not existing.is_system:
-                    existing.is_system = True
-                    session.commit()
+            if session.query(Settings).filter_by(key='labels_to_specs_migrated').first():
                 return
-            session.add(Label(name='Hidden', folder=None, quality=None,
-                              is_hidden=True, is_system=True))
-            session.commit()
-        except Exception:
-            session.rollback()
-        finally:
-            self.close_session()
-
-    def _backfill_labels(self):
-        """Migrate legacy download_type_maps into labels + per-source defaults,
-        then tag existing downloads with their label. Runs once (no-op if labels exist)."""
-        session = self.get_session()
-        try:
-            if session.query(Label).count() > 0:
-                return  # already migrated
-            maps = session.query(DownloadTypeMap).all()
-            if not maps:
-                return
-            source_to_label = {}
-            for m in maps:
-                label = Label(
-                    name=m.downloaded_from,
-                    folder=m.folder,
-                    quality=m.quality,
-                    is_hidden=bool(m.is_secured),
-                )
-                session.add(label)
-                session.flush()  # assign label.id
-                session.add(SourceLabel(source=m.downloaded_from, label_id=label.id))
-                source_to_label[m.downloaded_from] = label.id
-            # Tag existing downloads with the label of their source
-            for src, lid in source_to_label.items():
-                session.query(Download).filter_by(downloaded_from=src).update(
-                    {Download.label_id: lid}, synchronize_session=False
-                )
+            # Source-wide defaults -> download_type_maps
+            rows = session.execute(text(
+                "SELECT sl.source, l.folder, l.quality, l.is_hidden FROM source_labels sl "
+                "JOIN labels l ON l.id = sl.label_id WHERE sl.path IS NULL")).fetchall()
+            for source, folder, quality, is_hidden in rows:
+                mapping = session.query(DownloadTypeMap).filter_by(downloaded_from=source).first()
+                if mapping:
+                    mapping.folder = folder
+                    mapping.quality = quality
+                    mapping.is_secured = bool(is_hidden)
+                    mapping.updated_at = datetime.utcnow()
+                else:
+                    session.add(DownloadTypeMap(
+                        downloaded_from=source, folder=folder,
+                        quality=quality, is_secured=bool(is_hidden)))
+            # Per-VPS-folder overrides -> vps_watch_folders specs
+            rows = session.execute(text(
+                "SELECT sl.path, l.folder, l.is_hidden FROM source_labels sl "
+                "JOIN labels l ON l.id = sl.label_id WHERE sl.source = 'vps' AND sl.path IS NOT NULL")).fetchall()
+            for path, folder, is_hidden in rows:
+                session.query(VpsWatchFolder).filter_by(path=path).update(
+                    {VpsWatchFolder.folder: folder, VpsWatchFolder.is_secured: bool(is_hidden)},
+                    synchronize_session=False)
+            session.add(Settings(key='labels_to_specs_migrated', value='1'))
             session.commit()
         except Exception:
             session.rollback()
@@ -381,8 +304,7 @@ class DatabaseManager:
 
     def add_download(self, file, status='downloading', progress=0, speed=0,
                      error=None, downloaded_bytes=0, total_bytes=0, pending_time=None,
-                     message_id=None, downloaded_from='telegram', url=None, author=None,
-                     label_id=None):
+                     message_id=None, downloaded_from='telegram', url=None, author=None):
         """Add a new download entry"""
         session = self.get_session()
         try:
@@ -404,7 +326,6 @@ class DatabaseManager:
                 downloaded_from=downloaded_from,
                 url=url,
                 author=author,
-                label_id=label_id,
             )
             session.add(download)
             session.commit()
@@ -762,151 +683,6 @@ class DatabaseManager:
         finally:
             self.close_session()
 
-    # --- Labels ---
-    def get_labels(self):
-        """All labels, ordered by name."""
-        session = self.get_session()
-        try:
-            return [l.to_dict() for l in session.query(Label).order_by(Label.name).all()]
-        finally:
-            self.close_session()
-
-    def get_label(self, label_id: int):
-        """A single label by id, or None."""
-        if label_id is None:
-            return None
-        session = self.get_session()
-        try:
-            label = session.query(Label).filter_by(id=label_id).first()
-            return label.to_dict() if label else None
-        finally:
-            self.close_session()
-
-    def add_label(self, name: str, folder: str = None, quality: str = None, is_hidden: bool = False):
-        """Create a (user) label. Returns its dict, or {'error': ...} if the name exists."""
-        session = self.get_session()
-        try:
-            if session.query(Label).filter_by(name=name).first():
-                return {'error': 'A label with this name already exists'}
-            label = Label(name=name, folder=folder, quality=quality,
-                          is_hidden=bool(is_hidden), is_system=False)
-            session.add(label)
-            session.commit()
-            return label.to_dict()
-        finally:
-            self.close_session()
-
-    def update_label(self, label_id: int, **kwargs):
-        """Update a label's fields."""
-        session = self.get_session()
-        try:
-            label = session.query(Label).filter_by(id=label_id).first()
-            if not label:
-                return {'error': 'Label not found'}
-            for key, value in kwargs.items():
-                if key in ('name', 'folder', 'quality', 'is_hidden'):
-                    setattr(label, key, value)
-            label.updated_at = datetime.utcnow()
-            session.commit()
-            return label.to_dict()
-        finally:
-            self.close_session()
-
-    def delete_label(self, label_id: int):
-        """Delete a label; clears it from downloads and source defaults.
-
-        Returns True on success, False if not found, or {'error': ...} if the
-        label is a protected system label."""
-        session = self.get_session()
-        try:
-            label = session.query(Label).filter_by(id=label_id).first()
-            if not label:
-                return False
-            if label.is_system:
-                return {'error': 'System labels cannot be deleted'}
-            session.query(Download).filter_by(label_id=label_id).update(
-                {Download.label_id: None}, synchronize_session=False
-            )
-            session.query(SourceLabel).filter_by(label_id=label_id).delete(synchronize_session=False)
-            session.delete(label)
-            session.commit()
-            return True
-        finally:
-            self.close_session()
-
-    def get_hidden_label_ids(self):
-        """IDs of labels marked hidden (drive the secured view)."""
-        session = self.get_session()
-        try:
-            return [l.id for l in session.query(Label).filter_by(is_hidden=True).all()]
-        finally:
-            self.close_session()
-
-    # --- Source default labels ---
-    def get_source_labels(self):
-        """All source -> default label associations."""
-        session = self.get_session()
-        try:
-            return [s.to_dict() for s in session.query(SourceLabel).order_by(SourceLabel.source).all()]
-        finally:
-            self.close_session()
-
-    def set_source_label(self, source: str, label_id, path: str = None):
-        """Set (or clear, if label_id is None) the label for a source. With
-        `path` set, binds a per-path override (e.g. a specific VPS folder);
-        with path None, sets the source-wide default."""
-        path = path or None
-        session = self.get_session()
-        try:
-            existing = session.query(SourceLabel).filter_by(source=source, path=path).first()
-            if label_id is None:
-                if existing:
-                    session.delete(existing)
-                    session.commit()
-                return {'source': source, 'path': path, 'label_id': None}
-            if existing:
-                existing.label_id = label_id
-            else:
-                existing = SourceLabel(source=source, path=path, label_id=label_id)
-                session.add(existing)
-            session.commit()
-            return existing.to_dict()
-        finally:
-            self.close_session()
-
-    def get_label_for_source(self, source: str, path: str = None):
-        """Resolve the label dict for a source, optionally for a specific path.
-
-        A per-path row whose path is a prefix of `path` wins (longest match);
-        otherwise the source-wide default (path IS NULL). Returns None if neither.
-        """
-        session = self.get_session()
-        try:
-            rows = session.query(SourceLabel).filter_by(source=source).all()
-            chosen = None
-            if path:
-                best_len = -1
-                for r in rows:
-                    if not r.path:
-                        continue
-                    base = r.path.rstrip('/')
-                    if path == r.path or path == base or path.startswith(base + '/'):
-                        if len(base) > best_len:
-                            best_len = len(base)
-                            chosen = r
-            if chosen is None:
-                chosen = next((r for r in rows if not r.path), None)
-            if not chosen:
-                return None
-            label = session.query(Label).filter_by(id=chosen.label_id).first()
-            return label.to_dict() if label else None
-        finally:
-            self.close_session()
-
-    def get_default_label_for_source(self, source: str):
-        """Resolve the source-wide default label dict for a source, or None."""
-        return self.get_label_for_source(source, None)
-
     # --- VPS watch folders ---
     def get_vps_watch_folders(self):
         """Return all watched VPS folders, ordered by path."""
@@ -962,16 +738,40 @@ class DatabaseManager:
         finally:
             self.close_session()
 
-    def set_vps_watch_folder_autosync(self, folder_id: int, enabled: bool):
-        """Toggle autoSync on a watched folder. Returns its dict, or None if missing."""
+    def update_vps_watch_folder(self, folder_id: int, **kwargs):
+        """Update a watched folder's specs (auto_sync, folder, is_secured).
+        Returns its dict, or None if missing."""
         session = self.get_session()
         try:
             folder = session.query(VpsWatchFolder).filter_by(id=folder_id).first()
             if not folder:
                 return None
-            folder.auto_sync = bool(enabled)
+            if 'auto_sync' in kwargs:
+                folder.auto_sync = bool(kwargs['auto_sync'])
+            if 'folder' in kwargs:
+                folder.folder = kwargs['folder'] or None
+            if 'is_secured' in kwargs:
+                folder.is_secured = bool(kwargs['is_secured'])
             session.commit()
             return folder.to_dict()
+        finally:
+            self.close_session()
+
+    def get_vps_watch_folder_for_path(self, path: str):
+        """The watched folder containing `path` (longest prefix match), or None."""
+        if not path:
+            return None
+        session = self.get_session()
+        try:
+            best, best_len = None, -1
+            for f in session.query(VpsWatchFolder).all():
+                base = (f.path or '').rstrip('/')
+                if not base:
+                    continue
+                if path == f.path or path == base or path.startswith(base + '/'):
+                    if len(base) > best_len:
+                        best_len, best = len(base), f
+            return best.to_dict() if best else None
         finally:
             self.close_session()
 

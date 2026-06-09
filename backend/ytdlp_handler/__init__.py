@@ -323,12 +323,11 @@ class YtdlpDownloader:
         # Record download started
         metrics.record_download_started(source)
 
-        # Route to the download's connected label folder (set at start_download time),
-        # falling back to the default Videos folder.
-        from backend.utils import label_folder
-        dl_record = db.get_download_by_message_id(message_id)
-        label = db.get_label(dl_record.get('label_id')) if dl_record else None
-        output_dir = label_folder(label, DOWNLOAD_DIR / "Videos")
+        # Route to the source's configured folder, falling back to the default
+        # Videos folder.
+        from backend.utils import resolve_spec, spec_folder
+        spec = resolve_spec(source)
+        output_dir = spec_folder(spec, DOWNLOAD_DIR / "Videos")
         output_dir.mkdir(parents=True, exist_ok=True)
         print(f"[yt-dlp] Output folder: {output_dir}")
 
@@ -517,7 +516,7 @@ class YtdlpDownloader:
             self.processes.pop(message_id, None)
             self.download_tasks.pop(message_id, None)
 
-    def start_download(self, url: str, loop, format_id: str = None, title: str = None, ext: str = None, filesize: int = None, resolution: str = None, author: str = None, label_id: int = None) -> dict:
+    def start_download(self, url: str, loop, format_id: str = None, title: str = None, ext: str = None, filesize: int = None, resolution: str = None, author: str = None) -> dict:
         """Start a new download and return the download info"""
         db = get_db()
 
@@ -533,11 +532,6 @@ class YtdlpDownloader:
         # Generate UUID for this download
         message_id = generate_uuid()
         domain = self.get_domain(url)
-
-        # Resolve the connected label (override → source default → none)
-        from backend.utils import resolve_label
-        label = resolve_label(domain, label_id)
-        resolved_label_id = label['id'] if label else None
 
         # Create filename from title (without extension for yt-dlp)
         # yt-dlp will add the extension automatically
@@ -558,7 +552,6 @@ class YtdlpDownloader:
             downloaded_from=domain,
             url=url,
             author=author,
-            label_id=resolved_label_id,
         )
 
         # Emit new download event
