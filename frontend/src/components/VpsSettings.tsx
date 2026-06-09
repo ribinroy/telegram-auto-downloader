@@ -5,7 +5,7 @@ import {
   fetchVpsFolders, addVpsFolders, deleteVpsFolder, setVpsFolderAutoSync,
   type VpsConfig, type VpsWatchFolder,
 } from '../api';
-import { VpsFolderBrowser } from './VpsFolderBrowser';
+import { FolderBrowser } from './FolderBrowser';
 import { ConfirmDialog } from './ConfirmDialog';
 
 export function VpsSettings() {
@@ -408,7 +408,7 @@ export function VpsSettings() {
         )}
       </div>
 
-      <VpsFolderBrowser
+      <FolderBrowser
         isOpen={browserOpen}
         onClose={() => setBrowserOpen(false)}
         onConfirm={handleAddFolders}

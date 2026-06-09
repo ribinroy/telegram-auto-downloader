@@ -1150,6 +1150,51 @@ class WebApp:
                 if client:
                     client.close()
 
+        @self.app.route("/api/settings/local/browse", methods=["POST"])
+        @token_required
+        def browse_local():
+            """List the contents of a local directory on the home server (on demand).
+
+            Body: {path?} — absolute path to list; defaults to DOWNLOAD_DIR.
+            Returns {path, parent, entries:[{name, path, is_dir}]} with
+            directories first. Used by the folder picker (e.g. label folders).
+            """
+            from backend.config import DOWNLOAD_DIR
+            data = request.json or {}
+            req_path = (data.get("path") or "").strip()
+
+            try:
+                target = Path(req_path).expanduser() if req_path else Path(DOWNLOAD_DIR)
+                target = target.resolve()
+                if not target.is_dir():
+                    return jsonify({"error": "Not a directory"}), 400
+
+                entries = []
+                with os.scandir(target) as it:
+                    for de in it:
+                        try:
+                            is_dir = de.is_dir(follow_symlinks=True)
+                        except OSError:
+                            is_dir = False
+                        entries.append({
+                            "name": de.name,
+                            "path": str(target / de.name),
+                            "is_dir": is_dir,
+                        })
+                entries.sort(key=lambda e: (not e["is_dir"], e["name"].lower()))
+                parent = str(target.parent)
+                return jsonify({
+                    "path": str(target),
+                    "parent": None if target.parent == target else parent,
+                    "entries": entries,
+                })
+            except PermissionError:
+                return jsonify({"error": "Permission denied"}), 403
+            except FileNotFoundError:
+                return jsonify({"error": "Path not found"}), 404
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
+
         @self.app.route("/api/settings/vps/folders", methods=["GET"])
         @token_required
         def get_vps_folders():

@@ -1,12 +1,20 @@
 import { useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronRight, ChevronDown, Folder, FolderOpen, File, Loader2, AlertCircle, Check, X } from 'lucide-react';
-import { browseVps, type VpsBrowseEntry } from '../api';
+import { browseVps, type VpsBrowseEntry, type VpsBrowseResult } from '../api';
 
-interface VpsFolderBrowserProps {
+interface FolderBrowserProps {
   isOpen: boolean;
   onClose: () => void;
   onConfirm: (paths: string[]) => void;
+  /** Directory-listing function. Defaults to the VPS browser; pass browseLocal for the home server. */
+  browseFn?: (path?: string) => Promise<VpsBrowseResult>;
+  /** Pick a single folder (radio-style) instead of multiple. */
+  singleSelect?: boolean;
+  /** Modal heading. */
+  title?: string;
+  /** Pre-selected path (single-select edit flows). */
+  initialPath?: string | null;
   /** Paths already being watched — shown as already-added and not re-selectable. */
   alreadyAdded?: string[];
 }
@@ -18,7 +26,16 @@ interface NodeState {
   loaded: boolean;
 }
 
-export function VpsFolderBrowser({ isOpen, onClose, onConfirm, alreadyAdded = [] }: VpsFolderBrowserProps) {
+export function FolderBrowser({
+  isOpen,
+  onClose,
+  onConfirm,
+  browseFn = browseVps,
+  singleSelect = false,
+  title,
+  initialPath = null,
+  alreadyAdded = [],
+}: FolderBrowserProps) {
   const [rootPath, setRootPath] = useState<string>('');
   const [rootLoading, setRootLoading] = useState(false);
   const [rootError, setRootError] = useState<string | null>(null);
@@ -34,7 +51,7 @@ export function VpsFolderBrowser({ isOpen, onClose, onConfirm, alreadyAdded = []
     setRootLoading(true);
     setRootError(null);
     try {
-      const result = await browseVps('');
+      const result = await browseFn('');
       if (result.error) {
         setRootError(result.error);
       } else {
@@ -46,18 +63,18 @@ export function VpsFolderBrowser({ isOpen, onClose, onConfirm, alreadyAdded = []
     } finally {
       setRootLoading(false);
     }
-  }, []);
+  }, [browseFn]);
 
   // Reset and load on open
   useEffect(() => {
     if (isOpen) {
       setChildren({});
       setExpanded(new Set());
-      setSelected(new Set());
+      setSelected(initialPath ? new Set([initialPath]) : new Set());
       setRootEntries([]);
       loadRoot();
     }
-  }, [isOpen, loadRoot]);
+  }, [isOpen, loadRoot, initialPath]);
 
   // Escape to close
   useEffect(() => {
@@ -69,7 +86,7 @@ export function VpsFolderBrowser({ isOpen, onClose, onConfirm, alreadyAdded = []
   const loadChildren = useCallback(async (path: string) => {
     setChildren(prev => ({ ...prev, [path]: { entries: [], loading: true, error: null, loaded: false } }));
     try {
-      const result = await browseVps(path);
+      const result = await browseFn(path);
       if (result.error) {
         setChildren(prev => ({ ...prev, [path]: { entries: [], loading: false, error: result.error!, loaded: false } }));
       } else {
@@ -78,7 +95,7 @@ export function VpsFolderBrowser({ isOpen, onClose, onConfirm, alreadyAdded = []
     } catch {
       setChildren(prev => ({ ...prev, [path]: { entries: [], loading: false, error: 'Failed to load', loaded: false } }));
     }
-  }, []);
+  }, [browseFn]);
 
   const toggleExpand = useCallback((path: string) => {
     setExpanded(prev => {
@@ -95,11 +112,12 @@ export function VpsFolderBrowser({ isOpen, onClose, onConfirm, alreadyAdded = []
 
   const toggleSelect = useCallback((path: string) => {
     setSelected(prev => {
+      if (singleSelect) return prev.has(path) ? new Set() : new Set([path]);
       const next = new Set(prev);
       if (next.has(path)) next.delete(path); else next.add(path);
       return next;
     });
-  }, []);
+  }, [singleSelect]);
 
   if (!isOpen) return null;
 
@@ -128,10 +146,10 @@ export function VpsFolderBrowser({ isOpen, onClose, onConfirm, alreadyAdded = []
               <span className="w-5 shrink-0" />
             )}
 
-            {/* Checkbox (folders only, not already-added) */}
+            {/* Selection control (folders only, not already-added) */}
             {entry.is_dir && !isAdded ? (
               <input
-                type="checkbox"
+                type={singleSelect ? 'radio' : 'checkbox'}
                 checked={isSelected}
                 onChange={() => toggleSelect(entry.path)}
                 className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-cyan-500 focus:ring-cyan-500 focus:ring-offset-0 shrink-0"
@@ -149,11 +167,11 @@ export function VpsFolderBrowser({ isOpen, onClose, onConfirm, alreadyAdded = []
               <File className="w-4 h-4 text-slate-500 shrink-0" />
             )}
 
-            {/* Name */}
+            {/* Name — clicking a folder selects it; the chevron handles expand/collapse */}
             <button
-              onClick={() => entry.is_dir && !isAdded && toggleExpand(entry.path)}
-              disabled={!entry.is_dir}
-              className={`text-sm truncate text-left flex-1 ${entry.is_dir ? 'text-slate-200' : 'text-slate-500'} ${entry.is_dir ? 'cursor-pointer' : 'cursor-default'}`}
+              onClick={() => entry.is_dir && !isAdded && toggleSelect(entry.path)}
+              disabled={!entry.is_dir || isAdded}
+              className={`text-sm truncate text-left flex-1 ${entry.is_dir ? 'text-slate-200' : 'text-slate-500'} ${entry.is_dir && !isAdded ? 'cursor-pointer' : 'cursor-default'}`}
               title={entry.path}
             >
               {entry.name}
@@ -190,13 +208,21 @@ export function VpsFolderBrowser({ isOpen, onClose, onConfirm, alreadyAdded = []
     })
   );
 
+  const selectedArr = Array.from(selected);
+  const footerHint = singleSelect
+    ? (selectedArr[0] || 'No folder selected')
+    : `${selected.size} selected`;
+  const confirmText = singleSelect
+    ? 'Use this folder'
+    : `Add ${selected.size > 0 ? selected.size : ''} selected`;
+
   return createPortal(
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] p-4">
       <div className="bg-slate-800 rounded-xl w-full max-w-lg border border-slate-700 shadow-xl flex flex-col max-h-[80vh]">
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-slate-700">
           <div className="min-w-0">
-            <h3 className="text-base font-semibold text-white">Select folders to watch</h3>
+            <h3 className="text-base font-semibold text-white">{title || (singleSelect ? 'Select a folder' : 'Select folders to watch')}</h3>
             <p className="text-xs text-slate-400 truncate" title={rootPath}>{rootPath || 'Loading…'}</p>
           </div>
           <button onClick={onClose} className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-700/50 shrink-0">
@@ -224,8 +250,8 @@ export function VpsFolderBrowser({ isOpen, onClose, onConfirm, alreadyAdded = []
 
         {/* Footer */}
         <div className="flex items-center justify-between gap-3 p-3 border-t border-slate-700">
-          <span className="text-xs text-slate-400">{selected.size} selected</span>
-          <div className="flex gap-2">
+          <span className="text-xs text-slate-400 truncate min-w-0" title={footerHint}>{footerHint}</span>
+          <div className="flex gap-2 shrink-0">
             <button
               onClick={onClose}
               className="py-2 px-4 bg-slate-700 hover:bg-slate-600 text-white text-sm rounded-lg transition-colors"
@@ -233,12 +259,12 @@ export function VpsFolderBrowser({ isOpen, onClose, onConfirm, alreadyAdded = []
               Cancel
             </button>
             <button
-              onClick={() => onConfirm(Array.from(selected))}
+              onClick={() => onConfirm(selectedArr)}
               disabled={selected.size === 0}
               className="py-2 px-4 bg-cyan-600 hover:bg-cyan-500 disabled:bg-cyan-800 disabled:cursor-not-allowed text-white text-sm rounded-lg transition-colors flex items-center gap-2"
             >
               <Check className="w-4 h-4" />
-              Add {selected.size > 0 ? selected.size : ''} selected
+              {confirmText}
             </button>
           </div>
         </div>

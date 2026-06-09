@@ -1,13 +1,14 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
-  Loader2, AlertCircle, Plus, Trash2, Pencil, Check, X, Lock, Tag, Eye, EyeOff,
+  Loader2, AlertCircle, Plus, Trash2, Pencil, Check, X, Lock, Tag, Eye, EyeOff, FolderOpen,
 } from 'lucide-react';
 import {
   fetchLabels, createLabel, updateLabel, deleteLabel,
-  fetchSourceLabels, setSourceLabel,
+  fetchSourceLabels, setSourceLabel, browseLocal,
 } from '../api';
 import type { Label, SourceLabel } from '../types';
 import { ConfirmDialog } from './ConfirmDialog';
+import { FolderBrowser } from './FolderBrowser';
 
 // Sources that can have a default label
 const KNOWN_SOURCES = ['telegram', 'vps', 'youtube'];
@@ -33,6 +34,9 @@ export function LabelsSettings({ onChange }: { onChange?: () => void }) {
   const [savingEdit, setSavingEdit] = useState(false);
 
   const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null);
+
+  // Folder picker: 'new' for the add form, or a label id for an inline edit
+  const [browseTarget, setBrowseTarget] = useState<'new' | number | null>(null);
 
   // Add-source-default row
   const [newSource, setNewSource] = useState('');
@@ -168,8 +172,15 @@ export function LabelsSettings({ onChange }: { onChange?: () => void }) {
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
               <input value={newName} onChange={e => setNewName(e.target.value)} placeholder="Name (e.g. Movies)"
                 className="bg-slate-800/60 border border-slate-700 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-cyan-500" />
-              <input value={newFolder} onChange={e => setNewFolder(e.target.value)} placeholder="Folder (e.g. /data/movies)"
-                className="bg-slate-800/60 border border-slate-700 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-cyan-500 sm:col-span-2" />
+              <div className="flex items-center gap-2 sm:col-span-2">
+                <input value={newFolder} onChange={e => setNewFolder(e.target.value)} placeholder="Folder (e.g. /data/movies)"
+                  className="bg-slate-800/60 border border-slate-700 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-cyan-500 flex-1 min-w-0" />
+                <button type="button" onClick={() => setBrowseTarget('new')}
+                  title="Browse folders" aria-label="Browse folders"
+                  className="p-2 bg-slate-600/40 hover:bg-slate-600/70 text-slate-300 rounded-lg shrink-0">
+                  <FolderOpen className="w-4 h-4" />
+                </button>
+              </div>
             </div>
             <div className="flex items-center gap-2">
               <input value={newQuality} onChange={e => setNewQuality(e.target.value)} placeholder="Default quality (e.g. 1080p)"
@@ -227,7 +238,12 @@ export function LabelsSettings({ onChange }: { onChange?: () => void }) {
                 {editingId === label.id ? (
                   <div className="flex items-center gap-2 mt-2">
                     <input value={editFolder} onChange={e => setEditFolder(e.target.value)} placeholder="Folder"
-                      className="bg-slate-800/60 border border-slate-700 rounded-lg py-1.5 px-2.5 text-sm text-white focus:outline-none focus:border-cyan-500 flex-1" />
+                      className="bg-slate-800/60 border border-slate-700 rounded-lg py-1.5 px-2.5 text-sm text-white focus:outline-none focus:border-cyan-500 flex-1 min-w-0" />
+                    <button type="button" onClick={() => setBrowseTarget(label.id)}
+                      title="Browse folders" aria-label="Browse folders"
+                      className="p-1.5 bg-slate-600/40 hover:bg-slate-600/70 text-slate-300 rounded-lg shrink-0">
+                      <FolderOpen className="w-4 h-4" />
+                    </button>
                     <input value={editQuality} onChange={e => setEditQuality(e.target.value)} placeholder="Quality"
                       className="bg-slate-800/60 border border-slate-700 rounded-lg py-1.5 px-2.5 text-sm text-white focus:outline-none focus:border-cyan-500 w-28" />
                     <button onClick={() => saveEdit(label.id)} disabled={savingEdit}
@@ -287,6 +303,21 @@ export function LabelsSettings({ onChange }: { onChange?: () => void }) {
           </div>
         </div>
       </div>
+
+      <FolderBrowser
+        isOpen={browseTarget !== null}
+        onClose={() => setBrowseTarget(null)}
+        browseFn={browseLocal}
+        singleSelect
+        title="Select a folder for this label"
+        initialPath={browseTarget === 'new' ? (newFolder || null) : (editFolder || null)}
+        onConfirm={(paths) => {
+          const picked = paths[0] || '';
+          if (browseTarget === 'new') setNewFolder(picked);
+          else if (typeof browseTarget === 'number') setEditFolder(picked);
+          setBrowseTarget(null);
+        }}
+      />
 
       <ConfirmDialog
         isOpen={deleteConfirmId !== null}

@@ -389,6 +389,20 @@ export async function browseVps(path?: string): Promise<VpsBrowseResult> {
   return response.json();
 }
 
+/** Browse directories on the local (home server) filesystem. Mirrors browseVps. */
+export async function browseLocal(path?: string): Promise<VpsBrowseResult> {
+  const response = await fetch(`${API_BASE}/api/settings/local/browse`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ path: path ?? '' }),
+  });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  return response.json();
+}
+
 export interface VpsWatchFolder {
   id: number;
   path: string;
