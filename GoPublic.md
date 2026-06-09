@@ -16,16 +16,16 @@ Severity-ordered, from the repo audit:
 
 ### High — personal/network data in tracked files
 
-- [ ] **Home LAN IP hardcoded in the frontend** — `frontend/src/api/index.ts:3` and
+- [x] **Home LAN IP hardcoded in the frontend** — `frontend/src/api/index.ts:3` and
   `frontend/src/api/socket.ts:4` contain `http://192.168.0.135:4444`. Replace with
   `localhost` or a `VITE_API_BASE` env var.
-- [ ] **Real Telegram identity in README** — `README.md:239` uses the actual account
+- [x] **Real Telegram identity in README** — `README.md:239` uses the actual account
   `RibinRoy:465457653` as the author-tracking example. Replace with a fake example.
-- [ ] **Personal screenshots** — `screenshots/Screenshot 2025-10-22 at 00.03.47.png` and
+- [x] **Personal screenshots** *(deleted; README re-takes still pending)* — `screenshots/Screenshot 2025-10-22 at 00.03.47.png` and
   `...00.03.59.png` show a real chat ("HS Downloader") and real name; they're orphaned
   (no longer referenced by README). Delete them. Re-take all README screenshots with
   sanitized file names (visible file names matter for positioning — see §4).
-- [ ] **`downloads.db` is tracked** — runtime SQLite file at repo root (contains only the
+- [x] **`downloads.db` is tracked** — runtime SQLite file at repo root (contains only the
   default admin hash, no real secret). Remove from tracking; add `*.db` to `.gitignore`.
 
 ### Medium — security weaknesses that become public knowledge
