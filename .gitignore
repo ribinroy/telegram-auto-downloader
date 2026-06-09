@@ -49,6 +49,7 @@ downloads/
 logs/
 *.session
 *.session-journal
+*.db
 downloads.json
 cookies.txt
 
