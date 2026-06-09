@@ -10,6 +10,7 @@ import subprocess
 from datetime import datetime
 from telethon import TelegramClient, events, utils as tg_utils
 from telethon.errors import SessionPasswordNeededError
+from telethon.tl.types import User as TgUser
 from backend.config import API_ID, API_HASH, CHAT_ID, DOWNLOAD_DIR, MAX_RETRIES, SESSION_FILE
 from backend.database import get_db
 from backend.utils import human_readable_size, get_media_folder
@@ -57,6 +58,7 @@ class TelegramDownloader:
         self._stopping = False
         self._handler = None  # Currently registered NewMessage handler
         self._mention_handler = None  # Command handler for messages tagging the account
+        self._seen_users = {}  # telegram_id -> (username, name): skips repeat DB upserts
 
         # Pending web-login state (phone -> code -> optional 2FA password)
         self._login_phone = None
@@ -276,6 +278,28 @@ class TelegramDownloader:
             })
         result.sort(key=lambda x: (x['type'] == 'user', x['title'].lower()))
         return result
+
+    async def sync_channel_members(self, channels=None):
+        """Best-effort: register every member of the monitored groups in the
+        users table. Bots and deleted accounts are skipped. Broadcast channels
+        only expose their subscriber list to admins — those are logged and
+        skipped. Returns the number of members registered."""
+        db = get_db()
+        total = 0
+        for c in (channels if channels is not None else self.channels):
+            try:
+                participants = await self.client.get_participants(c['id'])
+            except Exception as e:
+                logging.error(f"Cannot list members of {c.get('title') or c['id']}: {e}")
+                continue
+            for p in participants:
+                if not isinstance(p, TgUser) or p.bot or p.deleted:
+                    continue
+                name = ' '.join(filter(None, [p.first_name, p.last_name]))
+                db.upsert_telegram_user(p.id, username=p.username, display_name=name or None)
+                self._seen_users[p.id] = (p.username, name)
+                total += 1
+        return total
 
     async def refresh_channel_titles(self):
         """Best-effort: replace numeric placeholder titles with real chat
@@ -818,30 +842,28 @@ class TelegramDownloader:
         return cls._format_query_output((out or b'').decode(errors='replace'), '', proc.returncode)
 
     async def _handle_mention(self, event):
-        """Register whoever tags the account (or DMs it) in the users table,
-        and run a configured query if the message matches a key — admins only.
-        'help' lists the available keys."""
+        """Register the sender of any message the bot can see, and when the
+        message tags the account (or DMs it) with a query key, run it —
+        admins only. 'help' lists the available keys."""
         try:
-            if not (event.mentioned or event.is_private):
-                return
-
-            # Anyone who interacts with the bot is recorded in the users
-            # table (role 'user' by default; promote in Settings -> Users)
-            role = None
+            # Anyone who posts in a chat the bot can see is recorded in the
+            # users table (role 'user' by default; promote in Settings -> Users).
+            # A small cache avoids a DB write per message.
             sender = None
             try:
                 sender = await event.get_sender()
             except Exception as e:
                 logging.error(f"Could not resolve message sender: {e}")
-            if sender and not getattr(sender, 'bot', False):
-                name = ' '.join(filter(None, [getattr(sender, 'first_name', None),
-                                              getattr(sender, 'last_name', None)]))
-                user_rec = get_db().upsert_telegram_user(
-                    sender.id,
-                    username=getattr(sender, 'username', None),
-                    display_name=name or None,
-                )
-                role = (user_rec or {}).get('role')
+            if isinstance(sender, TgUser) and not sender.bot:
+                name = ' '.join(filter(None, [sender.first_name, sender.last_name]))
+                cache_val = (sender.username, name)
+                if self._seen_users.get(sender.id) != cache_val:
+                    get_db().upsert_telegram_user(
+                        sender.id, username=sender.username, display_name=name or None)
+                    self._seen_users[sender.id] = cache_val
+
+            if not (event.mentioned or event.is_private):
+                return
 
             text = event.raw_text or ''
             # Strip the @username tag so "@DownLeeBot health" becomes "health"
@@ -859,6 +881,8 @@ class TelegramDownloader:
             if not query and key != 'help':
                 return
 
+            role = (get_db().get_telegram_user_role(sender.id)
+                    if isinstance(sender, TgUser) else None)
             if role != 'admin':
                 await event.reply('⛔ Sorry, only admins can run queries.', parse_mode=None)
                 return
