@@ -1,6 +1,6 @@
 import type { DownloadsResponse, Stats, UrlCheckResult, Download, SourceMapping, AnalyticsData } from '../types';
 
-const API_BASE = import.meta.env.DEV ? 'http://192.168.0.135:4444' : '';
+const API_BASE = import.meta.env.DEV ? (import.meta.env.VITE_API_BASE || 'http://localhost:4444') : '';
 const TOKEN_KEY = 'auth_token';
 
 export type SortBy = 'created_at' | 'file' | 'status' | 'progress';

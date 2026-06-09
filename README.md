@@ -236,7 +236,7 @@ Configure each source's destination folder, default quality, and hidden flag in 
 
 The `author` column tracks who initiated each download:
 
-- **Telegram downloads**: Stored as `username:user_id` (e.g. `RibinRoy:465457653`). Falls back to `post_author` for channel messages with signatures.
+- **Telegram downloads**: Stored as `username:user_id` (e.g. `johndoe:123456789`). Falls back to `post_author` for channel messages with signatures.
 - **Web (DownLee) downloads**: Stored as the logged-in user's username (e.g. `admin`).
 
 The UI displays only the name portion (before `:`) and shows the full `name:id` in a tooltip on hover.
