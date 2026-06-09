@@ -1211,6 +1211,53 @@ class WebApp:
             except Exception as e:
                 return jsonify({"error": str(e)}), 400
 
+        # Bot queries (key -> shell snippet, triggered by tagging the bot)
+        @self.app.route("/api/settings/queries", methods=["GET"])
+        @token_required
+        def get_bot_queries():
+            return jsonify({"queries": self.telegram_downloader.get_queries()
+                            if self.telegram_downloader else []})
+
+        @self.app.route("/api/settings/queries", methods=["POST"])
+        @token_required
+        def save_bot_query():
+            """Add or update a query (upsert by key; original_key supports renames)."""
+            data = request.json or {}
+            key = (data.get("key") or "").strip().lower()
+            command = (data.get("command") or "").strip()
+            original_key = (data.get("original_key") or key).strip().lower()
+            if not key or not command:
+                return jsonify({"error": "Key and command are required"}), 400
+            if ' ' in key or len(key) > 64:
+                return jsonify({"error": "Key must be a single word (max 64 chars)"}), 400
+            if key == 'help':
+                return jsonify({"error": "'help' is reserved for listing the available queries"}), 400
+            queries = [q for q in self.telegram_downloader.get_queries()
+                       if (q.get('key') or '').strip().lower() not in (key, original_key)]
+            queries.append({"key": key, "command": command})
+            queries.sort(key=lambda q: q['key'])
+            get_db().set_setting('bot_queries', json.dumps(queries))
+            return jsonify({"queries": queries})
+
+        @self.app.route("/api/settings/queries/<key>", methods=["DELETE"])
+        @token_required
+        def delete_bot_query(key):
+            key = key.strip().lower()
+            queries = [q for q in self.telegram_downloader.get_queries()
+                       if (q.get('key') or '').strip().lower() != key]
+            get_db().set_setting('bot_queries', json.dumps(queries))
+            return jsonify({"queries": queries})
+
+        @self.app.route("/api/settings/queries/test", methods=["POST"])
+        @token_required
+        def test_bot_query():
+            """Run a snippet now and return its output (same env as chat triggers)."""
+            command = ((request.json or {}).get("command") or "").strip()
+            if not command:
+                return jsonify({"error": "Command is required"}), 400
+            from backend.telegram_handler import TelegramDownloader
+            return jsonify({"output": TelegramDownloader.run_query_sync(command)})
+
         # VPS (SSH/SFTP) connection settings
         @self.app.route("/api/settings/vps", methods=["GET"])
         @token_required

@@ -371,6 +371,43 @@ export function fetchTelegramDialogs(): Promise<{ dialogs?: TelegramDialog[]; er
   return telegramRequest('/dialogs');
 }
 
+// Bot queries (key -> shell snippet triggered from Telegram)
+export interface BotQuery {
+  key: string;
+  command: string;
+}
+
+async function queriesRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`${API_BASE}/api/settings/queries${path}`, {
+    ...init,
+    headers: {
+      ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
+      ...getAuthHeaders(),
+    },
+  });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  return response.json();
+}
+
+export function fetchBotQueries(): Promise<{ queries: BotQuery[] }> {
+  return queriesRequest('');
+}
+
+export function saveBotQuery(key: string, command: string, originalKey?: string): Promise<{ queries?: BotQuery[]; error?: string }> {
+  return queriesRequest('', { method: 'POST', body: JSON.stringify({ key, command, original_key: originalKey }) });
+}
+
+export function deleteBotQuery(key: string): Promise<{ queries?: BotQuery[]; error?: string }> {
+  return queriesRequest(`/${encodeURIComponent(key)}`, { method: 'DELETE' });
+}
+
+export function testBotQuery(command: string): Promise<{ output?: string; error?: string }> {
+  return queriesRequest('/test', { method: 'POST', body: JSON.stringify({ command }) });
+}
+
 export interface VpsConfig {
   configured: boolean;
   host: string;

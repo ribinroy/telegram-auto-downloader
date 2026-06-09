@@ -4,7 +4,9 @@ Telegram client and download handler
 import asyncio
 import json
 import logging
+import os
 import re
+import subprocess
 from datetime import datetime
 from telethon import TelegramClient, events, utils as tg_utils
 from telethon.errors import SessionPasswordNeededError
@@ -17,6 +19,15 @@ from backend.file_meta import poll_and_extract_meta, is_video_file
 
 CHANNELS_SETTING_KEY = 'telegram_channels'
 API_SETTING_KEY = 'telegram_api'
+QUERIES_SETTING_KEY = 'bot_queries'
+QUERY_TIMEOUT = 30  # seconds a query snippet may run
+
+# Seeded on first run so the Queries tab has a working example
+DEFAULT_QUERIES = [{
+    'key': 'health',
+    'command': 'echo "✅ all good — $(uptime -p)"\n'
+               'df -h "$DOWNLOAD_DIR" | awk \'NR==2 {print "💾 "$4" free of "$2" ("$5" used)"}\'',
+}]
 
 
 class TelegramDownloader:
@@ -724,10 +735,66 @@ class TelegramDownloader:
         if is_video_file(filename):
             asyncio.create_task(poll_and_extract_meta(event.id))
 
-    async def _handle_mention(self, event):
-        """Respond to commands in messages that tag the account (or DM it).
+    # ------------------------------------------------------------------
+    # Chat queries (key -> shell snippet, managed in Settings -> Queries)
+    # ------------------------------------------------------------------
 
-        Currently supported: 'health' -> 'all good'."""
+    def get_queries(self):
+        """Load the configured queries, seeding a 'health' example once."""
+        db = get_db()
+        raw = db.get_setting(QUERIES_SETTING_KEY)
+        if raw is None:
+            db.set_setting(QUERIES_SETTING_KEY, json.dumps(DEFAULT_QUERIES))
+            return [dict(q) for q in DEFAULT_QUERIES]
+        try:
+            queries = json.loads(raw)
+            return queries if isinstance(queries, list) else []
+        except Exception as e:
+            logging.error(f"Failed to parse {QUERIES_SETTING_KEY}: {e}")
+            return []
+
+    @staticmethod
+    def _query_env():
+        env = dict(os.environ)
+        env['DOWNLOAD_DIR'] = str(DOWNLOAD_DIR)
+        return env
+
+    @staticmethod
+    def _format_query_output(stdout, stderr, returncode):
+        output = ((stdout or '') + (stderr or '')).strip()
+        if returncode != 0:
+            output = f'{output}\n(exit code {returncode})'.strip()
+        return output or '(no output)'
+
+    @classmethod
+    def run_query_sync(cls, command):
+        """Run a query snippet in a shell (used by the UI test button)."""
+        try:
+            proc = subprocess.run(command, shell=True, capture_output=True,
+                                  text=True, timeout=QUERY_TIMEOUT, env=cls._query_env())
+        except subprocess.TimeoutExpired:
+            return f'⏱️ Timed out after {QUERY_TIMEOUT}s'
+        return cls._format_query_output(proc.stdout, proc.stderr, proc.returncode)
+
+    @classmethod
+    async def run_query_command(cls, command):
+        """Async variant of run_query_sync for the Telegram event loop."""
+        proc = await asyncio.create_subprocess_shell(
+            command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            env=cls._query_env(),
+        )
+        try:
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout=QUERY_TIMEOUT)
+        except asyncio.TimeoutError:
+            proc.kill()
+            return f'⏱️ Timed out after {QUERY_TIMEOUT}s'
+        return cls._format_query_output((out or b'').decode(errors='replace'), '', proc.returncode)
+
+    async def _handle_mention(self, event):
+        """Run a configured query when a message tagging the account (or a DM)
+        matches a query key. 'help' lists the available keys."""
         try:
             if not (event.mentioned or event.is_private):
                 return
@@ -737,9 +804,21 @@ class TelegramDownloader:
             username = getattr(me, 'username', None)
             if username:
                 text = re.sub(rf'@{re.escape(username)}', '', text, flags=re.IGNORECASE)
-            command = text.strip().lower()
-            if command == 'health':
-                await event.reply('all good')
+            key = text.strip().lower()
+            if not key or len(key) > 64:
+                return
+
+            queries = self.get_queries()
+            query = next((q for q in queries
+                          if (q.get('key') or '').strip().lower() == key), None)
+            if query:
+                reply = await self.run_query_command(query.get('command') or '')
+                # Telegram message limit is 4096 chars; no markdown parsing so
+                # arbitrary command output can't break the reply
+                await event.reply(reply[:4000], parse_mode=None)
+            elif key == 'help':
+                keys = ', '.join(sorted((q.get('key') or '') for q in queries))
+                await event.reply(f'Available queries: {keys or "(none configured)"}', parse_mode=None)
         except Exception as e:
             logging.error(f"Mention command handler failed: {e}")
 

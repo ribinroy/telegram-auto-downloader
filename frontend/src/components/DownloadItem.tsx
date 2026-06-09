@@ -739,7 +739,8 @@ export function DownloadItem({ download, onRetry, onStop, onPause, onResume, onD
 
           {/* ID, Source Link, and Date */}
           <div className="flex gap-4 text-xs text-slate-500">
-            {download.url && (
+            {/* VPS downloads store the remote path in url — not a real link */}
+            {download.url && download.downloaded_from !== 'vps' && (
               <Tooltip content="Open source URL">
                 <a
                   href={download.url}
