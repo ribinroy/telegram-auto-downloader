@@ -87,12 +87,11 @@ class VpsDownloader:
                 web_app.emit_stats()
 
     # --- Download ---------------------------------------------------------
-    def start_download(self, remote_path: str, size: int = 0, label_id: int = None) -> dict:
+    def start_download(self, remote_path: str, size: int = 0) -> dict:
         """Create a download record and kick off the SFTP transfer in a thread.
 
         Works for both files and directories (directories are downloaded
         recursively, preserving structure)."""
-        from backend.utils import resolve_label
         db = get_db()
         remote_path = (remote_path or "").strip()
         if not remote_path:
@@ -102,12 +101,6 @@ class VpsDownloader:
 
         message_id = generate_uuid()
         filename = posixpath.basename(remote_path.rstrip("/")) or remote_path
-
-        # Resolve the connected label: explicit override → per-folder binding for
-        # this remote path (source_labels row for the watched folder) → 'vps'
-        # source-wide default → none.
-        label = resolve_label('vps', label_id, path=remote_path)
-        resolved_label_id = label['id'] if label else None
 
         new_download = db.add_download(
             file=filename,
@@ -122,7 +115,6 @@ class VpsDownloader:
             downloaded_from='vps',
             url=remote_path,
             author=None,
-            label_id=resolved_label_id,
         )
         metrics.record_download_started('vps')
         self.emit_new_download(new_download)
@@ -159,7 +151,7 @@ class VpsDownloader:
 
         `strip_prefix` is the remote directory the download was rooted at; the file
         is placed relative to it, so the requested item's parent dirs are not
-        recreated locally (e.g. /home/user/xyz under label a/b/c → a/b/c/xyz, not
+        recreated locally (e.g. /home/user/xyz under destination a/b/c → a/b/c/xyz, not
         a/b/c/home/user/xyz). Without it, the full remote path is mirrored.
         """
         if strip_prefix:
@@ -180,15 +172,15 @@ class VpsDownloader:
                 out.append((full, attr.st_size or 0))
 
     def _download(self, remote_path: str, message_id: str):
-        from backend.utils import label_folder
+        from backend.utils import resolve_spec, spec_folder
         db = get_db()
         start_time = datetime.now()
         client = None
         try:
-            # Destination base: the connected label's folder, else DOWNLOAD_DIR/VPS
-            dl_record = db.get_download_by_message_id(message_id)
-            label = db.get_label(dl_record.get('label_id')) if dl_record else None
-            base = label_folder(label, DOWNLOAD_DIR / "VPS")
+            # Destination base: the watched folder's configured destination
+            # (or the 'vps' source mapping), else DOWNLOAD_DIR/VPS
+            spec = resolve_spec('vps', path=remote_path)
+            base = spec_folder(spec, DOWNLOAD_DIR / "VPS")
 
             # Place files relative to the requested item's parent dir, so a file
             # /home/user/xyz lands at <base>/xyz and a folder /home/user/dir at

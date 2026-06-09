@@ -1,16 +1,14 @@
 import { useState, useEffect } from 'react';
-import { Loader2, AlertCircle, CheckCircle, Check, Plug, FolderPlus, Folder, Trash2, Unplug, Server } from 'lucide-react';
+import { Loader2, AlertCircle, CheckCircle, Check, Plug, FolderPlus, Folder, FolderOpen, Eye, EyeOff, Trash2, Unplug, Server } from 'lucide-react';
 import {
   fetchVpsConfig, saveVpsConfig, testVpsConnection, deleteVpsConfig,
-  fetchVpsFolders, addVpsFolders, deleteVpsFolder, setVpsFolderAutoSync,
-  fetchLabels, fetchSourceLabels, setSourceLabel,
+  fetchVpsFolders, addVpsFolders, deleteVpsFolder, updateVpsFolder, browseLocal,
   type VpsConfig, type VpsWatchFolder,
 } from '../api';
-import type { Label, SourceLabel } from '../types';
 import { FolderBrowser } from './FolderBrowser';
 import { ConfirmDialog } from './ConfirmDialog';
 
-export function VpsSettings() {
+export function VpsSettings({ onChange }: { onChange?: () => void }) {
   // Connection config
   const [config, setConfig] = useState<VpsConfig | null>(null);
   const [host, setHost] = useState('');
@@ -31,38 +29,13 @@ export function VpsSettings() {
   const [foldersLoading, setFoldersLoading] = useState(false);
   const [foldersError, setFoldersError] = useState<string | null>(null);
   const [browserOpen, setBrowserOpen] = useState(false);
-
-  // Labels (for per-folder label binding via path-scoped source labels)
-  const [labels, setLabels] = useState<Label[]>([]);
-  const [sourceLabels, setSourceLabels] = useState<SourceLabel[]>([]);
+  // Watched folder currently picking a local destination folder
+  const [destTarget, setDestTarget] = useState<VpsWatchFolder | null>(null);
 
   useEffect(() => {
     loadConfig();
     loadFolders();
-    loadLabels();
   }, []);
-
-  const loadLabels = async () => {
-    try {
-      const [ls, sls] = await Promise.all([fetchLabels(), fetchSourceLabels()]);
-      setLabels(ls);
-      setSourceLabels(sls);
-    } catch { /* labels are optional UI; ignore */ }
-  };
-
-  // The label bound to this watched folder (source_labels row: source='vps', path=folder)
-  const folderLabelId = (path: string): number | '' =>
-    sourceLabels.find(s => s.source === 'vps' && s.path === path)?.label_id ?? '';
-
-  const handleSetFolderLabel = async (path: string, labelId: number | null) => {
-    setFoldersError(null);
-    try {
-      await setSourceLabel('vps', labelId, path);
-      setSourceLabels(await fetchSourceLabels());
-    } catch {
-      setFoldersError('Failed to set folder label');
-    }
-  };
 
   const loadConfig = async () => {
     setLoading(true);
@@ -185,9 +158,29 @@ export function VpsSettings() {
   const handleToggleAutoSync = async (folder: VpsWatchFolder) => {
     setFoldersError(null);
     try {
-      setFolders(await setVpsFolderAutoSync(folder.id, !folder.auto_sync));
+      setFolders(await updateVpsFolder(folder.id, { auto_sync: !folder.auto_sync }));
     } catch {
       setFoldersError('Failed to update autoSync');
+    }
+  };
+
+  const handleToggleSecured = async (folder: VpsWatchFolder) => {
+    setFoldersError(null);
+    try {
+      setFolders(await updateVpsFolder(folder.id, { is_secured: !folder.is_secured }));
+      onChange?.();
+    } catch {
+      setFoldersError('Failed to update hidden flag');
+    }
+  };
+
+  const handleSetDestFolder = async (folder: VpsWatchFolder, dest: string | null) => {
+    setFoldersError(null);
+    try {
+      setFolders(await updateVpsFolder(folder.id, { folder: dest }));
+      onChange?.();
+    } catch {
+      setFoldersError('Failed to set destination folder');
     }
   };
 
@@ -402,23 +395,38 @@ export function VpsSettings() {
                   <Folder className={`w-4 h-4 shrink-0 ${inactive ? 'text-slate-500' : 'text-cyan-400'}`} />
                   <div className="flex-1 min-w-0">
                     <span className={`block text-sm truncate ${inactive ? 'text-slate-400' : 'text-slate-200'}`} title={f.path}>{f.path}</span>
-                    {inactive && (
+                    {inactive ? (
                       <span className="text-[11px] text-slate-500">
                         {f.username ? `${f.username}@${f.host}` : f.host} — connect to this VPS to manage
                       </span>
+                    ) : (
+                      <span className="block text-[11px] text-slate-500 truncate" title={f.folder || undefined}>
+                        → {f.folder || 'default folder (Downloads/VPS)'}
+                      </span>
                     )}
                   </div>
-                  {/* Per-folder label — downloads from this folder use it (overrides the vps default) */}
-                  <select
-                    value={folderLabelId(f.path)}
-                    onChange={(e) => handleSetFolderLabel(f.path, e.target.value ? Number(e.target.value) : null)}
+                  {/* Destination folder picker — downloads from this folder land here */}
+                  <button
+                    onClick={() => setDestTarget(f)}
                     disabled={inactive}
-                    title="Label for downloads from this folder"
-                    className="bg-slate-800/60 border border-slate-700 rounded-lg py-1 px-2 text-xs text-white focus:outline-none focus:border-cyan-500 shrink-0 max-w-[8rem] disabled:opacity-50 disabled:cursor-not-allowed"
+                    title={f.folder ? `Destination: ${f.folder} (click to change)` : 'Pick a destination folder'}
+                    className={`p-1.5 rounded-lg transition-colors shrink-0 disabled:opacity-50 disabled:cursor-not-allowed ${
+                      f.folder ? 'bg-cyan-500/20 text-cyan-300' : 'bg-slate-600/40 text-slate-400 hover:text-white'
+                    }`}
                   >
-                    <option value="">vps default</option>
-                    {labels.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-                  </select>
+                    <FolderOpen className="w-4 h-4" />
+                  </button>
+                  {/* Hidden toggle — hide this folder's downloads from the default view */}
+                  <button
+                    onClick={() => handleToggleSecured(f)}
+                    disabled={inactive}
+                    title={f.is_secured ? 'Hidden from the default view (click to show)' : 'Visible (click to hide)'}
+                    className={`p-1.5 rounded-lg transition-colors shrink-0 disabled:opacity-50 disabled:cursor-not-allowed ${
+                      f.is_secured ? 'bg-amber-500/20 text-amber-400' : 'bg-slate-600/40 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    {f.is_secured ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
                   {/* autoSync toggle - only for folders on the current connection */}
                   <button
                     onClick={() => handleToggleAutoSync(f)}
@@ -453,6 +461,20 @@ export function VpsSettings() {
         onClose={() => setBrowserOpen(false)}
         onConfirm={handleAddFolders}
         alreadyAdded={folders.map(f => f.path)}
+      />
+
+      {/* Local destination picker for a watched folder */}
+      <FolderBrowser
+        isOpen={destTarget !== null}
+        onClose={() => setDestTarget(null)}
+        browseFn={browseLocal}
+        singleSelect
+        title="Destination folder for this watched folder"
+        initialPath={destTarget?.folder || null}
+        onConfirm={(paths) => {
+          if (destTarget) handleSetDestFolder(destTarget, paths[0] || null);
+          setDestTarget(null);
+        }}
       />
 
       <ConfirmDialog

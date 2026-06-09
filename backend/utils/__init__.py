@@ -40,25 +40,34 @@ def decrypt_secret(token: str) -> str:
         return ''
 
 
-def resolve_label(source, override_label_id=None, path=None):
-    """Resolve the label dict for a download: an explicit override wins,
-    otherwise a per-path source binding (longest matching prefix of `path`),
-    otherwise the source-wide default, otherwise None."""
+def resolve_spec(source, path=None):
+    """Resolve the download specs for a source: {folder, quality, is_secured}.
+
+    Specs come from the source's mapping (download_type_maps). For VPS
+    downloads pass the remote `path`: the watched folder containing it
+    (longest prefix match) contributes its own destination folder and can
+    additionally mark the download hidden. folder/quality of None mean
+    "use the default"."""
     from backend.database import get_db
     db = get_db()
-    if override_label_id:
-        label = db.get_label(override_label_id)
-        if label:
-            return label
-    return db.get_label_for_source(source, path)
+    mapping = db.get_download_type_map(source) or {}
+    folder = mapping.get('folder')
+    quality = mapping.get('quality')
+    hidden = bool(mapping.get('is_secured'))
+    if path:
+        wf = db.get_vps_watch_folder_for_path(path)
+        if wf:
+            folder = wf.get('folder') or folder
+            hidden = hidden or bool(wf.get('is_secured'))
+    return {'folder': folder, 'quality': quality, 'is_secured': hidden}
 
 
-def label_folder(label, default: Path) -> Path:
-    """Return the label's folder (created if needed), or `default` if the
-    label has no usable folder."""
-    if label and label.get('folder'):
+def spec_folder(spec, default: Path) -> Path:
+    """Return the spec's folder (created if needed), or `default` if the
+    spec has no usable folder."""
+    if spec and spec.get('folder'):
         try:
-            folder = Path(label['folder'])
+            folder = Path(spec['folder'])
             folder.mkdir(parents=True, exist_ok=True)
             return folder
         except (OSError, PermissionError):
