@@ -1217,6 +1217,17 @@ class WebApp:
         def list_users():
             return jsonify({"users": get_db().get_users()})
 
+        @self.app.route("/api/users/sync", methods=["POST"])
+        @token_required
+        def sync_users():
+            """Pull the member lists of all monitored groups into the users table."""
+            try:
+                synced = self._telegram_call(
+                    self.telegram_downloader.sync_channel_members(), timeout=120)
+                return jsonify({"synced": synced, "users": get_db().get_users()})
+            except Exception as e:
+                return jsonify({"error": str(e)}), 400
+
         @self.app.route("/api/users/<int:user_id>", methods=["PATCH"])
         @token_required
         def update_user(user_id):

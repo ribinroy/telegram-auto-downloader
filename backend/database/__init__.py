@@ -732,6 +732,15 @@ class DatabaseManager:
         finally:
             self.close_session()
 
+    def get_telegram_user_role(self, telegram_id: int):
+        """Role of a Telegram user, or None if unknown."""
+        session = self.get_session()
+        try:
+            user = session.query(User).filter_by(telegram_id=telegram_id).first()
+            return (user.role or 'user') if user else None
+        finally:
+            self.close_session()
+
     def update_user_role(self, user_id: int, role: str):
         """Change a user's role. Returns the updated dict or None."""
         session = self.get_session()

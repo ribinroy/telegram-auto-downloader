@@ -391,6 +391,18 @@ export async function fetchUsers(): Promise<{ users: AppUser[] }> {
   return response.json();
 }
 
+export async function syncUsers(): Promise<{ synced?: number; users?: AppUser[]; error?: string }> {
+  const response = await fetch(`${API_BASE}/api/users/sync`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+  });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  return response.json();
+}
+
 export async function updateUserRole(userId: number, role: 'admin' | 'user'): Promise<{ user?: AppUser; error?: string }> {
   const response = await fetch(`${API_BASE}/api/users/${userId}`, {
     method: 'PATCH',

@@ -245,9 +245,12 @@ class TelegramDownloader:
                  or str(chat_id))
         if any(c['id'] == chat_id for c in self.channels):
             return {'error': f'"{title}" is already being monitored'}
-        self.channels.append({'id': chat_id, 'title': title})
+        channel = {'id': chat_id, 'title': title}
+        self.channels.append(channel)
         self._save_channels()
         self._register_handler()
+        # Register the new group's members in the users table (best-effort)
+        asyncio.create_task(self.sync_channel_members([channel]))
         return {'channels': self.get_channels()}
 
     async def remove_channel(self, chat_id):
@@ -419,6 +422,9 @@ class TelegramDownloader:
         self._login_code_hash = None
         await self.refresh_channel_titles()
         await self.send_startup_greeting()
+        # Register all current group members in the users table (best-effort,
+        # in the background so startup isn't delayed by large groups)
+        asyncio.create_task(self.sync_channel_members())
 
     def emit_progress(self, message_id: int, progress: float, downloaded_bytes: int,
                        total_bytes: int, speed: float, pending_time: float | None):
