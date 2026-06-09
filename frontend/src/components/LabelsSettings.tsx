@@ -29,6 +29,7 @@ export function LabelsSettings({ onChange }: { onChange?: () => void }) {
 
   // Edit
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [editName, setEditName] = useState('');
   const [editFolder, setEditFolder] = useState('');
   const [editQuality, setEditQuality] = useState('');
   const [savingEdit, setSavingEdit] = useState(false);
@@ -97,15 +98,18 @@ export function LabelsSettings({ onChange }: { onChange?: () => void }) {
 
   const startEdit = (label: Label) => {
     setEditingId(label.id);
+    setEditName(label.name);
     setEditFolder(label.folder || '');
     setEditQuality(label.quality || '');
   };
 
   const saveEdit = async (id: number) => {
+    if (!editName.trim()) return;
     setSavingEdit(true);
     setError(null);
     try {
       const result = await updateLabel(id, {
+        name: editName.trim(),
         folder: editFolder.trim() || null,
         quality: editQuality.trim() || null,
       });
@@ -226,7 +230,7 @@ export function LabelsSettings({ onChange }: { onChange?: () => void }) {
                   </button>
                   {editingId !== label.id && (
                     <button onClick={() => startEdit(label)}
-                      className="p-1.5 bg-slate-600/40 hover:bg-slate-600/70 text-slate-300 rounded-lg" title="Edit folder/quality">
+                      className="p-1.5 bg-slate-600/40 hover:bg-slate-600/70 text-slate-300 rounded-lg" title="Edit label">
                       <Pencil className="w-4 h-4" />
                     </button>
                   )}
@@ -237,23 +241,29 @@ export function LabelsSettings({ onChange }: { onChange?: () => void }) {
                   </button>
                 </div>
                 {editingId === label.id ? (
-                  <div className="flex items-center gap-2 mt-2">
-                    <input value={editFolder} onChange={e => setEditFolder(e.target.value)} placeholder="Folder"
-                      className="bg-slate-800/60 border border-slate-700 rounded-lg py-1.5 px-2.5 text-sm text-white focus:outline-none focus:border-cyan-500 flex-1 min-w-0" />
-                    <button type="button" onClick={() => setBrowseTarget(label.id)}
-                      title="Browse folders" aria-label="Browse folders"
-                      className="p-1.5 bg-slate-600/40 hover:bg-slate-600/70 text-slate-300 rounded-lg shrink-0">
-                      <FolderOpen className="w-4 h-4" />
-                    </button>
-                    <input value={editQuality} onChange={e => setEditQuality(e.target.value)} placeholder="Quality"
-                      className="bg-slate-800/60 border border-slate-700 rounded-lg py-1.5 px-2.5 text-sm text-white focus:outline-none focus:border-cyan-500 w-28" />
-                    <button onClick={() => saveEdit(label.id)} disabled={savingEdit}
-                      className="p-1.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg">
-                      {savingEdit ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
-                    </button>
-                    <button onClick={() => setEditingId(null)} className="p-1.5 bg-slate-600/40 text-slate-300 rounded-lg">
-                      <X className="w-4 h-4" />
-                    </button>
+                  <div className="mt-2 space-y-2">
+                    <input value={editName} onChange={e => setEditName(e.target.value)} placeholder="Name"
+                      disabled={label.is_system}
+                      title={label.is_system ? 'System labels cannot be renamed' : 'Label name'}
+                      className="bg-slate-800/60 border border-slate-700 rounded-lg py-1.5 px-2.5 text-sm text-white focus:outline-none focus:border-cyan-500 w-full disabled:opacity-50 disabled:cursor-not-allowed" />
+                    <div className="flex items-center gap-2">
+                      <input value={editFolder} onChange={e => setEditFolder(e.target.value)} placeholder="Folder"
+                        className="bg-slate-800/60 border border-slate-700 rounded-lg py-1.5 px-2.5 text-sm text-white focus:outline-none focus:border-cyan-500 flex-1 min-w-0" />
+                      <button type="button" onClick={() => setBrowseTarget(label.id)}
+                        title="Browse folders" aria-label="Browse folders"
+                        className="p-1.5 bg-slate-600/40 hover:bg-slate-600/70 text-slate-300 rounded-lg shrink-0">
+                        <FolderOpen className="w-4 h-4" />
+                      </button>
+                      <input value={editQuality} onChange={e => setEditQuality(e.target.value)} placeholder="Quality"
+                        className="bg-slate-800/60 border border-slate-700 rounded-lg py-1.5 px-2.5 text-sm text-white focus:outline-none focus:border-cyan-500 w-28" />
+                      <button onClick={() => saveEdit(label.id)} disabled={savingEdit || !editName.trim()}
+                        className="p-1.5 bg-cyan-600 hover:bg-cyan-500 disabled:bg-slate-700 disabled:text-slate-500 text-white rounded-lg">
+                        {savingEdit ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                      </button>
+                      <button onClick={() => setEditingId(null)} className="p-1.5 bg-slate-600/40 text-slate-300 rounded-lg">
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
                 ) : (
                   <div className="text-xs text-slate-500 mt-1 pl-6 truncate">
