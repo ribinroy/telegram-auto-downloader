@@ -39,7 +39,10 @@ DEFAULT_QUERIES = [
             '  model=$(lsblk -dno MODEL "/dev/$d" | xargs)\n'
             '  size=$(lsblk -dno SIZE "/dev/$d" | xargs)\n'
             '  health=$(sudo -n smartctl -H "/dev/$d" 2>/dev/null | awk -F: \'/overall-health|SMART Health Status/{gsub(/^ +/,"",$2); print $2}\')\n'
-            '  echo "• $d — $model ($size): ${health:-unknown (smartctl needs sudo)}"\n'
+            '  mounts=$(lsblk -no MOUNTPOINT "/dev/$d" | sed \'/^$/d;/\\[SWAP\\]/d\' | sort -u)\n'
+            '  avail=$(echo "$mounts" | xargs -r df -B1 --output=avail 2>/dev/null | awk \'NR>1{s+=$1} END{if(s>0) print s}\')\n'
+            '  free=$([ -n "$avail" ] && numfmt --to=iec "$avail")\n'
+            '  echo "• $d — $model ($size): ${health:-unknown (smartctl needs sudo)}${free:+ · ${free} free}"\n'
             'done'
         ),
     },
