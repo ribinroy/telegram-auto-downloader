@@ -36,10 +36,10 @@ def validate_config():
     
     if API_HASH == 'your_api_hash_here' or not API_HASH:
         errors.append("API_HASH is not set")
-    
-    if CHAT_ID == 0 or CHAT_ID == '0':
-        errors.append("CHAT_ID is not set or is invalid")
-    
+
+    # CHAT_ID is optional: channels are managed via the web UI and stored in
+    # the database; a CHAT_ID here only seeds the initial channel list.
+
     if errors:
         print("❌ Configuration Error:")
         for error in errors:

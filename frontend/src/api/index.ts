@@ -271,6 +271,101 @@ export async function saveCookies(cookies: string): Promise<{ status?: string; e
 }
 
 // VPS connection settings API
+// Telegram connection & channels API
+export interface TelegramUser {
+  id: number;
+  username: string | null;
+  first_name: string | null;
+  last_name: string | null;
+  phone: string | null;
+}
+
+export interface TelegramChannel {
+  id: number;
+  title: string;
+}
+
+export interface TelegramDialog {
+  id: number;
+  title: string;
+  type: 'channel' | 'group' | 'user';
+  username: string | null;
+  monitored: boolean;
+}
+
+export interface TelegramStatus {
+  api_configured?: boolean;
+  connected: boolean;
+  authorized: boolean;
+  awaiting_code: boolean;
+  user: TelegramUser | null;
+  channels: TelegramChannel[];
+  error?: string;
+}
+
+export interface TelegramApiConfig {
+  configured: boolean;
+  api_id: number | null;
+  has_hash: boolean;
+  source: 'database' | 'env' | null;
+  error?: string;
+}
+
+async function telegramRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`${API_BASE}/api/settings/telegram${path}`, {
+    ...init,
+    headers: {
+      ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
+      ...getAuthHeaders(),
+    },
+  });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  return response.json();
+}
+
+export function fetchTelegramStatus(): Promise<TelegramStatus> {
+  return telegramRequest('/status');
+}
+
+export function fetchTelegramApiConfig(): Promise<TelegramApiConfig> {
+  return telegramRequest('/api');
+}
+
+export function saveTelegramApiConfig(apiId: string, apiHash: string): Promise<TelegramApiConfig & { status?: string }> {
+  return telegramRequest('/api', { method: 'POST', body: JSON.stringify({ api_id: apiId, api_hash: apiHash }) });
+}
+
+export function sendTelegramCode(phone: string): Promise<{ status?: string; error?: string }> {
+  return telegramRequest('/send-code', { method: 'POST', body: JSON.stringify({ phone }) });
+}
+
+export function verifyTelegramCode(code: string): Promise<{ status?: string; error?: string }> {
+  return telegramRequest('/verify-code', { method: 'POST', body: JSON.stringify({ code }) });
+}
+
+export function verifyTelegramPassword(password: string): Promise<{ status?: string; error?: string }> {
+  return telegramRequest('/verify-password', { method: 'POST', body: JSON.stringify({ password }) });
+}
+
+export function telegramLogout(): Promise<{ status?: string; error?: string }> {
+  return telegramRequest('/logout', { method: 'POST', body: JSON.stringify({}) });
+}
+
+export function addTelegramChannel(chat: string): Promise<{ channels?: TelegramChannel[]; error?: string }> {
+  return telegramRequest('/channels', { method: 'POST', body: JSON.stringify({ chat }) });
+}
+
+export function removeTelegramChannel(chatId: number): Promise<{ channels?: TelegramChannel[]; error?: string }> {
+  return telegramRequest(`/channels/${chatId}`, { method: 'DELETE' });
+}
+
+export function fetchTelegramDialogs(): Promise<{ dialogs?: TelegramDialog[]; error?: string }> {
+  return telegramRequest('/dialogs');
+}
+
 export interface VpsConfig {
   configured: boolean;
   host: string;
