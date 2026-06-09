@@ -296,4 +296,4 @@ DownLee exposes metrics at `/metrics` for Prometheus scraping:
 
 ## License
 
-MIT
+Licensed under the GNU Affero General Public License v3.0 — see [LICENSE](LICENSE).

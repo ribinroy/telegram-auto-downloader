@@ -19,18 +19,9 @@ Severity-ordered, from the repo audit:
 - [ ] **Re-take README screenshots** with sanitized file names (visible file names matter
   for positioning — see §4). The orphaned personal screenshots are already deleted.
 
-### Medium — security weaknesses that become public knowledge
-
-- [ ] **Default admin/admin** — replace with a forced password setup on first login.
-  This is the #1 thing r/selfhosted commenters flag.
-
 ### Low — polish
 
 - [ ] Delete the accidental tracked file `=0.19.0` (pip console output).
-- [ ] **Add a LICENSE file** — README claims MIT but no LICENSE exists (GitHub treats that
-  as all-rights-reserved). Recommendation: **AGPL-3.0**, the 2025–26 community standard
-  for self-hosted web apps (Immich, Gitea, Plausible); also satisfies awesome-selfhosted's
-  Free Software requirement. MIT is fine too if you don't care about closed-source forks.
 - [ ] Fix `requirements.txt`: remove stdlib `asyncio`/`pathlib` (the PyPI `pathlib`
   backport can break installs), add the missing `PyJWT`, document `yt-dlp` and
   `playwright` as extras. A fresh `pip install -r requirements.txt` currently can't run
