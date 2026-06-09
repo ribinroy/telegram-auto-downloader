@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   HardDrive, Folder, File as FileIcon, Download as DownloadIcon, RefreshCw, Loader2,
-  CheckCircle, XCircle, StopCircle, Calendar, Square, Play, Settings, Trash2,
+  CheckCircle, XCircle, StopCircle, Calendar, Square, Play, Settings, Trash2, Search, X,
 } from 'lucide-react';
 import ReactTimeAgo from 'react-time-ago';
 import { useLayoutContext } from '../components/Layout';
@@ -174,6 +174,7 @@ export function VpsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [folderFilter, setFolderFilter] = useState('');
+  const [search, setSearch] = useState('');
 
   const loadFiles = useCallback(async () => {
     setLoading(true);
@@ -203,10 +204,12 @@ export function VpsPage() {
     () => activeGroups.flatMap(g => (g.error ? [] : g.entries)),
     [activeGroups],
   );
-  const visibleEntries = useMemo(
-    () => (folderFilter ? allEntries.filter(e => e.folder === folderFilter) : allEntries),
-    [allEntries, folderFilter],
-  );
+  const visibleEntries = useMemo(() => {
+    let entries = folderFilter ? allEntries.filter(e => e.folder === folderFilter) : allEntries;
+    const query = search.trim().toLowerCase();
+    if (query) entries = entries.filter(e => e.name.toLowerCase().includes(query));
+    return entries;
+  }, [allEntries, folderFilter, search]);
 
   const handleDownload = async (entry: VpsFileEntry) => {
     const res = await downloadVpsFile(entry.path, entry.size);
@@ -273,6 +276,27 @@ export function VpsPage() {
         </div>
       </div>
 
+      {/* Search */}
+      <div className="relative mb-4">
+        <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search files..."
+          className="w-full bg-slate-800/50 border border-slate-700 rounded-lg py-2 pl-9 pr-9 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 transition-colors"
+        />
+        {search && (
+          <button
+            onClick={() => setSearch('')}
+            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white transition-colors"
+            title="Clear search"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        )}
+      </div>
+
       {error && (
         <div className="bg-red-500/20 border border-red-500/50 rounded-xl p-4 mb-6 text-red-400">
           {error}
@@ -306,8 +330,20 @@ export function VpsPage() {
       ) : visibleEntries.length === 0 ? (
         <div className="min-h-[40vh] flex items-center justify-center text-slate-400">
           <div className="text-center">
-            <Folder className="w-12 h-12 mx-auto mb-4 opacity-50" />
-            <p>No files found</p>
+            {search.trim() ? (
+              <>
+                <Search className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                <p>No files match "{search.trim()}"</p>
+                <button onClick={() => setSearch('')} className="text-sm text-cyan-400 hover:text-cyan-300 mt-1">
+                  Clear search
+                </button>
+              </>
+            ) : (
+              <>
+                <Folder className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                <p>No files found</p>
+              </>
+            )}
           </div>
         </div>
       ) : (
