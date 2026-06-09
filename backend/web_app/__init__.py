@@ -59,6 +59,81 @@ def load_vps_credentials():
     }
 
 
+def normalize_transmission_url(url: str) -> str:
+    """Normalize a Transmission web/RPC URL to the RPC endpoint.
+
+    Accepts the web UI URL (.../transmission/web/), a bare host:port, or the
+    RPC URL itself, and returns the .../transmission/rpc endpoint."""
+    url = (url or "").strip().rstrip("/")
+    if url.endswith("/web"):
+        return url[:-4] + "/rpc"
+    if url.endswith("/rpc"):
+        return url
+    return url + ("/rpc" if "/transmission" in url else "/transmission/rpc")
+
+
+def load_torrent_config():
+    """Load the saved torrent client (Transmission) config with the password
+    decrypted. Returns {url, username, password} or None if not configured."""
+    from backend.utils import decrypt_secret
+    raw = get_db().get_setting("torrent_config")
+    if not raw:
+        return None
+    try:
+        cfg = json.loads(raw)
+    except Exception:
+        return None
+    if not cfg.get("url"):
+        return None
+    return {
+        "url": cfg["url"],
+        "username": cfg.get("username", ""),
+        "password": decrypt_secret(cfg.get("password_enc", "")),
+    }
+
+
+def transmission_rpc(method: str, arguments: dict = None, config: dict = None, timeout: int = 20):
+    """Call the Transmission RPC API (saved config unless one is passed in).
+
+    Handles the 409 X-Transmission-Session-Id handshake. Returns the response
+    'arguments' dict on success; raises ValueError with a readable message."""
+    import base64
+    import urllib.request
+    import urllib.error
+
+    cfg = config or load_torrent_config()
+    if not cfg:
+        raise ValueError("Torrent client is not configured")
+    payload = json.dumps({"method": method, "arguments": arguments or {}}).encode()
+    headers = {"Content-Type": "application/json"}
+    if cfg.get("username") or cfg.get("password"):
+        token = base64.b64encode(f"{cfg.get('username', '')}:{cfg.get('password', '')}".encode()).decode()
+        headers["Authorization"] = f"Basic {token}"
+
+    session_id = None
+    for attempt in range(2):
+        req_headers = dict(headers)
+        if session_id:
+            req_headers["X-Transmission-Session-Id"] = session_id
+        req = urllib.request.Request(cfg["url"], data=payload, headers=req_headers, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                body = json.loads(resp.read().decode())
+        except urllib.error.HTTPError as e:
+            if e.code == 409 and attempt == 0:
+                session_id = e.headers.get("X-Transmission-Session-Id")
+                continue
+            if e.code == 401:
+                raise ValueError("Transmission authentication failed — check username/password")
+            raise ValueError(f"Transmission returned HTTP {e.code}")
+        except urllib.error.URLError as e:
+            raise ValueError(f"Cannot reach Transmission: {getattr(e, 'reason', e)}")
+        if body.get("result") != "success":
+            raise ValueError(f"Transmission error: {body.get('result')}")
+        return body.get("arguments", {})
+    raise ValueError("Transmission session negotiation failed")
+
+
 def annotate_vps_folders(folders):
     """Tag each watched folder with `active` = belongs to the currently saved
     VPS connection. Folders from other connections stay listed but inactive.
@@ -1115,6 +1190,124 @@ class WebApp:
                 return jsonify({"success": False, "error": str(e)})
             finally:
                 client.close()
+
+        # Torrent client (Transmission) settings + magnet handoff
+        @self.app.route("/api/settings/torrent", methods=["GET"])
+        @token_required
+        def get_torrent_config():
+            """Return the saved torrent client config (password never exposed)."""
+            from backend.utils import decrypt_secret
+            raw = get_db().get_setting("torrent_config")
+            if not raw:
+                return jsonify({"configured": False, "url": "", "username": "", "has_password": False})
+            try:
+                cfg = json.loads(raw)
+            except Exception:
+                cfg = {}
+            return jsonify({
+                "configured": bool(cfg.get("url")),
+                "url": cfg.get("url", ""),
+                "username": cfg.get("username", ""),
+                "has_password": bool(decrypt_secret(cfg.get("password_enc", ""))),
+            })
+
+        @self.app.route("/api/settings/torrent", methods=["POST"])
+        @token_required
+        def save_torrent_config():
+            """Save the torrent client config. Password is encrypted at rest;
+            if omitted/blank, the previously saved password is preserved."""
+            from backend.utils import encrypt_secret, decrypt_secret
+            data = request.json or {}
+            url = normalize_transmission_url(data.get("url") or "")
+            if not url.startswith(("http://", "https://")):
+                return jsonify({"error": "A valid http(s) URL is required"}), 400
+
+            db = get_db()
+            password = data.get("password")
+            if password:
+                password_enc = encrypt_secret(password)
+            else:
+                prev = db.get_setting("torrent_config")
+                password_enc = ""
+                if prev:
+                    try:
+                        password_enc = json.loads(prev).get("password_enc", "")
+                    except Exception:
+                        password_enc = ""
+
+            cfg = {
+                "url": url,
+                "username": (data.get("username") or "").strip(),
+                "password_enc": password_enc,
+            }
+            db.set_setting("torrent_config", json.dumps(cfg))
+            return jsonify({
+                "status": "saved",
+                "configured": True,
+                "url": url,
+                "has_password": bool(decrypt_secret(password_enc)),
+            })
+
+        @self.app.route("/api/settings/torrent", methods=["DELETE"])
+        @token_required
+        def delete_torrent_config():
+            """Remove the saved torrent client config."""
+            get_db().delete_setting("torrent_config")
+            return jsonify({"status": "deleted", "configured": False})
+
+        @self.app.route("/api/settings/torrent/test", methods=["POST"])
+        @token_required
+        def test_torrent_connection():
+            """Test the Transmission connection. Uses posted form values,
+            falling back to the saved password when the password field is blank."""
+            from backend.utils import decrypt_secret
+            data = request.json or {}
+            url = normalize_transmission_url(data.get("url") or "")
+            if not url.startswith(("http://", "https://")):
+                return jsonify({"success": False, "error": "A valid http(s) URL is required"}), 400
+            password = data.get("password")
+            if not password:
+                raw = get_db().get_setting("torrent_config")
+                if raw:
+                    try:
+                        password = decrypt_secret(json.loads(raw).get("password_enc", ""))
+                    except Exception:
+                        password = ""
+            cfg = {"url": url, "username": (data.get("username") or "").strip(), "password": password or ""}
+            try:
+                session = transmission_rpc("session-get", config=cfg)
+                version = session.get("version", "unknown version")
+                return jsonify({"success": True, "message": f"Connected to Transmission {version}"})
+            except ValueError as e:
+                return jsonify({"success": False, "error": str(e)})
+
+        @self.app.route("/api/torrent/add", methods=["POST"])
+        @token_required
+        def add_torrent():
+            """Send a magnet link to the VPS torrent client.
+            Body: {magnet, download_dir?} — download_dir is a remote path
+            (e.g. a watched folder, so autoSync picks up the result)."""
+            data = request.json or {}
+            magnet = (data.get("magnet") or "").strip()
+            if not magnet.lower().startswith("magnet:"):
+                return jsonify({"error": "Not a magnet link"}), 400
+            args = {"filename": magnet}
+            download_dir = (data.get("download_dir") or "").strip()
+            if download_dir:
+                args["download-dir"] = download_dir
+            try:
+                result = transmission_rpc("torrent-add", args)
+            except ValueError as e:
+                return jsonify({"error": str(e)}), 502
+            added = result.get("torrent-added")
+            duplicate = result.get("torrent-duplicate")
+            torrent = added or duplicate or {}
+            return jsonify({
+                "status": "duplicate" if duplicate else "added",
+                "name": torrent.get("name"),
+                "hash": torrent.get("hashString"),
+                "download_dir": download_dir or None,
+            })
 
         @self.app.route("/api/settings/vps/browse", methods=["POST"])
         @token_required

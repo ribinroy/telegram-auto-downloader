@@ -1,6 +1,6 @@
 # DownLee
 
-A self-hosted media downloader with Telegram integration and a modern web dashboard. Automatically download files from Telegram chats/channels and URLs (YouTube, Twitter, Instagram, and 1000+ sites).
+A self-hosted media downloader with Telegram integration and a modern web dashboard. Automatically download files from Telegram chats/channels, URLs (YouTube, Twitter, Instagram, and 1000+ sites), and a remote VPS/seedbox over SFTP — with magnet link handoff to the seedbox's torrent client.
 
 ## Screenshots
 
@@ -20,8 +20,13 @@ A self-hosted media downloader with Telegram integration and a modern web dashbo
 
 - **Telegram Downloads**: Auto-download files from specified Telegram chat/channel
 - **URL Downloads**: Download videos from YouTube, Twitter, TikTok, Instagram, and 1000+ sites via yt-dlp
-- **Quality Selection**: Choose video quality/resolution when downloading URLs
-- **Download Folder Preview**: Shows the destination folder path as a breadcrumb when adding URL downloads
+- **VPS / Seedbox Downloads**: Connect to a remote server over SSH/SFTP, browse watched folders, and pull files or whole directories to the home server (with resume support)
+- **autoSync**: Watched VPS folders can auto-download new files on an hourly check
+- **Magnet Link Handoff**: Paste a magnet link to send it to the VPS's Transmission torrent client — optionally into a watched folder so autoSync brings the result home
+- **Per-Source Settings**: Each source (telegram, youtube, vps, ...) can have its own destination folder, default quality, and hidden flag (Settings → Sources)
+- **Per-Watchfolder Settings**: Each watched VPS folder can have its own local destination folder and hidden flag
+- **Quality Selection**: Choose video quality/resolution when downloading URLs (preselected from the source's default quality)
+- **Download Folder Preview**: Shows the destination folder path when adding URL downloads and on each download item
 - **Thumbnail Previews**: Hover to preview video thumbnails with carousel, or tap the preview button on mobile
 - **Real-time Progress**: WebSocket-based live progress tracking
 - **Web Dashboard**: Modern React UI with search, filtering, sorting, and dark mode
@@ -29,18 +34,18 @@ A self-hosted media downloader with Telegram integration and a modern web dashbo
 - **Author Filtering**: Filter the download list by author
 - **Analytics**: Visual charts showing download statistics over time
 - **Soft Delete with Timestamps**: Deleted downloads retain a `deleted_at` timestamp instead of a simple boolean
-- **Download Mappings**: Configure custom folders and default quality per source
-- **Secured Sources**: Hide downloads from specific sources (secret 4-click toggle)
+- **Hidden View**: Downloads from hidden sources/folders are filtered out of the default view (secret triple-click or Ctrl+X toggle)
 - **Video Playback**: Stream downloaded videos directly in the browser
 - **yt-dlp Management**: Check version and upgrade yt-dlp directly from the web UI (Settings > Jobs)
 - **User Authentication**: JWT-based login with password management
+- **Encrypted Credentials**: VPS and torrent client passwords stored encrypted at rest (Fernet, keyed off the JWT secret)
 - **Startup Greeting**: Sends a time-appropriate greeting to the Telegram chat on startup
 - **PostgreSQL Database**: Persistent storage for downloads and settings
 - **Prometheus Metrics**: Export metrics for monitoring with Grafana
 
 ## Tech Stack
 
-- **Backend**: Python, Flask, Flask-SocketIO, SQLAlchemy, Telethon, yt-dlp
+- **Backend**: Python, Flask, Flask-SocketIO, SQLAlchemy, Telethon, yt-dlp, paramiko (SFTP)
 - **Frontend**: React, TypeScript, Vite, Tailwind CSS
 - **Database**: PostgreSQL
 - **Monitoring**: Prometheus metrics endpoint
@@ -146,14 +151,23 @@ sudo systemctl start downlee
 Files sent to the configured Telegram chat/channel are automatically downloaded.
 
 ### URL Downloads
-1. Click the **+** button
-2. Paste a video URL
-3. Click "Check URL" to fetch formats
-4. Select quality and click "Download"
+1. Click the **+** button (or just paste a URL anywhere on the downloads page)
+2. Click "Check URL" to fetch formats
+3. Select quality and click "Download"
 
-### Download Mappings
-1. Click 4 times on "Live" indicator to unlock settings
-2. Configure per-source folders, quality, and visibility
+### VPS / Seedbox Downloads
+1. Configure the SSH connection in **Settings → VPS Connection** (password is stored encrypted)
+2. Browse the remote filesystem and add watched folders
+3. Open the **VPS Files** page to browse watched folders and download files/directories to the home server
+4. Optionally give each watched folder a local destination folder, a hidden flag, and enable **autoSync** to pull new files automatically every hour
+
+### Magnet Links (VPS Torrent Client)
+1. Configure the Transmission web URL + credentials in **Settings → VPS Connection → Torrent Client**
+2. Paste a magnet link on the downloads page — DownLee detects it and offers "Send to torrent client"
+3. Optionally pick a watched folder as the torrent's download directory so autoSync fetches the finished files
+
+### Per-Source Settings
+Configure each source's destination folder, default quality, and hidden flag in **Settings → Sources**. Hidden sources/folders are filtered from the default view; reveal them with a triple-click on the connection status pill or **Ctrl+X**.
 
 ## API Endpoints
 
@@ -162,16 +176,29 @@ Files sent to the configured Telegram chat/channel are automatically downloaded.
 | `/api/auth/login` | POST | Login |
 | `/api/auth/verify` | GET | Verify JWT token |
 | `/api/auth/password` | POST | Change password |
-| `/api/downloads` | GET | List downloads (supports `search`, `filter`, `sort_by`, `sort_order`, `author`, `limit`, `offset`, `exclude_mapping_ids`) |
+| `/api/downloads` | GET | List downloads (supports `search`, `filter`, `sort_by`, `sort_order`, `author`, `limit`, `offset`, `include_hidden`) |
 | `/api/authors` | GET | Get distinct author values for filtering |
 | `/api/stats` | GET | Get statistics |
 | `/api/url/check` | POST | Check URL formats |
 | `/api/url/download` | POST | Start download |
-| `/api/retry` | POST | Retry failed download |
+| `/api/retry` | POST | Retry/resume a failed or stopped download |
 | `/api/stop` | POST | Stop download |
+| `/api/pause` / `/api/resume` | POST | Pause/resume a Telegram download |
 | `/api/delete` | POST | Soft-delete download (sets `deleted_at` timestamp) |
-| `/api/mappings` | GET/POST | Manage download type mappings |
-| `/api/mappings/<id>` | PUT/DELETE | Update or delete a mapping |
+| `/api/mappings` | GET/POST | Per-source download specs (folder, quality, hidden) |
+| `/api/mappings/<id>` | PUT/DELETE | Update or delete a source spec |
+| `/api/settings/vps` | GET/POST/DELETE | VPS SSH connection config |
+| `/api/settings/vps/test` | POST | Test the VPS SSH connection |
+| `/api/settings/vps/browse` | POST | Browse the remote VPS filesystem |
+| `/api/settings/local/browse` | POST | Browse the local filesystem (folder pickers) |
+| `/api/settings/vps/folders` | GET/POST | List/add watched VPS folders |
+| `/api/settings/vps/folders/<id>` | PATCH/DELETE | Update specs (`auto_sync`, `folder`, `is_secured`) or remove a folder |
+| `/api/vps/files` | GET | Live listing of watched VPS folders |
+| `/api/vps/download` | POST | Download a VPS file/directory to the home server |
+| `/api/vps/delete-remote` | POST | Delete a file/directory on the VPS |
+| `/api/settings/torrent` | GET/POST/DELETE | Torrent client (Transmission) config |
+| `/api/settings/torrent/test` | POST | Test the Transmission connection |
+| `/api/torrent/add` | POST | Send a magnet link to the VPS torrent client |
 | `/api/analytics` | GET | Get analytics data |
 | `/api/settings/cookies` | GET/POST | Manage yt-dlp cookies |
 | `/api/jobs/ytdlp-version` | GET | Get current yt-dlp version |
@@ -197,7 +224,7 @@ Files sent to the configured Telegram chat/channel are automatically downloaded.
 | `downloaded_bytes` | BigInteger | Bytes downloaded so far |
 | `total_bytes` | BigInteger | Total file size |
 | `pending_time` | Float | Estimated seconds remaining |
-| `downloaded_from` | String | `telegram` or domain name (e.g. `youtube`) |
+| `downloaded_from` | String | `telegram`, `vps`, or domain name (e.g. `youtube`) |
 | `url` | Text | Source URL for yt-dlp downloads |
 | `file_deleted` | Boolean | Whether the physical file was deleted from disk |
 | `author` | String | Who initiated the download (see below) |
@@ -217,6 +244,13 @@ The UI displays only the name portion (before `:`) and shows the full `name:id` 
 ### Soft Delete
 
 Downloads use a `deleted_at` timestamp instead of a boolean flag. A download is considered active when `deleted_at IS NULL`. When deleted, `deleted_at` is set to the current timestamp, preserving when the deletion occurred.
+
+### Other Tables
+
+- `download_type_maps` — per-source specs: `downloaded_from` (unique), `folder`, `quality`, `is_secured`
+- `vps_watch_folders` — watched VPS folders: remote `path`, owning connection (`host`/`port`/`username`), `auto_sync`, local destination `folder`, `is_secured`
+- `settings` — key-value store (VPS connection, torrent client config, etc.; secrets encrypted)
+- `users` — web login accounts
 
 ## Prometheus Metrics
 
