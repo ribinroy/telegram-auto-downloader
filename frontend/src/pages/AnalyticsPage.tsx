@@ -104,8 +104,8 @@ export function AnalyticsPage() {
   };
 
   return (
-    <div className="flex flex-col" style={{ height: 'calc(100vh - 3.5rem)' }}>
-      <div className="max-w-7xl mx-auto px-3 sm:px-4 py-4 sm:py-6 w-full flex flex-col flex-1 min-h-0">
+    <div>
+      <div className="max-w-7xl mx-auto px-3 sm:px-4 py-4 sm:py-6 w-full">
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-0 mb-4 sm:mb-6">
           <div>
@@ -147,15 +147,15 @@ export function AnalyticsPage() {
         </div>
 
         {loading ? (
-          <div className="flex-1 flex items-center justify-center">
+          <div className="flex items-center justify-center py-24">
             <Loader2 className="w-8 h-8 text-cyan-500 animate-spin" />
           </div>
         ) : error ? (
-          <div className="flex-1 flex items-center justify-center text-red-400">
+          <div className="flex items-center justify-center py-24 text-red-400">
             {error}
           </div>
         ) : data ? (
-          <div className="flex-1 min-h-0 overflow-auto space-y-4 sm:space-y-6 pb-4">
+          <div className="space-y-4 sm:space-y-6 pb-4">
             {/* Summary Cards */}
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 sm:gap-4">
               <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-3 sm:p-4">
