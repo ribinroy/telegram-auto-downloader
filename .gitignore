@@ -49,8 +49,12 @@ downloads/
 logs/
 *.session
 *.session-journal
+*.db
 downloads.json
 cookies.txt
+
+# Auto-generated application secret (when JWT_SECRET is not set in .env)
+.jwt_secret
 
 # Environment variables
 .env

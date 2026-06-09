@@ -16,7 +16,14 @@ function App() {
   useEffect(() => {
     const checkAuth = async () => {
       if (!getToken()) { setIsAuthenticated(false); return; }
-      const valid = await verifyToken();
+      const { valid, mustChangePassword } = await verifyToken();
+      if (valid && mustChangePassword) {
+        // Forced password change pending: re-login so the change-password
+        // step has the current password available.
+        clearToken();
+        setIsAuthenticated(false);
+        return;
+      }
       setIsAuthenticated(valid);
       if (!valid) clearToken();
     };

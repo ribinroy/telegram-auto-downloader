@@ -2,6 +2,7 @@
 Configuration module for DownLee
 """
 import os
+import secrets as _secrets
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -55,6 +56,38 @@ def validate_config():
 # Web Interface Configuration
 WEB_PORT = int(os.getenv('WEB_PORT', '4444'))
 WEB_HOST = os.getenv('WEB_HOST', '0.0.0.0')
+
+# Application secret - signs JWT auth tokens and derives the Fernet key used
+# to encrypt secrets stored in the settings table (VPS/torrent passwords,
+# Telegram API hash). Resolution order:
+#   1. JWT_SECRET environment variable (set it in .env for a stable secret)
+#   2. A previously generated secret persisted in BASE_DIR/.jwt_secret
+#   3. A freshly generated random secret, written to BASE_DIR/.jwt_secret
+#      (mode 0600) so it survives restarts
+# Changing the secret invalidates existing logins; stored secrets encrypted
+# under the old key are migrated lazily by backend.utils.decrypt_secret().
+JWT_SECRET_FILE = BASE_DIR / ".jwt_secret"
+
+
+def _resolve_jwt_secret():
+    env_secret = (os.getenv('JWT_SECRET') or '').strip()
+    if env_secret:
+        return env_secret
+    try:
+        persisted = JWT_SECRET_FILE.read_text().strip()
+        if persisted:
+            return persisted
+    except OSError:
+        pass
+    secret = _secrets.token_urlsafe(48)
+    JWT_SECRET_FILE.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(JWT_SECRET_FILE), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, 'w') as f:
+        f.write(secret + "\n")
+    return secret
+
+
+JWT_SECRET = _resolve_jwt_secret()
 
 # Download Configuration
 MAX_RETRIES = int(os.getenv('MAX_RETRIES', '6'))

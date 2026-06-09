@@ -1,7 +1,7 @@
 import { io, Socket } from 'socket.io-client';
 import type { Download, Stats } from '../types';
 
-const API_BASE = import.meta.env.DEV ? 'http://192.168.0.135:4444' : window.location.origin;
+const API_BASE = import.meta.env.DEV ? (import.meta.env.VITE_API_BASE || 'http://localhost:4444') : window.location.origin;
 
 let socket: Socket | null = null;
 

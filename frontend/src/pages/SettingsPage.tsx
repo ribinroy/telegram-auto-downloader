@@ -1,16 +1,18 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Loader2, AlertCircle, CheckCircle, Key, Globe, Cookie, Wrench, Server, Send } from 'lucide-react';
+import { Loader2, AlertCircle, CheckCircle, Key, Globe, Cookie, Wrench, Server, Send, TerminalSquare, Users } from 'lucide-react';
 import { updatePassword, fetchCookies, saveCookies, syncThumbnails, getYtdlpVersion, upgradeYtdlp } from '../api';
 import type { SyncThumbnailsResult } from '../api';
 import { VpsSettings } from '../components/VpsSettings';
 import { SourcesSettings } from '../components/SourcesSettings';
 import { TelegramSettings } from '../components/TelegramSettings';
+import { QueriesSettings } from '../components/QueriesSettings';
+import { UsersSettings } from '../components/UsersSettings';
 import { useLayoutContext } from '../components/Layout';
 import { settingsTab } from '../routes';
 
-type TabType = 'password' | 'sources' | 'cookies' | 'jobs' | 'vps' | 'telegram';
-const TAB_IDS: TabType[] = ['password', 'sources', 'cookies', 'telegram', 'vps', 'jobs'];
+type TabType = 'password' | 'sources' | 'cookies' | 'jobs' | 'vps' | 'telegram' | 'queries' | 'users';
+const TAB_IDS: TabType[] = ['password', 'sources', 'cookies', 'telegram', 'queries', 'users', 'vps', 'jobs'];
 
 export function SettingsPage() {
   const { refreshDownloads } = useLayoutContext();
@@ -168,6 +170,8 @@ export function SettingsPage() {
     { id: 'sources', label: 'Sources', description: 'Per-source folders & defaults', icon: Globe, show: true },
     { id: 'cookies', label: 'Cookies', description: 'yt-dlp browser cookies', icon: Cookie, show: true },
     { id: 'telegram', label: 'Telegram', description: 'Account login & monitored channels', icon: Send, show: true },
+    { id: 'queries', label: 'Queries', description: 'Bot chat commands', icon: TerminalSquare, show: true },
+    { id: 'users', label: 'Users', description: 'Roles & bot access', icon: Users, show: true },
     { id: 'vps', label: 'VPS Connection', description: 'Remote SSH/SFTP server', icon: Server, show: true },
     { id: 'jobs', label: 'Jobs', description: 'Maintenance & tools', icon: Wrench, show: true },
   ];
@@ -349,6 +353,10 @@ export function SettingsPage() {
         )}
 
         {activeTab === 'telegram' && <TelegramSettings />}
+
+        {activeTab === 'queries' && <QueriesSettings />}
+
+        {activeTab === 'users' && <UsersSettings />}
 
         {activeTab === 'vps' && <VpsSettings onChange={refreshDownloads} />}
 

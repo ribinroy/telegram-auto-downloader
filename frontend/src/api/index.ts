@@ -1,6 +1,6 @@
 import type { DownloadsResponse, Stats, UrlCheckResult, Download, SourceMapping, AnalyticsData } from '../types';
 
-const API_BASE = import.meta.env.DEV ? 'http://192.168.0.135:4444' : '';
+const API_BASE = import.meta.env.DEV ? (import.meta.env.VITE_API_BASE || 'http://localhost:4444') : '';
 const TOKEN_KEY = 'auth_token';
 
 export type SortBy = 'created_at' | 'file' | 'status' | 'progress';
@@ -28,6 +28,12 @@ function getAuthHeaders(): HeadersInit {
 export interface LoginResponse {
   token: string;
   user: { id: number; username: string };
+  must_change_password?: boolean;
+}
+
+export interface VerifyResult {
+  valid: boolean;
+  mustChangePassword: boolean;
 }
 
 export async function login(username: string, password: string): Promise<LoginResponse> {
@@ -43,14 +49,16 @@ export async function login(username: string, password: string): Promise<LoginRe
   return response.json();
 }
 
-export async function verifyToken(): Promise<boolean> {
+export async function verifyToken(): Promise<VerifyResult> {
   const token = getToken();
-  if (!token) return false;
+  if (!token) return { valid: false, mustChangePassword: false };
 
   const response = await fetch(`${API_BASE}/api/auth/verify`, {
     headers: getAuthHeaders(),
   });
-  return response.ok;
+  if (!response.ok) return { valid: false, mustChangePassword: false };
+  const data = await response.json().catch(() => ({}));
+  return { valid: true, mustChangePassword: !!data.must_change_password };
 }
 
 export async function updatePassword(currentPassword: string, newPassword: string): Promise<void> {
@@ -278,6 +286,7 @@ export interface TelegramUser {
   first_name: string | null;
   last_name: string | null;
   phone: string | null;
+  is_bot?: boolean;
 }
 
 export interface TelegramChannel {
@@ -350,6 +359,10 @@ export function verifyTelegramPassword(password: string): Promise<{ status?: str
   return telegramRequest('/verify-password', { method: 'POST', body: JSON.stringify({ password }) });
 }
 
+export function telegramBotLogin(token: string): Promise<{ status?: string; error?: string }> {
+  return telegramRequest('/bot-login', { method: 'POST', body: JSON.stringify({ token }) });
+}
+
 export function telegramLogout(): Promise<{ status?: string; error?: string }> {
   return telegramRequest('/logout', { method: 'POST', body: JSON.stringify({}) });
 }
@@ -364,6 +377,88 @@ export function removeTelegramChannel(chatId: number): Promise<{ channels?: Tele
 
 export function fetchTelegramDialogs(): Promise<{ dialogs?: TelegramDialog[]; error?: string }> {
   return telegramRequest('/dialogs');
+}
+
+// Users (web logins + Telegram users who interacted with the bot)
+export interface AppUser {
+  id: number;
+  username: string;
+  role: 'admin' | 'user';
+  telegram_id: string | null;
+  display_name: string | null;
+  is_web: boolean;
+  created_at: string | null;
+}
+
+export async function fetchUsers(): Promise<{ users: AppUser[] }> {
+  const response = await fetch(`${API_BASE}/api/users`, { headers: getAuthHeaders() });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  return response.json();
+}
+
+export async function syncUsers(): Promise<{ synced?: number; users?: AppUser[]; error?: string }> {
+  const response = await fetch(`${API_BASE}/api/users/sync`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+  });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  return response.json();
+}
+
+export async function updateUserRole(userId: number, role: 'admin' | 'user'): Promise<{ user?: AppUser; error?: string }> {
+  const response = await fetch(`${API_BASE}/api/users/${userId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ role }),
+  });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  return response.json();
+}
+
+// Bot queries (key -> shell snippet triggered from Telegram)
+export interface BotQuery {
+  key: string;
+  command: string;
+}
+
+async function queriesRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`${API_BASE}/api/settings/queries${path}`, {
+    ...init,
+    headers: {
+      ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
+      ...getAuthHeaders(),
+    },
+  });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  return response.json();
+}
+
+export function fetchBotQueries(): Promise<{ queries: BotQuery[] }> {
+  return queriesRequest('');
+}
+
+export function saveBotQuery(key: string, command: string, originalKey?: string): Promise<{ queries?: BotQuery[]; error?: string }> {
+  return queriesRequest('', { method: 'POST', body: JSON.stringify({ key, command, original_key: originalKey }) });
+}
+
+export function deleteBotQuery(key: string): Promise<{ queries?: BotQuery[]; error?: string }> {
+  return queriesRequest(`/${encodeURIComponent(key)}`, { method: 'DELETE' });
+}
+
+export function testBotQuery(command: string): Promise<{ output?: string; error?: string }> {
+  return queriesRequest('/test', { method: 'POST', body: JSON.stringify({ command }) });
 }
 
 export interface VpsConfig {

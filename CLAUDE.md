@@ -213,7 +213,7 @@ All config via `.env` file at project root (loaded by python-dotenv):
 | `DATABASE_URL` | `postgresql://...` | PostgreSQL connection string |
 | `MAX_RETRIES` | `6` | Download retry attempts |
 | `SCREENSHOTS_DIR` | `DOWNLOAD_DIR/.thumbs` | Thumbnail storage |
-| `JWT_SECRET` | hardcoded fallback | JWT signing key |
+| `JWT_SECRET` | auto-generated, persisted to `.jwt_secret` | App secret: JWT signing + Fernet key for stored secrets |
 
 ## Download Flow
 

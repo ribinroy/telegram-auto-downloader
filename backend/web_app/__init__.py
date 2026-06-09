@@ -12,12 +12,10 @@ from functools import wraps
 from flask import Flask, jsonify, request, send_from_directory, Response
 from flask_cors import CORS
 from flask_socketio import SocketIO
-from backend.config import WEB_PORT, WEB_HOST
+from backend.config import WEB_PORT, WEB_HOST, JWT_SECRET
 from backend.database import get_db
 from backend import metrics
 
-# JWT secret key
-JWT_SECRET = os.environ.get('JWT_SECRET', 'telegram-downloader-secret-key-change-in-prod')
 JWT_EXPIRY_DAYS = 30  # Keep signed in for 30 days
 
 # Global socketio instance for broadcasting from other modules
@@ -203,8 +201,17 @@ def get_web_app():
     return _web_app
 
 
+# Routes still usable while a forced password change is pending
+PASSWORD_CHANGE_ALLOWED_PATHS = {'/api/auth/verify', '/api/auth/password'}
+
+
 def token_required(f):
-    """Decorator to require valid JWT token"""
+    """Decorator to require valid JWT token.
+
+    While the user's `must_change_password` flag is set (default credentials),
+    the token only grants access to /api/auth/verify and /api/auth/password —
+    everything else returns 403 with code 'password_change_required'.
+    """
     @wraps(f)
     def decorated(*args, **kwargs):
         token = None
@@ -222,6 +229,13 @@ def token_required(f):
             return jsonify({'error': 'Token has expired'}), 401
         except jwt.InvalidTokenError:
             return jsonify({'error': 'Invalid token'}), 401
+
+        # Checked in the DB (not the token) so the lockdown lifts immediately
+        # after the password change without re-issuing the JWT.
+        request.must_change_password = get_db().user_must_change_password(data.get('user_id'))
+        if request.must_change_password and request.path not in PASSWORD_CHANGE_ALLOWED_PATHS:
+            return jsonify({'error': 'Password change required',
+                            'code': 'password_change_required'}), 403
 
         return f(*args, **kwargs)
     return decorated
@@ -507,13 +521,17 @@ class WebApp:
 
             return jsonify({
                 "token": token,
-                "user": user
+                "user": user,
+                "must_change_password": bool(user.get('must_change_password'))
             })
 
         @self.app.route("/api/auth/verify", methods=["GET"])
         @token_required
         def verify_token():
-            return jsonify({"user": request.user})
+            return jsonify({
+                "user": request.user,
+                "must_change_password": bool(getattr(request, 'must_change_password', False))
+            })
 
         @self.app.route("/api/auth/password", methods=["POST"])
         @token_required
@@ -524,6 +542,9 @@ class WebApp:
 
             if not current_password or not new_password:
                 return jsonify({"error": "Current and new password required"}), 400
+
+            if new_password == 'admin':
+                return jsonify({"error": "The default password 'admin' is not allowed"}), 400
 
             db = get_db()
             result = db.update_user_password(request.user['user_id'], current_password, new_password)
@@ -1144,6 +1165,21 @@ class WebApp:
             except Exception as e:
                 return jsonify({"error": str(e)}), 400
 
+        @self.app.route("/api/settings/telegram/bot-login", methods=["POST"])
+        @token_required
+        def telegram_bot_login():
+            """Alternative login: sign in with a BotFather bot token."""
+            token = ((request.json or {}).get("token") or "").strip()
+            if not token:
+                return jsonify({"error": "Bot token is required"}), 400
+            try:
+                result = self._telegram_call(self.telegram_downloader.submit_bot_token(token))
+                if result.get("error"):
+                    return jsonify(result), 400
+                return jsonify(result)
+            except Exception as e:
+                return jsonify({"error": str(e)}), 400
+
         @self.app.route("/api/settings/telegram/logout", methods=["POST"])
         @token_required
         def telegram_logout():
@@ -1195,6 +1231,84 @@ class WebApp:
                 return jsonify({"dialogs": self._telegram_call(self.telegram_downloader.list_dialogs())})
             except Exception as e:
                 return jsonify({"error": str(e)}), 400
+
+        # Users (web logins + Telegram users who interacted with the bot)
+        @self.app.route("/api/users", methods=["GET"])
+        @token_required
+        def list_users():
+            return jsonify({"users": get_db().get_users()})
+
+        @self.app.route("/api/users/sync", methods=["POST"])
+        @token_required
+        def sync_users():
+            """Pull the member lists of all monitored groups into the users table."""
+            try:
+                synced = self._telegram_call(
+                    self.telegram_downloader.sync_channel_members(), timeout=120)
+                return jsonify({"synced": synced, "users": get_db().get_users()})
+            except Exception as e:
+                return jsonify({"error": str(e)}), 400
+
+        @self.app.route("/api/users/<int:user_id>", methods=["PATCH"])
+        @token_required
+        def update_user(user_id):
+            """Change a user's role (admin/user). Web-login users stay admin."""
+            role = ((request.json or {}).get("role") or "").strip().lower()
+            if role not in ("admin", "user"):
+                return jsonify({"error": "Role must be 'admin' or 'user'"}), 400
+            db = get_db()
+            target = next((u for u in db.get_users() if u["id"] == user_id), None)
+            if not target:
+                return jsonify({"error": "User not found"}), 404
+            if target.get("is_web") and role != "admin":
+                return jsonify({"error": "Web login users are always admins"}), 400
+            updated = db.update_user_role(user_id, role)
+            return jsonify({"user": updated})
+
+        # Bot queries (key -> shell snippet, triggered by tagging the bot)
+        @self.app.route("/api/settings/queries", methods=["GET"])
+        @token_required
+        def get_bot_queries():
+            return jsonify({"queries": self.telegram_downloader.get_queries()
+                            if self.telegram_downloader else []})
+
+        @self.app.route("/api/settings/queries", methods=["POST"])
+        @token_required
+        def save_bot_query():
+            """Add or update a query (upsert by key; original_key supports renames)."""
+            data = request.json or {}
+            key = (data.get("key") or "").strip().lower()
+            command = (data.get("command") or "").strip()
+            original_key = (data.get("original_key") or key).strip().lower()
+            if not key or not command:
+                return jsonify({"error": "Key and command are required"}), 400
+            if ' ' in key or len(key) > 64:
+                return jsonify({"error": "Key must be a single word (max 64 chars)"}), 400
+            if key == 'help':
+                return jsonify({"error": "'help' is reserved for listing the available queries"}), 400
+            db = get_db()
+            db.upsert_bot_query(key, command, original_key=original_key)
+            return jsonify({"queries": db.get_bot_queries()})
+
+        @self.app.route("/api/settings/queries/<key>", methods=["DELETE"])
+        @token_required
+        def delete_bot_query(key):
+            db = get_db()
+            db.delete_bot_query(key)
+            return jsonify({"queries": db.get_bot_queries()})
+
+        @self.app.route("/api/settings/queries/test", methods=["POST"])
+        @token_required
+        def test_bot_query():
+            """Run a snippet now and return its output (same env as chat triggers)."""
+            command = ((request.json or {}).get("command") or "").strip()
+            if not command:
+                return jsonify({"error": "Command is required"}), 400
+            from backend.telegram_handler import TelegramDownloader
+            # Stand in for the chat sender with the logged-in web user
+            username = (getattr(request, 'user', None) or {}).get('username', 'admin')
+            extra_env = {'SENDER_NAME': username, 'SENDER_USERNAME': username, 'SENDER_ID': '', 'CHAT_TITLE': ''}
+            return jsonify({"output": TelegramDownloader.run_query_sync(command, extra_env)})
 
         # VPS (SSH/SFTP) connection settings
         @self.app.route("/api/settings/vps", methods=["GET"])

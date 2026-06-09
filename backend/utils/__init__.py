@@ -9,18 +9,31 @@ from datetime import datetime
 from pathlib import Path
 
 
-def _fernet():
-    """Build a Fernet cipher keyed off the app's JWT secret.
+# Legacy hardcoded fallback secret used by older releases when JWT_SECRET was
+# unset. It MUST remain here (and only here): installs that ran with it have
+# Fernet-encrypted values in the settings table, and decrypt_secret() needs it
+# to read (and transparently migrate) those values after upgrading to the
+# auto-generated secret. Never use it to encrypt new data or sign JWTs.
+_LEGACY_FALLBACK_SECRET = 'telegram-downloader-secret-key-change-in-prod'
 
-    The key is derived (not stored) so secrets in the DB can only be
-    decrypted by an instance that knows JWT_SECRET. Set a stable
-    JWT_SECRET in .env in production, otherwise saved secrets become
-    unreadable when the fallback secret changes.
-    """
+
+def _fernet_for(secret: str):
+    """Build a Fernet cipher from a secret string (key derived, not stored)."""
     from cryptography.fernet import Fernet
-    secret = os.environ.get('JWT_SECRET', 'telegram-downloader-secret-key-change-in-prod')
     key = base64.urlsafe_b64encode(hashlib.sha256(secret.encode()).digest())
     return Fernet(key)
+
+
+def _fernet():
+    """Fernet cipher keyed off the app secret (backend.config.JWT_SECRET).
+
+    The key is derived (not stored) so secrets in the DB can only be
+    decrypted by an instance that knows the secret. The secret comes from
+    the JWT_SECRET env var, or is auto-generated once and persisted to
+    BASE_DIR/.jwt_secret.
+    """
+    from backend.config import JWT_SECRET
+    return _fernet_for(JWT_SECRET)
 
 
 def encrypt_secret(plaintext: str) -> str:
@@ -30,14 +43,44 @@ def encrypt_secret(plaintext: str) -> str:
     return _fernet().encrypt(plaintext.encode()).decode()
 
 
+def _migrate_legacy_token(old_token: str, plaintext: str):
+    """Re-encrypt a legacy-key token with the current key and persist it.
+
+    Encrypted tokens are embedded inside JSON blobs in the settings table
+    (e.g. vps_config.password_enc), so rewrite any settings row containing
+    the old token verbatim. Best-effort: failures are ignored because the
+    caller already has the decrypted value.
+    """
+    try:
+        from backend.database import get_db
+        db = get_db()
+        new_token = encrypt_secret(plaintext)
+        for key, value in db.get_all_settings().items():
+            if value and old_token in value:
+                db.set_setting(key, value.replace(old_token, new_token))
+    except Exception:
+        pass
+
+
 def decrypt_secret(token: str) -> str:
-    """Decrypt a token produced by encrypt_secret. Returns '' on failure."""
+    """Decrypt a token produced by encrypt_secret. Returns '' on failure.
+
+    Tries the current key first; falls back to the legacy hardcoded key for
+    values encrypted by older installs, transparently re-encrypting them
+    with the current key on success.
+    """
     if not token:
         return ''
     try:
         return _fernet().decrypt(token.encode()).decode()
     except Exception:
+        pass
+    try:
+        plaintext = _fernet_for(_LEGACY_FALLBACK_SECRET).decrypt(token.encode()).decode()
+    except Exception:
         return ''
+    _migrate_legacy_token(token, plaintext)
+    return plaintext
 
 
 def resolve_spec(source, path=None):

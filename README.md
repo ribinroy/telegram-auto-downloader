@@ -169,6 +169,39 @@ Files sent to the configured Telegram chat/channel are automatically downloaded.
 ### Per-Source Settings
 Configure each source's destination folder, default quality, and hidden flag in **Settings → Sources**. Hidden sources/folders are filtered from the default view; reveal them with a triple-click on the connection status pill or **Ctrl+X**.
 
+## Security
+
+### Bot Queries Run Shell Commands on the Host
+
+DownLee's bot queries (**Settings → Queries**) map a keyword to a shell snippet. Tagging the bot account (or DMing it) with that keyword — e.g. `@DownLeeBot health` — executes the snippet on the server and replies with its output. **This is remote command execution by design.** Anyone with the Telegram `admin` role effectively has a shell on your host.
+
+Things to know before enabling it:
+
+- Snippets run via the shell (`sh -c`) **as the service user** (the `User=` in your systemd unit), with a 30-second timeout. Whatever that user can do, a query can do.
+- Only Telegram users with the **admin** role can trigger queries. Everyone who messages a monitored chat is recorded with the default `user` role and gets refused; promote people deliberately in **Settings → Users**, and keep the admin list as small as possible.
+- Queries can also be edited and test-run from the web UI (**Settings → Queries**), so anyone with web dashboard access can change what they execute. Change the default `admin`/`admin` login immediately.
+- Keep snippets **read-only** (status, disk usage, uptime). Avoid anything that changes state — file deletion, package installs, service restarts — since a compromised Telegram account of any admin can invoke them.
+
+### Sudo for the Hardware Queries
+
+The default `health` query uses `sudo -n smartctl` to read disk SMART status. Do **not** give the service user broad passwordless sudo. Instead, scope a sudoers rule to exactly the binary needed (replace `your_user` with the systemd service user):
+
+```
+# /etc/sudoers.d/downlee
+your_user ALL=(root) NOPASSWD: /usr/sbin/smartctl
+```
+
+With `sudo -n`, the query degrades gracefully (reports health as "unknown") if no rule is present — so granting this is optional and only needed for SMART health output.
+
+### Network Exposure
+
+By default the server binds to `0.0.0.0` and allows all CORS origins (for both the REST API and the WebSocket) — this is intended for use on a **trusted LAN only**.
+
+- **Do not expose DownLee directly to the internet.** If you need remote access, put it behind a reverse proxy (Caddy, nginx, Traefik) with HTTPS, and ideally restrict access further with a VPN (WireGuard, Tailscale) or proxy-level authentication.
+- All `/api/*` routes require a JWT, but `/metrics` (Prometheus) is **unauthenticated** by design — anyone who can reach the port can read download stats from it.
+- Change the default `admin`/`admin` credentials before the dashboard is reachable by anyone else.
+- To bind to a specific interface instead of all of them, set `WEB_HOST` in `.env` (e.g. `WEB_HOST=192.168.1.10`, or `127.0.0.1` when fronted by a local reverse proxy).
+
 ## API Endpoints
 
 | Endpoint | Method | Description |
@@ -236,7 +269,7 @@ Configure each source's destination folder, default quality, and hidden flag in 
 
 The `author` column tracks who initiated each download:
 
-- **Telegram downloads**: Stored as `username:user_id` (e.g. `RibinRoy:465457653`). Falls back to `post_author` for channel messages with signatures.
+- **Telegram downloads**: Stored as `username:user_id` (e.g. `johndoe:123456789`). Falls back to `post_author` for channel messages with signatures.
 - **Web (DownLee) downloads**: Stored as the logged-in user's username (e.g. `admin`).
 
 The UI displays only the name portion (before `:`) and shows the full `name:id` in a tooltip on hover.
@@ -263,4 +296,6 @@ DownLee exposes metrics at `/metrics` for Prometheus scraping:
 
 ## License
 
-MIT
+Copyright © 2026 Ribin Roy
+
+Licensed under the GNU Affero General Public License v3.0 — see [LICENSE](LICENSE).

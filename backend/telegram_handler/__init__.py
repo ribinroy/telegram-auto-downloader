@@ -4,9 +4,13 @@ Telegram client and download handler
 import asyncio
 import json
 import logging
+import os
+import re
+import subprocess
 from datetime import datetime
 from telethon import TelegramClient, events, utils as tg_utils
 from telethon.errors import SessionPasswordNeededError
+from telethon.tl.types import User as TgUser
 from backend.config import API_ID, API_HASH, CHAT_ID, DOWNLOAD_DIR, MAX_RETRIES, SESSION_FILE
 from backend.database import get_db
 from backend.utils import human_readable_size, get_media_folder
@@ -16,6 +20,33 @@ from backend.file_meta import poll_and_extract_meta, is_video_file
 
 CHANNELS_SETTING_KEY = 'telegram_channels'
 API_SETTING_KEY = 'telegram_api'
+QUERY_TIMEOUT = 30  # seconds a query snippet may run
+
+# Seeded on first run so the Queries tab has working examples
+DEFAULT_QUERIES = [
+    {
+        'key': 'hello',
+        'command': 'echo "Hello ${SENDER_NAME:-there}, hope you are good? 😊"',
+    },
+    {
+        'key': 'health',
+        'command': (
+            'echo "✅ all good — $(uptime -p)"\n'
+            'df -h "$DOWNLOAD_DIR" | awk \'NR==2 {print "💾 "$4" free of "$2" ("$5" used)"}\'\n'
+            'disks=$(lsblk -dno NAME,TYPE | awk \'$2=="disk"{print $1}\')\n'
+            'echo "🖴 $(echo "$disks" | grep -c .) disk(s) installed:"\n'
+            'for d in $disks; do\n'
+            '  model=$(lsblk -dno MODEL "/dev/$d" | xargs)\n'
+            '  size=$(lsblk -dno SIZE "/dev/$d" | xargs)\n'
+            '  health=$(sudo -n smartctl -H "/dev/$d" 2>/dev/null | awk -F: \'/overall-health|SMART Health Status/{gsub(/^ +/,"",$2); print $2}\')\n'
+            '  mounts=$(lsblk -no MOUNTPOINT "/dev/$d" | sed \'/^$/d;/\\[SWAP\\]/d\' | sort -u)\n'
+            '  avail=$(echo "$mounts" | xargs -r df -B1 --output=avail 2>/dev/null | awk \'NR>1{s+=$1} END{if(s>0) print s}\')\n'
+            '  free=$([ -n "$avail" ] && numfmt --to=iec "$avail")\n'
+            '  echo "• $d — $model ($size): ${health:-unknown (smartctl needs sudo)}${free:+ · ${free} free}"\n'
+            'done'
+        ),
+    },
+]
 
 
 class TelegramDownloader:
@@ -26,6 +57,8 @@ class TelegramDownloader:
         self.authorized = False
         self._stopping = False
         self._handler = None  # Currently registered NewMessage handler
+        self._mention_handler = None  # Command handler for messages tagging the account
+        self._seen_users = {}  # telegram_id -> (username, name): skips repeat DB upserts
 
         # Pending web-login state (phone -> code -> optional 2FA password)
         self._login_phone = None
@@ -133,12 +166,23 @@ class TelegramDownloader:
         return ids[0] if ids else CHAT_ID
 
     def _register_handler(self):
-        """(Re-)register the NewMessage handler for the current channel list."""
+        """(Re-)register the NewMessage handlers: commands for any message
+        tagging the account, file downloads for the current channel list."""
         if self.client is None:
             return
+        if self._mention_handler:
+            self.client.remove_event_handler(self._mention_handler)
+            self._mention_handler = None
         if self._handler:
             self.client.remove_event_handler(self._handler)
             self._handler = None
+
+        async def handle_mention(event):
+            await self._handle_mention(event)
+
+        self._mention_handler = handle_mention
+        self.client.add_event_handler(handle_mention, events.NewMessage(incoming=True))
+
         ids = self.chat_ids()
         print(f"📡 Listening for new files on {len(ids)} channel(s): {ids}")
         if not ids:
@@ -175,9 +219,12 @@ class TelegramDownloader:
             except Exception as e:
                 first_error = first_error or e
 
-        async for dialog in self.client.iter_dialogs():
-            if dialog.id in candidates:
-                return dialog.entity
+        # Dialog scan fallback (user accounts only — bots can't list dialogs)
+        me = await self.client.get_me()
+        if not (me and me.bot):
+            async for dialog in self.client.iter_dialogs():
+                if dialog.id in candidates:
+                    return dialog.entity
 
         raise first_error
 
@@ -198,9 +245,12 @@ class TelegramDownloader:
                  or str(chat_id))
         if any(c['id'] == chat_id for c in self.channels):
             return {'error': f'"{title}" is already being monitored'}
-        self.channels.append({'id': chat_id, 'title': title})
+        channel = {'id': chat_id, 'title': title}
+        self.channels.append(channel)
         self._save_channels()
         self._register_handler()
+        # Register the new group's members in the users table (best-effort)
+        asyncio.create_task(self.sync_channel_members([channel]))
         return {'channels': self.get_channels()}
 
     async def remove_channel(self, chat_id):
@@ -214,6 +264,9 @@ class TelegramDownloader:
         """List the account's dialogs (channels/groups first) for the picker UI."""
         if self.client is None:
             return []
+        me = await self.client.get_me()
+        if me and me.bot:
+            raise ValueError('Bot accounts cannot list their chats — add channels by @username or chat ID instead')
         dialogs = await self.client.get_dialogs(limit=limit)
         monitored = set(self.chat_ids())
         result = []
@@ -228,6 +281,28 @@ class TelegramDownloader:
             })
         result.sort(key=lambda x: (x['type'] == 'user', x['title'].lower()))
         return result
+
+    async def sync_channel_members(self, channels=None):
+        """Best-effort: register every member of the monitored groups in the
+        users table. Bots and deleted accounts are skipped. Broadcast channels
+        only expose their subscriber list to admins — those are logged and
+        skipped. Returns the number of members registered."""
+        db = get_db()
+        total = 0
+        for c in (channels if channels is not None else self.channels):
+            try:
+                participants = await self.client.get_participants(c['id'])
+            except Exception as e:
+                logging.error(f"Cannot list members of {c.get('title') or c['id']}: {e}")
+                continue
+            for p in participants:
+                if not isinstance(p, TgUser) or p.bot or p.deleted:
+                    continue
+                name = ' '.join(filter(None, [p.first_name, p.last_name]))
+                db.upsert_telegram_user(p.id, username=p.username, display_name=name or None)
+                self._seen_users[p.id] = (p.username, name)
+                total += 1
+        return total
 
     async def refresh_channel_titles(self):
         """Best-effort: replace numeric placeholder titles with real chat
@@ -280,6 +355,7 @@ class TelegramDownloader:
                         'first_name': me.first_name,
                         'last_name': me.last_name,
                         'phone': me.phone,
+                        'is_bot': bool(getattr(me, 'bot', False)),
                     }
         except Exception as e:
             logging.error(f"Telegram status check failed: {e}")
@@ -317,6 +393,18 @@ class TelegramDownloader:
         await self._on_authorized()
         return {'status': 'authorized'}
 
+    async def submit_bot_token(self, token):
+        """Alternative login: sign in as a bot account. The bot must be a
+        member of every monitored group (admin, or privacy mode disabled
+        via BotFather) to see other members' messages."""
+        if self.client is None:
+            return {'error': 'Configure the API ID and hash first'}
+        if not self.client.is_connected():
+            await self.client.connect()
+        await self.client.sign_in(bot_token=token.strip())
+        await self._on_authorized()
+        return {'status': 'authorized'}
+
     async def logout(self):
         """Log out and invalidate the session file. The client reconnects
         unauthorized and waits for a new web login."""
@@ -334,6 +422,9 @@ class TelegramDownloader:
         self._login_code_hash = None
         await self.refresh_channel_titles()
         await self.send_startup_greeting()
+        # Register all current group members in the users table (best-effort,
+        # in the background so startup isn't delayed by large groups)
+        asyncio.create_task(self.sync_channel_members())
 
     def emit_progress(self, message_id: int, progress: float, downloaded_bytes: int,
                        total_bytes: int, speed: float, pending_time: float | None):
@@ -691,6 +782,140 @@ class TelegramDownloader:
         # Start background metadata extraction for video files
         if is_video_file(filename):
             asyncio.create_task(poll_and_extract_meta(event.id))
+
+    # ------------------------------------------------------------------
+    # Chat queries (key -> shell snippet, managed in Settings -> Queries)
+    # ------------------------------------------------------------------
+
+    def get_queries(self):
+        """Load the configured queries from the bot_queries table, seeding
+        the default examples on first run."""
+        db = get_db()
+        queries = db.get_bot_queries()
+        if not queries and not db.get_setting('bot_queries_seeded'):
+            for q in DEFAULT_QUERIES:
+                db.upsert_bot_query(q['key'], q['command'])
+            db.set_setting('bot_queries_seeded', '1')
+            queries = db.get_bot_queries()
+        return queries
+
+    @staticmethod
+    def _query_env(extra_env=None):
+        env = dict(os.environ)
+        env['DOWNLOAD_DIR'] = str(DOWNLOAD_DIR)
+        # The systemd unit pins PATH to the venv only — make sure snippets can
+        # still find standard tools (df, awk, lsblk, smartctl, ...)
+        parts = [p for p in env.get('PATH', '').split(':') if p]
+        for p in ('/usr/local/sbin', '/usr/local/bin', '/usr/sbin', '/usr/bin', '/sbin', '/bin'):
+            if p not in parts:
+                parts.append(p)
+        env['PATH'] = ':'.join(parts)
+        if extra_env:
+            env.update({k: str(v) for k, v in extra_env.items() if v is not None})
+        return env
+
+    @staticmethod
+    def _format_query_output(stdout, stderr, returncode):
+        output = ((stdout or '') + (stderr or '')).strip()
+        if returncode != 0:
+            output = f'{output}\n(exit code {returncode})'.strip()
+        return output or '(no output)'
+
+    @classmethod
+    def run_query_sync(cls, command, extra_env=None):
+        """Run a query snippet in a shell (used by the UI test button)."""
+        try:
+            proc = subprocess.run(command, shell=True, capture_output=True,
+                                  text=True, timeout=QUERY_TIMEOUT, env=cls._query_env(extra_env))
+        except subprocess.TimeoutExpired:
+            return f'⏱️ Timed out after {QUERY_TIMEOUT}s'
+        return cls._format_query_output(proc.stdout, proc.stderr, proc.returncode)
+
+    @classmethod
+    async def run_query_command(cls, command, extra_env=None):
+        """Async variant of run_query_sync for the Telegram event loop."""
+        proc = await asyncio.create_subprocess_shell(
+            command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            env=cls._query_env(extra_env),
+        )
+        try:
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout=QUERY_TIMEOUT)
+        except asyncio.TimeoutError:
+            proc.kill()
+            return f'⏱️ Timed out after {QUERY_TIMEOUT}s'
+        return cls._format_query_output((out or b'').decode(errors='replace'), '', proc.returncode)
+
+    async def _handle_mention(self, event):
+        """Register the sender of any message the bot can see, and when the
+        message tags the account (or DMs it) with a query key, run it —
+        admins only. 'help' lists the available keys."""
+        try:
+            # Anyone who posts in a chat the bot can see is recorded in the
+            # users table (role 'user' by default; promote in Settings -> Users).
+            # A small cache avoids a DB write per message.
+            sender = None
+            try:
+                sender = await event.get_sender()
+            except Exception as e:
+                logging.error(f"Could not resolve message sender: {e}")
+            if isinstance(sender, TgUser) and not sender.bot:
+                name = ' '.join(filter(None, [sender.first_name, sender.last_name]))
+                cache_val = (sender.username, name)
+                if self._seen_users.get(sender.id) != cache_val:
+                    get_db().upsert_telegram_user(
+                        sender.id, username=sender.username, display_name=name or None)
+                    self._seen_users[sender.id] = cache_val
+
+            if not (event.mentioned or event.is_private):
+                return
+
+            text = event.raw_text or ''
+            # Strip the @username tag so "@DownLeeBot health" becomes "health"
+            me = await self.client.get_me()
+            username = getattr(me, 'username', None)
+            if username:
+                text = re.sub(rf'@{re.escape(username)}', '', text, flags=re.IGNORECASE)
+            key = text.strip().lower()
+            if not key or len(key) > 64:
+                return
+
+            queries = self.get_queries()
+            query = next((q for q in queries
+                          if (q.get('key') or '').strip().lower() == key), None)
+            if not query and key != 'help':
+                return
+
+            role = (get_db().get_telegram_user_role(sender.id)
+                    if isinstance(sender, TgUser) else None)
+            if role != 'admin':
+                await event.reply('⛔ Sorry, only admins can run queries.', parse_mode=None)
+                return
+
+            if query:
+                # Expose the invoker and chat to the snippet as env vars
+                extra_env = {}
+                if sender:
+                    name = ' '.join(filter(None, [getattr(sender, 'first_name', None),
+                                                  getattr(sender, 'last_name', None)]))
+                    extra_env['SENDER_NAME'] = name or getattr(sender, 'username', None) or ''
+                    extra_env['SENDER_USERNAME'] = getattr(sender, 'username', None) or ''
+                    extra_env['SENDER_ID'] = str(getattr(sender, 'id', ''))
+                try:
+                    chat = await event.get_chat()
+                    extra_env['CHAT_TITLE'] = getattr(chat, 'title', None) or ''
+                except Exception:
+                    pass
+                reply = await self.run_query_command(query.get('command') or '', extra_env)
+                # Telegram message limit is 4096 chars; no markdown parsing so
+                # arbitrary command output can't break the reply
+                await event.reply(reply[:4000], parse_mode=None)
+            else:  # help
+                keys = ', '.join(sorted((q.get('key') or '') for q in queries))
+                await event.reply(f'Available queries: {keys or "(none configured)"}', parse_mode=None)
+        except Exception as e:
+            logging.error(f"Mention command handler failed: {e}")
 
     async def send_startup_greeting(self):
         """Send a greeting message to each monitored chat when service starts"""
