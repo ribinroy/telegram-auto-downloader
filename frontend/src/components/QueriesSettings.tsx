@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Loader2, AlertCircle, Plus, Trash2, Play, Pencil, X, TerminalSquare } from 'lucide-react';
+import { Loader2, AlertCircle, Plus, Trash2, Play, Pencil, X, TerminalSquare, BookOpen, ChevronDown } from 'lucide-react';
 import { fetchBotQueries, saveBotQuery, deleteBotQuery, testBotQuery } from '../api';
 import type { BotQuery } from '../api';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -104,13 +104,73 @@ export function QueriesSettings() {
           shell snippet runs on this server, replying with its output. Tag it with{' '}
           <code className="text-cyan-400 bg-slate-700/50 px-1 rounded">help</code> to list the keys.
         </p>
-        <p className="text-amber-400/80">
-          Snippets run as the service user. Anyone who can message the bot can trigger them,
-          so keep them read-only — don't put destructive commands here.{' '}
-          <code className="bg-slate-700/50 px-1 rounded">$DOWNLOAD_DIR</code> is available;
-          snippets time out after 30s.
-        </p>
       </div>
+
+      <details className="bg-slate-700/30 rounded-lg group">
+        <summary className="flex items-center gap-2 p-4 cursor-pointer select-none text-sm text-white font-medium">
+          <BookOpen className="w-4 h-4 text-cyan-400" />
+          How to create a query snippet
+          <ChevronDown className="w-4 h-4 text-slate-500 ml-auto transition-transform group-open:rotate-180" />
+        </summary>
+        <div className="px-4 pb-4 text-xs text-slate-400 space-y-3">
+          <div>
+            <p className="text-slate-300 font-medium mb-1">1. Pick a key</p>
+            <p>
+              A single word (no spaces), e.g. <code className="bg-slate-800/60 px-1 rounded">health</code> or{' '}
+              <code className="bg-slate-800/60 px-1 rounded">hddok</code>. Matching is case-insensitive, and{' '}
+              <code className="bg-slate-800/60 px-1 rounded">help</code> is reserved.
+            </p>
+          </div>
+          <div>
+            <p className="text-slate-300 font-medium mb-1">2. Write the shell snippet</p>
+            <p>
+              Plain bash, one or more lines. Whatever it prints (stdout + stderr) becomes the bot's reply.
+              These variables are set for you:
+            </p>
+            <ul className="mt-1.5 space-y-1 font-mono text-[11px]">
+              <li><code className="text-cyan-400">$DOWNLOAD_DIR</code> <span className="font-sans text-slate-500">— the download root folder</span></li>
+              <li><code className="text-cyan-400">$SENDER_NAME</code> <span className="font-sans text-slate-500">— display name of whoever triggered it</span></li>
+              <li><code className="text-cyan-400">$SENDER_USERNAME</code> / <code className="text-cyan-400">$SENDER_ID</code> <span className="font-sans text-slate-500">— their @username / numeric ID</span></li>
+              <li><code className="text-cyan-400">$CHAT_TITLE</code> <span className="font-sans text-slate-500">— the group it was asked in (empty in DMs)</span></li>
+            </ul>
+          </div>
+          <div>
+            <p className="text-slate-300 font-medium mb-1">3. Test, then use it from Telegram</p>
+            <p>
+              Use the <Play className="w-3 h-3 inline text-green-400" /> button to run it here first. Then in
+              Telegram: <code className="bg-slate-800/60 px-1 rounded">@YourBot health</code> in a group, or just{' '}
+              <code className="bg-slate-800/60 px-1 rounded">health</code> in a DM.
+            </p>
+          </div>
+          <div>
+            <p className="text-slate-300 font-medium mb-1">Examples</p>
+            <pre className="bg-slate-800/60 rounded-lg p-3 overflow-x-auto font-mono text-[11px] text-slate-300 whitespace-pre-wrap">{`# greet whoever asked
+echo "Hello \${SENDER_NAME:-there}, hope you are good? 😊"
+
+# free disk space on the download drive
+df -h "$DOWNLOAD_DIR" | awk 'NR==2 {print "💾 "$4" free of "$2}'
+
+# SMART health of every disk
+for d in $(lsblk -dno NAME,TYPE | awk '$2=="disk"{print $1}'); do
+  echo "$d: $(sudo -n smartctl -H /dev/$d | tail -1)"
+done`}</pre>
+          </div>
+          <div>
+            <p className="text-slate-300 font-medium mb-1">Rules &amp; limits</p>
+            <ul className="list-disc list-inside space-y-0.5">
+              <li>Snippets time out after 30 seconds; replies are capped at ~4000 characters.</li>
+              <li>A non-zero exit code is appended to the reply so failures are visible.</li>
+              <li>Commands needing root (like <code className="bg-slate-800/60 px-1 rounded">smartctl</code>) must use{' '}
+                <code className="bg-slate-800/60 px-1 rounded">sudo -n</code> and need a NOPASSWD sudoers entry.</li>
+              <li>Changes apply immediately — no restart needed.</li>
+            </ul>
+          </div>
+          <p className="text-amber-400/80">
+            Snippets run as the service user, and anyone who can message the bot can trigger
+            them — keep them read-only and never include destructive commands.
+          </p>
+        </div>
+      </details>
 
       {error && (
         <div className="flex items-center gap-2 bg-red-500/20 border border-red-500/50 rounded-lg p-3 text-red-400 text-sm">

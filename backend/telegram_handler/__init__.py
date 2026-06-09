@@ -22,12 +22,28 @@ API_SETTING_KEY = 'telegram_api'
 QUERIES_SETTING_KEY = 'bot_queries'
 QUERY_TIMEOUT = 30  # seconds a query snippet may run
 
-# Seeded on first run so the Queries tab has a working example
-DEFAULT_QUERIES = [{
-    'key': 'health',
-    'command': 'echo "✅ all good — $(uptime -p)"\n'
-               'df -h "$DOWNLOAD_DIR" | awk \'NR==2 {print "💾 "$4" free of "$2" ("$5" used)"}\'',
-}]
+# Seeded on first run so the Queries tab has working examples
+DEFAULT_QUERIES = [
+    {
+        'key': 'hello',
+        'command': 'echo "Hello ${SENDER_NAME:-there}, hope you are good? 😊"',
+    },
+    {
+        'key': 'health',
+        'command': (
+            'echo "✅ all good — $(uptime -p)"\n'
+            'df -h "$DOWNLOAD_DIR" | awk \'NR==2 {print "💾 "$4" free of "$2" ("$5" used)"}\'\n'
+            'disks=$(lsblk -dno NAME,TYPE | awk \'$2=="disk"{print $1}\')\n'
+            'echo "🖴 $(echo "$disks" | grep -c .) disk(s) installed:"\n'
+            'for d in $disks; do\n'
+            '  model=$(lsblk -dno MODEL "/dev/$d" | xargs)\n'
+            '  size=$(lsblk -dno SIZE "/dev/$d" | xargs)\n'
+            '  health=$(sudo -n smartctl -H "/dev/$d" 2>/dev/null | awk -F: \'/overall-health|SMART Health Status/{gsub(/^ +/,"",$2); print $2}\')\n'
+            '  echo "• $d — $model ($size): ${health:-unknown (smartctl needs sudo)}"\n'
+            'done'
+        ),
+    },
+]
 
 
 class TelegramDownloader:
@@ -754,9 +770,11 @@ class TelegramDownloader:
             return []
 
     @staticmethod
-    def _query_env():
+    def _query_env(extra_env=None):
         env = dict(os.environ)
         env['DOWNLOAD_DIR'] = str(DOWNLOAD_DIR)
+        if extra_env:
+            env.update({k: str(v) for k, v in extra_env.items() if v is not None})
         return env
 
     @staticmethod
@@ -767,23 +785,23 @@ class TelegramDownloader:
         return output or '(no output)'
 
     @classmethod
-    def run_query_sync(cls, command):
+    def run_query_sync(cls, command, extra_env=None):
         """Run a query snippet in a shell (used by the UI test button)."""
         try:
             proc = subprocess.run(command, shell=True, capture_output=True,
-                                  text=True, timeout=QUERY_TIMEOUT, env=cls._query_env())
+                                  text=True, timeout=QUERY_TIMEOUT, env=cls._query_env(extra_env))
         except subprocess.TimeoutExpired:
             return f'⏱️ Timed out after {QUERY_TIMEOUT}s'
         return cls._format_query_output(proc.stdout, proc.stderr, proc.returncode)
 
     @classmethod
-    async def run_query_command(cls, command):
+    async def run_query_command(cls, command, extra_env=None):
         """Async variant of run_query_sync for the Telegram event loop."""
         proc = await asyncio.create_subprocess_shell(
             command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
-            env=cls._query_env(),
+            env=cls._query_env(extra_env),
         )
         try:
             out, _ = await asyncio.wait_for(proc.communicate(), timeout=QUERY_TIMEOUT)
@@ -812,7 +830,21 @@ class TelegramDownloader:
             query = next((q for q in queries
                           if (q.get('key') or '').strip().lower() == key), None)
             if query:
-                reply = await self.run_query_command(query.get('command') or '')
+                # Expose the invoker and chat to the snippet as env vars
+                extra_env = {}
+                try:
+                    sender = await event.get_sender()
+                    if sender:
+                        name = ' '.join(filter(None, [getattr(sender, 'first_name', None),
+                                                      getattr(sender, 'last_name', None)]))
+                        extra_env['SENDER_NAME'] = name or getattr(sender, 'username', None) or ''
+                        extra_env['SENDER_USERNAME'] = getattr(sender, 'username', None) or ''
+                        extra_env['SENDER_ID'] = str(getattr(sender, 'id', ''))
+                    chat = await event.get_chat()
+                    extra_env['CHAT_TITLE'] = getattr(chat, 'title', None) or ''
+                except Exception as e:
+                    logging.error(f"Could not resolve query sender info: {e}")
+                reply = await self.run_query_command(query.get('command') or '', extra_env)
                 # Telegram message limit is 4096 chars; no markdown parsing so
                 # arbitrary command output can't break the reply
                 await event.reply(reply[:4000], parse_mode=None)

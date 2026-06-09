@@ -1256,7 +1256,10 @@ class WebApp:
             if not command:
                 return jsonify({"error": "Command is required"}), 400
             from backend.telegram_handler import TelegramDownloader
-            return jsonify({"output": TelegramDownloader.run_query_sync(command)})
+            # Stand in for the chat sender with the logged-in web user
+            username = (getattr(request, 'user', None) or {}).get('username', 'admin')
+            extra_env = {'SENDER_NAME': username, 'SENDER_USERNAME': username, 'SENDER_ID': '', 'CHAT_TITLE': ''}
+            return jsonify({"output": TelegramDownloader.run_query_sync(command, extra_env)})
 
         # VPS (SSH/SFTP) connection settings
         @self.app.route("/api/settings/vps", methods=["GET"])
