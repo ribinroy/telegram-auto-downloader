@@ -642,9 +642,17 @@ class WebApp:
                     if label and label.get("folder"):
                         possible_paths.insert(0, Path(label["folder"]) / file_name)
 
+                    import shutil
                     for file_path in possible_paths:
-                        if file_path.exists():
-                            file_path.unlink()
+                        if file_path.exists() or file_path.is_symlink():
+                            try:
+                                if file_path.is_dir() and not file_path.is_symlink():
+                                    # VPS folder downloads land as a directory
+                                    shutil.rmtree(file_path)
+                                else:
+                                    file_path.unlink()
+                            except OSError as e:
+                                print(f"[Delete] Failed to delete {file_path}: {e}")
                             break
 
             # Delete thumbnails (uses download id for folder name)
