@@ -278,6 +278,7 @@ export interface TelegramUser {
   first_name: string | null;
   last_name: string | null;
   phone: string | null;
+  is_bot?: boolean;
 }
 
 export interface TelegramChannel {
@@ -348,6 +349,10 @@ export function verifyTelegramCode(code: string): Promise<{ status?: string; err
 
 export function verifyTelegramPassword(password: string): Promise<{ status?: string; error?: string }> {
   return telegramRequest('/verify-password', { method: 'POST', body: JSON.stringify({ password }) });
+}
+
+export function telegramBotLogin(token: string): Promise<{ status?: string; error?: string }> {
+  return telegramRequest('/bot-login', { method: 'POST', body: JSON.stringify({ token }) });
 }
 
 export function telegramLogout(): Promise<{ status?: string; error?: string }> {

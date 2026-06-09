@@ -1144,6 +1144,21 @@ class WebApp:
             except Exception as e:
                 return jsonify({"error": str(e)}), 400
 
+        @self.app.route("/api/settings/telegram/bot-login", methods=["POST"])
+        @token_required
+        def telegram_bot_login():
+            """Alternative login: sign in with a BotFather bot token."""
+            token = ((request.json or {}).get("token") or "").strip()
+            if not token:
+                return jsonify({"error": "Bot token is required"}), 400
+            try:
+                result = self._telegram_call(self.telegram_downloader.submit_bot_token(token))
+                if result.get("error"):
+                    return jsonify(result), 400
+                return jsonify(result)
+            except Exception as e:
+                return jsonify({"error": str(e)}), 400
+
         @self.app.route("/api/settings/telegram/logout", methods=["POST"])
         @token_required
         def telegram_logout():

@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Loader2, AlertCircle, CheckCircle, Send, LogOut, Plus, Trash2, Radio, Search, RefreshCw, KeyRound } from 'lucide-react';
 import {
   fetchTelegramStatus, sendTelegramCode, verifyTelegramCode, verifyTelegramPassword,
-  telegramLogout, addTelegramChannel, removeTelegramChannel, fetchTelegramDialogs,
+  telegramBotLogin, telegramLogout, addTelegramChannel, removeTelegramChannel, fetchTelegramDialogs,
   fetchTelegramApiConfig, saveTelegramApiConfig,
 } from '../api';
 import type { TelegramStatus, TelegramChannel, TelegramDialog, TelegramApiConfig } from '../api';
@@ -17,10 +17,12 @@ export function TelegramSettings() {
   const [success, setSuccess] = useState<string | null>(null);
 
   // Login wizard state
+  const [loginMode, setLoginMode] = useState<'phone' | 'bot'>('phone');
   const [step, setStep] = useState<LoginStep>('phone');
   const [phone, setPhone] = useState('');
   const [code, setCode] = useState('');
   const [password, setPassword] = useState('');
+  const [botToken, setBotToken] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   // Channels state
@@ -127,6 +129,25 @@ export function TelegramSettings() {
     }
   };
 
+  const handleBotLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSubmitting(true);
+    setError(null);
+    try {
+      const result = await telegramBotLogin(botToken);
+      if (result.error) setError(result.error);
+      else {
+        flashSuccess('Connected as bot');
+        setBotToken('');
+        await loadStatus();
+      }
+    } catch {
+      setError('Failed to sign in with bot token');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const handleLogout = async () => {
     setLogoutConfirm(false);
     setError(null);
@@ -228,6 +249,7 @@ export function TelegramSettings() {
   }
 
   const authorized = !!status?.authorized;
+  const isBot = !!status?.user?.is_bot;
   const filteredDialogs = (dialogs || []).filter(d =>
     d.type !== 'user' &&
     (!dialogSearch || d.title.toLowerCase().includes(dialogSearch.toLowerCase()) ||
@@ -256,8 +278,13 @@ export function TelegramSettings() {
             <div className="min-w-0">
               {authorized && status?.user ? (
                 <>
-                  <h3 className="text-white font-medium text-sm truncate">
+                  <h3 className="text-white font-medium text-sm truncate flex items-center gap-2">
                     {[status.user.first_name, status.user.last_name].filter(Boolean).join(' ') || status.user.username || 'Telegram account'}
+                    {status.user.is_bot && (
+                      <span className="text-[10px] font-semibold uppercase tracking-wide bg-purple-500/20 text-purple-300 border border-purple-500/40 rounded px-1.5 py-0.5">
+                        Bot
+                      </span>
+                    )}
                   </h3>
                   <p className="text-xs text-slate-400 truncate">
                     {status.user.username ? `@${status.user.username}` : ''}
@@ -381,7 +408,51 @@ export function TelegramSettings() {
             Your session is stored on the server, so this only needs to be done once.
           </p>
 
-          {step === 'phone' && (
+          <div className="flex gap-1 bg-slate-800/60 rounded-lg p-1 mb-4 w-fit">
+            {(['phone', 'bot'] as const).map(mode => (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => { setLoginMode(mode); setStep('phone'); setError(null); }}
+                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                  loginMode === mode ? 'bg-cyan-600 text-white' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                {mode === 'phone' ? 'User account' : 'Bot token'}
+              </button>
+            ))}
+          </div>
+
+          {loginMode === 'bot' && (
+            <form onSubmit={handleBotLogin} className="space-y-3">
+              <div>
+                <label className="block text-sm text-slate-400 mb-1">Bot token (from @BotFather)</label>
+                <input
+                  type="password"
+                  value={botToken}
+                  onChange={(e) => setBotToken(e.target.value)}
+                  placeholder="123456789:AbCdEf..."
+                  className="w-full bg-slate-700/50 border border-slate-600 rounded-lg py-2 px-3 text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 transition-colors"
+                  required
+                />
+              </div>
+              <p className="text-xs text-amber-400/80">
+                The bot must be a member of every monitored group, and either be an admin or have
+                privacy mode disabled (BotFather → /setprivacy), otherwise it won't see other
+                members' messages. Bots also can't browse chats — add channels by @username or ID.
+              </p>
+              <button
+                type="submit"
+                disabled={submitting}
+                className="w-full bg-cyan-600 hover:bg-cyan-700 text-white font-medium py-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                {submitting && <Loader2 className="w-4 h-4 animate-spin" />}
+                {submitting ? 'Signing in...' : 'Sign In as Bot'}
+              </button>
+            </form>
+          )}
+
+          {loginMode === 'phone' && step === 'phone' && (
             <form onSubmit={handleSendCode} className="space-y-3">
               <div>
                 <label className="block text-sm text-slate-400 mb-1">Phone number</label>
@@ -405,7 +476,7 @@ export function TelegramSettings() {
             </form>
           )}
 
-          {step === 'code' && (
+          {loginMode === 'phone' && step === 'code' && (
             <form onSubmit={handleVerifyCode} className="space-y-3">
               <div>
                 <label className="block text-sm text-slate-400 mb-1">Login code sent to {phone}</label>
@@ -440,7 +511,7 @@ export function TelegramSettings() {
             </form>
           )}
 
-          {step === 'password' && (
+          {loginMode === 'phone' && step === 'password' && (
             <form onSubmit={handleVerifyPassword} className="space-y-3">
               <div>
                 <label className="block text-sm text-slate-400 mb-1">
@@ -477,6 +548,12 @@ export function TelegramSettings() {
           </div>
           <p className="text-xs text-slate-400 mb-4">
             New files posted in these chats are downloaded automatically.
+            {isBot && (
+              <span className="block mt-1 text-amber-400/80">
+                You are signed in as a bot: it must be a member of each of these groups, and an
+                admin (or have privacy mode disabled via BotFather) to see other members' messages.
+              </span>
+            )}
           </p>
 
           {channels.length === 0 ? (
@@ -522,7 +599,8 @@ export function TelegramSettings() {
             </button>
           </form>
 
-          {/* Dialog picker */}
+          {/* Dialog picker (user accounts only — bots can't list their chats) */}
+          {!isBot && (
           <div className="mt-4 pt-4 border-t border-slate-700/60">
             {dialogs === null ? (
               <button
@@ -586,6 +664,7 @@ export function TelegramSettings() {
               </>
             )}
           </div>
+          )}
         </div>
       )}
 

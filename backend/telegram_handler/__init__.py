@@ -4,6 +4,7 @@ Telegram client and download handler
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime
 from telethon import TelegramClient, events, utils as tg_utils
 from telethon.errors import SessionPasswordNeededError
@@ -26,6 +27,7 @@ class TelegramDownloader:
         self.authorized = False
         self._stopping = False
         self._handler = None  # Currently registered NewMessage handler
+        self._mention_handler = None  # Command handler for messages tagging the account
 
         # Pending web-login state (phone -> code -> optional 2FA password)
         self._login_phone = None
@@ -133,12 +135,23 @@ class TelegramDownloader:
         return ids[0] if ids else CHAT_ID
 
     def _register_handler(self):
-        """(Re-)register the NewMessage handler for the current channel list."""
+        """(Re-)register the NewMessage handlers: commands for any message
+        tagging the account, file downloads for the current channel list."""
         if self.client is None:
             return
+        if self._mention_handler:
+            self.client.remove_event_handler(self._mention_handler)
+            self._mention_handler = None
         if self._handler:
             self.client.remove_event_handler(self._handler)
             self._handler = None
+
+        async def handle_mention(event):
+            await self._handle_mention(event)
+
+        self._mention_handler = handle_mention
+        self.client.add_event_handler(handle_mention, events.NewMessage(incoming=True))
+
         ids = self.chat_ids()
         print(f"📡 Listening for new files on {len(ids)} channel(s): {ids}")
         if not ids:
@@ -175,9 +188,12 @@ class TelegramDownloader:
             except Exception as e:
                 first_error = first_error or e
 
-        async for dialog in self.client.iter_dialogs():
-            if dialog.id in candidates:
-                return dialog.entity
+        # Dialog scan fallback (user accounts only — bots can't list dialogs)
+        me = await self.client.get_me()
+        if not (me and me.bot):
+            async for dialog in self.client.iter_dialogs():
+                if dialog.id in candidates:
+                    return dialog.entity
 
         raise first_error
 
@@ -214,6 +230,9 @@ class TelegramDownloader:
         """List the account's dialogs (channels/groups first) for the picker UI."""
         if self.client is None:
             return []
+        me = await self.client.get_me()
+        if me and me.bot:
+            raise ValueError('Bot accounts cannot list their chats — add channels by @username or chat ID instead')
         dialogs = await self.client.get_dialogs(limit=limit)
         monitored = set(self.chat_ids())
         result = []
@@ -280,6 +299,7 @@ class TelegramDownloader:
                         'first_name': me.first_name,
                         'last_name': me.last_name,
                         'phone': me.phone,
+                        'is_bot': bool(getattr(me, 'bot', False)),
                     }
         except Exception as e:
             logging.error(f"Telegram status check failed: {e}")
@@ -314,6 +334,18 @@ class TelegramDownloader:
     async def submit_password(self, password):
         """Step 3 (only with 2FA enabled): verify the cloud password."""
         await self.client.sign_in(password=password)
+        await self._on_authorized()
+        return {'status': 'authorized'}
+
+    async def submit_bot_token(self, token):
+        """Alternative login: sign in as a bot account. The bot must be a
+        member of every monitored group (admin, or privacy mode disabled
+        via BotFather) to see other members' messages."""
+        if self.client is None:
+            return {'error': 'Configure the API ID and hash first'}
+        if not self.client.is_connected():
+            await self.client.connect()
+        await self.client.sign_in(bot_token=token.strip())
         await self._on_authorized()
         return {'status': 'authorized'}
 
@@ -691,6 +723,25 @@ class TelegramDownloader:
         # Start background metadata extraction for video files
         if is_video_file(filename):
             asyncio.create_task(poll_and_extract_meta(event.id))
+
+    async def _handle_mention(self, event):
+        """Respond to commands in messages that tag the account (or DM it).
+
+        Currently supported: 'health' -> 'all good'."""
+        try:
+            if not (event.mentioned or event.is_private):
+                return
+            text = event.raw_text or ''
+            # Strip the @username tag so "@DownLeeBot health" becomes "health"
+            me = await self.client.get_me()
+            username = getattr(me, 'username', None)
+            if username:
+                text = re.sub(rf'@{re.escape(username)}', '', text, flags=re.IGNORECASE)
+            command = text.strip().lower()
+            if command == 'health':
+                await event.reply('all good')
+        except Exception as e:
+            logging.error(f"Mention command handler failed: {e}")
 
     async def send_startup_greeting(self):
         """Send a greeting message to each monitored chat when service starts"""
