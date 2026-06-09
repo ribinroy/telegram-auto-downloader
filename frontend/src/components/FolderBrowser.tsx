@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronRight, ChevronDown, Folder, FolderOpen, File, Loader2, AlertCircle, Check, X } from 'lucide-react';
+import { ChevronRight, ChevronDown, Folder, FolderOpen, File, Loader2, AlertCircle, Check, X, ArrowUp } from 'lucide-react';
 import { browseVps, type VpsBrowseEntry, type VpsBrowseResult } from '../api';
 
 interface FolderBrowserProps {
@@ -37,6 +37,7 @@ export function FolderBrowser({
   alreadyAdded = [],
 }: FolderBrowserProps) {
   const [rootPath, setRootPath] = useState<string>('');
+  const [rootParent, setRootParent] = useState<string | null>(null);
   const [rootLoading, setRootLoading] = useState(false);
   const [rootError, setRootError] = useState<string | null>(null);
   const [rootEntries, setRootEntries] = useState<VpsBrowseEntry[]>([]);
@@ -47,16 +48,21 @@ export function FolderBrowser({
 
   const addedSet = new Set(alreadyAdded);
 
-  const loadRoot = useCallback(async () => {
+  // Re-root the tree at `path` (undefined = the default starting folder).
+  const loadRoot = useCallback(async (path?: string) => {
     setRootLoading(true);
     setRootError(null);
     try {
-      const result = await browseFn('');
+      const result = await browseFn(path ?? '');
       if (result.error) {
         setRootError(result.error);
       } else {
         setRootPath(result.path || '');
+        setRootParent(result.parent ?? null);
         setRootEntries(result.entries || []);
+        // A new root invalidates previously expanded/loaded subtrees.
+        setChildren({});
+        setExpanded(new Set());
       }
     } catch {
       setRootError('Failed to load folders');
@@ -220,8 +226,17 @@ export function FolderBrowser({
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] p-4">
       <div className="bg-slate-800 rounded-xl w-full max-w-lg border border-slate-700 shadow-xl flex flex-col max-h-[80vh]">
         {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-slate-700">
-          <div className="min-w-0">
+        <div className="flex items-center gap-2 p-4 border-b border-slate-700">
+          <button
+            onClick={() => rootParent && loadRoot(rootParent)}
+            disabled={!rootParent || rootLoading}
+            title="Up one level"
+            aria-label="Up one level"
+            className="p-1.5 text-slate-300 hover:text-white rounded-lg hover:bg-slate-700/50 disabled:opacity-30 disabled:cursor-not-allowed shrink-0"
+          >
+            <ArrowUp className="w-4 h-4" />
+          </button>
+          <div className="min-w-0 flex-1">
             <h3 className="text-base font-semibold text-white">{title || (singleSelect ? 'Select a folder' : 'Select folders to watch')}</h3>
             <p className="text-xs text-slate-400 truncate" title={rootPath}>{rootPath || 'Loading…'}</p>
           </div>
