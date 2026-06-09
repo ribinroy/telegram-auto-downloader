@@ -16,35 +16,13 @@ Severity-ordered, from the repo audit:
 
 ### High — personal/network data in tracked files
 
-- [x] **Home LAN IP hardcoded in the frontend** — `frontend/src/api/index.ts:3` and
-  `frontend/src/api/socket.ts:4` contain `http://192.168.0.135:4444`. Replace with
-  `localhost` or a `VITE_API_BASE` env var.
-- [x] **Real Telegram identity in README** — `README.md:239` uses the actual account
-  `RibinRoy:465457653` as the author-tracking example. Replace with a fake example.
-- [x] **Personal screenshots** *(deleted; README re-takes still pending)* — `screenshots/Screenshot 2025-10-22 at 00.03.47.png` and
-  `...00.03.59.png` show a real chat ("HS Downloader") and real name; they're orphaned
-  (no longer referenced by README). Delete them. Re-take all README screenshots with
-  sanitized file names (visible file names matter for positioning — see §4).
-- [x] **`downloads.db` is tracked** — runtime SQLite file at repo root (contains only the
-  default admin hash, no real secret). Remove from tracking; add `*.db` to `.gitignore`.
+- [ ] **Re-take README screenshots** with sanitized file names (visible file names matter
+  for positioning — see §4). The orphaned personal screenshots are already deleted.
 
 ### Medium — security weaknesses that become public knowledge
 
-- [ ] **Hardcoded JWT fallback secret** — `backend/web_app/__init__.py:20` falls back to
-  `'telegram-downloader-secret-key-change-in-prod'`, and `backend/utils/__init__.py:21`
-  uses the **same string as the Fernet key** for encrypted credentials (VPS password,
-  torrent password, API hash). Once the code is public, any instance without `JWT_SECRET`
-  set has forgeable auth tokens *and* decryptable stored secrets. Fail hard at startup or
-  auto-generate a persisted random secret. **Set `JWT_SECRET` in the production `.env`
-  before publishing if it isn't set.** Also fix `.env.example:30-31`, which wrongly claims
-  the default is random.
 - [ ] **Default admin/admin** — replace with a forced password setup on first login.
   This is the #1 thing r/selfhosted commenters flag.
-- [ ] **Bot queries = remote shell execution by design** — document loudly in the README
-  (admin-only, runs as the service user, keep snippets read-only). Public users will copy
-  the `sudo -n smartctl` sudoers pattern; show the safe minimal sudoers line.
-- [ ] **CORS is `*` + `WEB_HOST=0.0.0.0`** — fine for LAN, but add a README security note
-  (reverse proxy, don't expose to the internet without auth hardening).
 
 ### Low — polish
 

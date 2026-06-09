@@ -12,12 +12,10 @@ from functools import wraps
 from flask import Flask, jsonify, request, send_from_directory, Response
 from flask_cors import CORS
 from flask_socketio import SocketIO
-from backend.config import WEB_PORT, WEB_HOST
+from backend.config import WEB_PORT, WEB_HOST, JWT_SECRET
 from backend.database import get_db
 from backend import metrics
 
-# JWT secret key
-JWT_SECRET = os.environ.get('JWT_SECRET', 'telegram-downloader-secret-key-change-in-prod')
 JWT_EXPIRY_DAYS = 30  # Keep signed in for 30 days
 
 # Global socketio instance for broadcasting from other modules
