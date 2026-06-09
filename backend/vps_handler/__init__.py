@@ -152,9 +152,18 @@ class VpsDownloader:
         self.download_tasks[message_id] = thread
         thread.start()
 
-    def _local_destination(self, remote_path: str, base: Path = None) -> Path:
-        """Mirror the remote folder structure under `base` (default DOWNLOAD_DIR/VPS)."""
-        rel = remote_path.lstrip("/")
+    def _local_destination(self, remote_path: str, base: Path = None, strip_prefix: str = None) -> Path:
+        """Map a remote file to its local path under `base` (default DOWNLOAD_DIR/VPS).
+
+        `strip_prefix` is the remote directory the download was rooted at; the file
+        is placed relative to it, so the requested item's parent dirs are not
+        recreated locally (e.g. /home/user/xyz under label a/b/c → a/b/c/xyz, not
+        a/b/c/home/user/xyz). Without it, the full remote path is mirrored.
+        """
+        if strip_prefix:
+            rel = posixpath.relpath(remote_path, strip_prefix)
+        else:
+            rel = remote_path.lstrip("/")
         return (base or (DOWNLOAD_DIR / "VPS")) / rel
 
     def _walk(self, sftp, root, out):
@@ -179,6 +188,11 @@ class VpsDownloader:
             label = db.get_label(dl_record.get('label_id')) if dl_record else None
             base = label_folder(label, DOWNLOAD_DIR / "VPS")
 
+            # Place files relative to the requested item's parent dir, so a file
+            # /home/user/xyz lands at <base>/xyz and a folder /home/user/dir at
+            # <base>/dir/... — not under the full remote path.
+            strip_prefix = posixpath.dirname(remote_path.rstrip("/"))
+
             client, sftp = self._open_sftp()
             st = sftp.stat(remote_path)
             is_dir = stat_module.S_ISDIR(st.st_mode)
@@ -194,7 +208,7 @@ class VpsDownloader:
             # Resume: count bytes already present locally
             transferred = [0]
             for rfile, rsize in files:
-                lp = self._local_destination(rfile, base)
+                lp = self._local_destination(rfile, base, strip_prefix)
                 if lp.exists():
                     ls = lp.stat().st_size
                     transferred[0] += min(ls, rsize) if rsize else ls
@@ -224,7 +238,7 @@ class VpsDownloader:
             for rfile, rsize in files:
                 if message_id in self.cancelled:
                     raise _Cancelled()
-                lp = self._local_destination(rfile, base)
+                lp = self._local_destination(rfile, base, strip_prefix)
                 lp.parent.mkdir(parents=True, exist_ok=True)
                 self._transfer_file(sftp, rfile, lp, rsize, bump)
 
