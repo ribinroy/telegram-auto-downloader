@@ -470,6 +470,15 @@ class WebApp:
         metrics.update_pending_bytes(pending_bytes)
         metrics.update_queue_size(active_count)
 
+    def _telegram_call(self, coro, timeout=60):
+        """Run a coroutine on the Telegram client's event loop (lives in the
+        main thread) and wait for its result."""
+        td = self.telegram_downloader
+        loop = getattr(td, 'loop', None) if td else None
+        if loop is None:
+            raise RuntimeError("Telegram client is not running yet")
+        return asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=timeout)
+
     def setup_routes(self):
         """Setup Flask API routes"""
 
@@ -1048,6 +1057,144 @@ class WebApp:
                 return jsonify({"status": "saved"})
             except Exception as e:
                 return jsonify({"error": str(e)}), 500
+
+        # Telegram API credentials (api_id/api_hash from my.telegram.org)
+        @self.app.route("/api/settings/telegram/api", methods=["GET"])
+        @token_required
+        def get_telegram_api():
+            """Current API credential state (hash never exposed)."""
+            if not self.telegram_downloader:
+                return jsonify({"configured": False, "api_id": None, "has_hash": False, "source": None})
+            return jsonify(self.telegram_downloader.get_api_config())
+
+        @self.app.route("/api/settings/telegram/api", methods=["POST"])
+        @token_required
+        def save_telegram_api():
+            """Save API credentials; a blank api_hash keeps the saved one.
+            The client is swapped live — no service restart needed."""
+            data = request.json or {}
+            try:
+                api_id = int(data.get("api_id") or 0)
+            except (TypeError, ValueError):
+                return jsonify({"error": "API ID must be a number"}), 400
+            if not api_id:
+                return jsonify({"error": "API ID is required"}), 400
+            api_hash = (data.get("api_hash") or "").strip()
+            try:
+                result = self._telegram_call(
+                    self.telegram_downloader.set_api_credentials(api_id, api_hash))
+                if result.get("error"):
+                    return jsonify(result), 400
+                return jsonify(result)
+            except Exception as e:
+                return jsonify({"error": str(e)}), 400
+
+        # Telegram account connection & monitored channels
+        @self.app.route("/api/settings/telegram/status", methods=["GET"])
+        @token_required
+        def telegram_status():
+            """Connection/authorization status + monitored channels."""
+            try:
+                status = self._telegram_call(self.telegram_downloader.get_status(), timeout=20)
+            except Exception as e:
+                return jsonify({
+                    "connected": False, "authorized": False,
+                    "awaiting_code": False, "user": None,
+                    "channels": [], "error": str(e),
+                })
+            status["channels"] = self.telegram_downloader.get_channels()
+            return jsonify(status)
+
+        @self.app.route("/api/settings/telegram/send-code", methods=["POST"])
+        @token_required
+        def telegram_send_code():
+            """Step 1 of web login: send the code to the phone number."""
+            phone = ((request.json or {}).get("phone") or "").strip()
+            if not phone:
+                return jsonify({"error": "Phone number is required"}), 400
+            try:
+                return jsonify(self._telegram_call(self.telegram_downloader.send_login_code(phone)))
+            except Exception as e:
+                return jsonify({"error": str(e)}), 400
+
+        @self.app.route("/api/settings/telegram/verify-code", methods=["POST"])
+        @token_required
+        def telegram_verify_code():
+            """Step 2 of web login: verify the received code."""
+            code = ((request.json or {}).get("code") or "").strip().replace(" ", "")
+            if not code:
+                return jsonify({"error": "Code is required"}), 400
+            try:
+                result = self._telegram_call(self.telegram_downloader.submit_login_code(code))
+                if result.get("error"):
+                    return jsonify(result), 400
+                return jsonify(result)
+            except Exception as e:
+                return jsonify({"error": str(e)}), 400
+
+        @self.app.route("/api/settings/telegram/verify-password", methods=["POST"])
+        @token_required
+        def telegram_verify_password():
+            """Step 3 of web login (accounts with 2FA): the cloud password."""
+            password = (request.json or {}).get("password") or ""
+            if not password:
+                return jsonify({"error": "Password is required"}), 400
+            try:
+                return jsonify(self._telegram_call(self.telegram_downloader.submit_password(password)))
+            except Exception as e:
+                return jsonify({"error": str(e)}), 400
+
+        @self.app.route("/api/settings/telegram/logout", methods=["POST"])
+        @token_required
+        def telegram_logout():
+            """Invalidate the Telegram session; a new web login is required."""
+            try:
+                return jsonify(self._telegram_call(self.telegram_downloader.logout()))
+            except Exception as e:
+                return jsonify({"error": str(e)}), 400
+
+        @self.app.route("/api/settings/telegram/channels", methods=["GET"])
+        @token_required
+        def telegram_channels():
+            return jsonify({"channels": self.telegram_downloader.get_channels()
+                            if self.telegram_downloader else []})
+
+        @self.app.route("/api/settings/telegram/channels", methods=["POST"])
+        @token_required
+        def telegram_add_channel():
+            """Add a channel by @username, t.me link, or numeric chat ID."""
+            identifier = ((request.json or {}).get("chat") or "").strip()
+            if not identifier:
+                return jsonify({"error": "Channel username or ID is required"}), 400
+            try:
+                result = self._telegram_call(self.telegram_downloader.add_channel(identifier))
+                if result.get("error"):
+                    return jsonify(result), 400
+                return jsonify(result)
+            except Exception as e:
+                return jsonify({"error": str(e)}), 400
+
+        @self.app.route("/api/settings/telegram/channels/<chat_id>", methods=["DELETE"])
+        @token_required
+        def telegram_remove_channel(chat_id):
+            # Plain converter: Telegram channel IDs are negative, <int:> won't match
+            try:
+                chat_id = int(chat_id)
+            except ValueError:
+                return jsonify({"error": "Invalid chat ID"}), 400
+            try:
+                return jsonify(self._telegram_call(self.telegram_downloader.remove_channel(chat_id)))
+            except Exception as e:
+                return jsonify({"error": str(e)}), 400
+
+        @self.app.route("/api/settings/telegram/dialogs", methods=["GET"])
+        @token_required
+        def telegram_dialogs():
+            """List the account's channels/groups for the channel picker."""
+            try:
+                return jsonify({"dialogs": self._telegram_call(self.telegram_downloader.list_dialogs())})
+            except Exception as e:
+                return jsonify({"error": str(e)}), 400
 
         # VPS (SSH/SFTP) connection settings
         @self.app.route("/api/settings/vps", methods=["GET"])

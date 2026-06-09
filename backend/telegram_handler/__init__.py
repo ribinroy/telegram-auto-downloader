@@ -2,9 +2,11 @@
 Telegram client and download handler
 """
 import asyncio
+import json
 import logging
 from datetime import datetime
-from telethon import TelegramClient, events
+from telethon import TelegramClient, events, utils as tg_utils
+from telethon.errors import SessionPasswordNeededError
 from backend.config import API_ID, API_HASH, CHAT_ID, DOWNLOAD_DIR, MAX_RETRIES, SESSION_FILE
 from backend.database import get_db
 from backend.utils import human_readable_size, get_media_folder
@@ -12,19 +14,326 @@ from backend.web_app import get_socketio
 from backend import metrics
 from backend.file_meta import poll_and_extract_meta, is_video_file
 
+CHANNELS_SETTING_KEY = 'telegram_channels'
+API_SETTING_KEY = 'telegram_api'
+
 
 class TelegramDownloader:
     def __init__(self, download_tasks):
         self.download_tasks = download_tasks
 
-        # Get credentials from config (env file)
-        self.api_id = API_ID
-        self.api_hash = API_HASH
-        self.chat_id = CHAT_ID
-
-        self.client = TelegramClient(str(SESSION_FILE), self.api_id, self.api_hash)
         self.last_broadcast = 0
-        self.setup_event_handlers()
+        self.authorized = False
+        self._stopping = False
+        self._handler = None  # Currently registered NewMessage handler
+
+        # Pending web-login state (phone -> code -> optional 2FA password)
+        self._login_phone = None
+        self._login_code_hash = None
+
+        # API credentials: database setting first, .env as fallback. Without
+        # them there is no client yet — it gets created once they are saved
+        # via the web UI (Settings -> Telegram).
+        self.api_id, self.api_hash, self.api_source = self._load_api_credentials()
+        self.client = (TelegramClient(str(SESSION_FILE), self.api_id, self.api_hash)
+                       if self.api_id and self.api_hash else None)
+
+        # Monitored channels: [{'id': int, 'title': str}, ...] persisted in settings
+        self.channels = self._load_channels()
+        self._register_handler()
+
+    # ------------------------------------------------------------------
+    # API credentials (api_id/api_hash)
+    # ------------------------------------------------------------------
+
+    def _load_api_credentials(self):
+        """Return (api_id, api_hash, source) from the DB setting, falling back
+        to the .env values. api_hash is stored encrypted at rest."""
+        from backend.utils import decrypt_secret
+        raw = get_db().get_setting(API_SETTING_KEY)
+        if raw:
+            try:
+                cfg = json.loads(raw)
+                api_id = int(cfg.get('api_id') or 0)
+                api_hash = decrypt_secret(cfg.get('api_hash_enc', ''))
+                if api_id and api_hash:
+                    return api_id, api_hash, 'database'
+            except Exception as e:
+                logging.error(f"Failed to parse {API_SETTING_KEY}: {e}")
+        if API_ID and API_HASH and API_HASH != 'your_api_hash_here':
+            return API_ID, API_HASH, 'env'
+        return None, None, None
+
+    def get_api_config(self):
+        """API credential state for the settings UI (hash never exposed)."""
+        return {
+            'configured': bool(self.api_id and self.api_hash),
+            'api_id': self.api_id,
+            'has_hash': bool(self.api_hash),
+            'source': self.api_source,
+        }
+
+    async def set_api_credentials(self, api_id, api_hash):
+        """Save API credentials and swap in a new client without a restart.
+        A blank api_hash keeps the previously saved one."""
+        from backend.utils import encrypt_secret
+        api_hash = api_hash or self.api_hash
+        if not api_hash:
+            return {'error': 'API hash is required'}
+        get_db().set_setting(API_SETTING_KEY, json.dumps({
+            'api_id': api_id,
+            'api_hash_enc': encrypt_secret(api_hash),
+        }))
+        old_client = self.client
+        self.api_id, self.api_hash, self.api_source = api_id, api_hash, 'database'
+        self.authorized = False
+        self._login_phone = None
+        self._login_code_hash = None
+        self.client = TelegramClient(str(SESSION_FILE), api_id, api_hash)
+        self._handler = None  # handler belonged to the old client
+        self._register_handler()
+        if old_client:
+            # Unblocks run_until_disconnected; _run reconnects with the new client
+            await old_client.disconnect()
+        return {'status': 'saved', **self.get_api_config()}
+
+    # ------------------------------------------------------------------
+    # Channel management
+    # ------------------------------------------------------------------
+
+    def _load_channels(self):
+        """Load monitored channels from settings, seeding from .env CHAT_ID."""
+        db = get_db()
+        raw = db.get_setting(CHANNELS_SETTING_KEY)
+        if raw:
+            try:
+                channels = json.loads(raw)
+                if isinstance(channels, list):
+                    return [c for c in channels if isinstance(c, dict) and c.get('id')]
+            except Exception as e:
+                logging.error(f"Failed to parse {CHANNELS_SETTING_KEY}: {e}")
+        if CHAT_ID:
+            channels = [{'id': CHAT_ID, 'title': str(CHAT_ID)}]
+            db.set_setting(CHANNELS_SETTING_KEY, json.dumps(channels))
+            return channels
+        return []
+
+    def _save_channels(self):
+        get_db().set_setting(CHANNELS_SETTING_KEY, json.dumps(self.channels))
+
+    def get_channels(self):
+        return list(self.channels)
+
+    def chat_ids(self):
+        return [c['id'] for c in self.channels]
+
+    def default_chat_id(self):
+        """Fallback chat for legacy download records without a stored chat_id."""
+        ids = self.chat_ids()
+        return ids[0] if ids else CHAT_ID
+
+    def _register_handler(self):
+        """(Re-)register the NewMessage handler for the current channel list."""
+        if self.client is None:
+            return
+        if self._handler:
+            self.client.remove_event_handler(self._handler)
+            self._handler = None
+        ids = self.chat_ids()
+        print(f"📡 Listening for new files on {len(ids)} channel(s): {ids}")
+        if not ids:
+            return
+
+        async def handle_new_file(event):
+            await self._handle_new_file(event)
+
+        self._handler = handle_new_file
+        self.client.add_event_handler(handle_new_file, events.NewMessage(chats=ids))
+
+    async def _resolve_entity(self, identifier):
+        """get_entity that tolerates numeric IDs in the wrong format.
+
+        Channel/megagroup IDs must be passed in the -100-prefixed "marked"
+        form; a bare ID makes Telethon guess "basic chat" (GetChatsRequest)
+        and Telegram rejects it with "Invalid object ID for a chat". Try the
+        plausible variants, then fall back to scanning dialogs (which also
+        populates the entity cache)."""
+        if not isinstance(identifier, int):
+            return await self.client.get_entity(identifier)
+
+        candidates = [identifier]
+        digits = str(abs(identifier))
+        if not str(identifier).startswith('-100'):
+            candidates.append(int('-100' + digits))
+        if identifier > 0:
+            candidates.append(-identifier)
+
+        first_error = None
+        for cand in candidates:
+            try:
+                return await self.client.get_entity(cand)
+            except Exception as e:
+                first_error = first_error or e
+
+        async for dialog in self.client.iter_dialogs():
+            if dialog.id in candidates:
+                return dialog.entity
+
+        raise first_error
+
+    async def add_channel(self, identifier):
+        """Resolve a channel/group/user by @username, t.me link, or numeric ID
+        and add it to the monitored list."""
+        if self.client is None:
+            return {'error': 'Telegram is not connected'}
+        identifier = str(identifier).strip()
+        if identifier.lstrip('-').isdigit():
+            identifier = int(identifier)
+        entity = await self._resolve_entity(identifier)
+        chat_id = tg_utils.get_peer_id(entity)
+        title = (getattr(entity, 'title', None)
+                 or getattr(entity, 'username', None)
+                 or ' '.join(filter(None, [getattr(entity, 'first_name', None),
+                                           getattr(entity, 'last_name', None)]))
+                 or str(chat_id))
+        if any(c['id'] == chat_id for c in self.channels):
+            return {'error': f'"{title}" is already being monitored'}
+        self.channels.append({'id': chat_id, 'title': title})
+        self._save_channels()
+        self._register_handler()
+        return {'channels': self.get_channels()}
+
+    async def remove_channel(self, chat_id):
+        """Remove a channel from the monitored list."""
+        self.channels = [c for c in self.channels if c['id'] != chat_id]
+        self._save_channels()
+        self._register_handler()
+        return {'channels': self.get_channels()}
+
+    async def list_dialogs(self, limit=200):
+        """List the account's dialogs (channels/groups first) for the picker UI."""
+        if self.client is None:
+            return []
+        dialogs = await self.client.get_dialogs(limit=limit)
+        monitored = set(self.chat_ids())
+        result = []
+        for d in dialogs:
+            kind = 'channel' if d.is_channel else 'group' if d.is_group else 'user'
+            result.append({
+                'id': d.id,
+                'title': d.title or str(d.id),
+                'type': kind,
+                'username': getattr(d.entity, 'username', None),
+                'monitored': d.id in monitored,
+            })
+        result.sort(key=lambda x: (x['type'] == 'user', x['title'].lower()))
+        return result
+
+    async def refresh_channel_titles(self):
+        """Best-effort: replace numeric placeholder titles with real chat
+        titles, and normalize IDs to the marked (-100...) form so event
+        filtering matches."""
+        changed = False
+        for c in self.channels:
+            if c.get('title') and not c['title'].lstrip('-').isdigit():
+                continue
+            try:
+                entity = await self._resolve_entity(c['id'])
+                marked = tg_utils.get_peer_id(entity)
+                if marked != c['id']:
+                    c['id'] = marked
+                    changed = True
+                title = getattr(entity, 'title', None) or getattr(entity, 'username', None)
+                if title:
+                    c['title'] = title
+                    changed = True
+            except Exception as e:
+                logging.error(f"Could not resolve title for chat {c['id']}: {e}")
+        if changed:
+            self._save_channels()
+            self._register_handler()
+
+    # ------------------------------------------------------------------
+    # Web-based authentication
+    # ------------------------------------------------------------------
+
+    async def get_status(self):
+        """Connection/authorization status for the settings UI."""
+        connected = bool(self.client) and self.client.is_connected()
+        status = {
+            'api_configured': bool(self.client),
+            'connected': connected,
+            'authorized': False,
+            'awaiting_code': bool(self._login_code_hash),
+            'user': None,
+        }
+        if not connected:
+            return status
+        try:
+            status['authorized'] = await self.client.is_user_authorized()
+            if status['authorized']:
+                me = await self.client.get_me()
+                if me:
+                    status['user'] = {
+                        'id': me.id,
+                        'username': me.username,
+                        'first_name': me.first_name,
+                        'last_name': me.last_name,
+                        'phone': me.phone,
+                    }
+        except Exception as e:
+            logging.error(f"Telegram status check failed: {e}")
+        return status
+
+    async def send_login_code(self, phone):
+        """Step 1: send the login code to the user's Telegram app/SMS."""
+        if self.client is None:
+            return {'error': 'Configure the API ID and hash first'}
+        if not self.client.is_connected():
+            await self.client.connect()
+        sent = await self.client.send_code_request(phone)
+        self._login_phone = phone
+        self._login_code_hash = sent.phone_code_hash
+        return {'status': 'code_sent'}
+
+    async def submit_login_code(self, code):
+        """Step 2: verify the code. May require a 2FA password afterwards."""
+        if not self._login_phone or not self._login_code_hash:
+            return {'error': 'No pending login. Request a code first.'}
+        try:
+            await self.client.sign_in(
+                phone=self._login_phone,
+                code=code,
+                phone_code_hash=self._login_code_hash,
+            )
+        except SessionPasswordNeededError:
+            return {'status': 'password_required'}
+        await self._on_authorized()
+        return {'status': 'authorized'}
+
+    async def submit_password(self, password):
+        """Step 3 (only with 2FA enabled): verify the cloud password."""
+        await self.client.sign_in(password=password)
+        await self._on_authorized()
+        return {'status': 'authorized'}
+
+    async def logout(self):
+        """Log out and invalidate the session file. The client reconnects
+        unauthorized and waits for a new web login."""
+        self.authorized = False
+        self._login_phone = None
+        self._login_code_hash = None
+        if self.client:
+            await self.client.log_out()
+        return {'status': 'logged_out'}
+
+    async def _on_authorized(self):
+        """Called once a login completes (at startup or via the web flow)."""
+        self.authorized = True
+        self._login_phone = None
+        self._login_code_hash = None
+        await self.refresh_channel_titles()
+        await self.send_startup_greeting()
 
     def emit_progress(self, message_id: int, progress: float, downloaded_bytes: int,
                        total_bytes: int, speed: float, pending_time: float | None):
@@ -74,14 +383,6 @@ class TelegramDownloader:
         if socketio:
             socketio.emit('download:deleted', {'message_id': str(message_id)})
 
-    def setup_event_handlers(self):
-        """Setup Telegram event handlers"""
-        print(f"📡 Setting up event handler for chat_id: {self.chat_id}")
-
-        @self.client.on(events.NewMessage(chats=self.chat_id))
-        async def handle_new_file(event):
-            await self._handle_new_file(event)
-
     async def edit_status_message(self, event, entry, status=None):
         """Edits the Telegram message with the current download status."""
         try:
@@ -106,8 +407,9 @@ class TelegramDownloader:
             return
         emoji_map = {"Downloading": "⬇️", "Downloaded": "✅", "Failed": "❌", "Stopped": "🛑", "Paused": "⏸️"}
         text = f"{emoji_map.get(status, '')} Status: {status}"
+        chat_id = int(download['chat_id']) if download.get('chat_id') else self.default_chat_id()
         try:
-            msg = await self.client.get_messages(self.chat_id, ids=download["status_msg_id"])
+            msg = await self.client.get_messages(chat_id, ids=download["status_msg_id"])
             await msg.edit(text)
         except Exception as e:
             logging.error(f"Failed to update status message: {e}")
@@ -126,8 +428,9 @@ class TelegramDownloader:
             logging.error(f"No DB record for message_id={message_id}")
             return False
 
+        chat_id = int(download['chat_id']) if download.get('chat_id') else self.default_chat_id()
         try:
-            msg = await self.client.get_messages(self.chat_id, ids=message_id)
+            msg = await self.client.get_messages(chat_id, ids=message_id)
         except Exception as e:
             logging.error(f"Failed to fetch Telegram message {message_id}: {e}")
             return False
@@ -368,6 +671,7 @@ class TelegramDownloader:
             pending_time=None,
             message_id=event.id,
             author=author,
+            chat_id=event.chat_id,
         )
 
         # Emit new download event
@@ -389,28 +693,65 @@ class TelegramDownloader:
             asyncio.create_task(poll_and_extract_meta(event.id))
 
     async def send_startup_greeting(self):
-        """Send a greeting message to the chat when service starts"""
-        try:
-            hour = datetime.now().hour
-            if 5 <= hour < 12:
-                greeting = "Good Morning"
-            elif 12 <= hour < 17:
-                greeting = "Good Afternoon"
-            else:
-                greeting = "Good Evening"
+        """Send a greeting message to each monitored chat when service starts"""
+        hour = datetime.now().hour
+        if 5 <= hour < 12:
+            greeting = "Good Morning"
+        elif 12 <= hour < 17:
+            greeting = "Good Afternoon"
+        else:
+            greeting = "Good Evening"
 
-            await self.client.send_message(self.chat_id, f"{greeting}, reporting for duty 🫡")
-        except Exception as e:
-            logging.error(f"Failed to send startup greeting: {e}")
+        for chat_id in self.chat_ids():
+            try:
+                await self.client.send_message(chat_id, f"{greeting}, reporting for duty 🫡")
+            except Exception as e:
+                logging.error(f"Failed to send startup greeting to {chat_id}: {e}")
 
     def start(self):
-        """Start the Telegram client"""
+        """Start the Telegram client without prompting on the terminal.
+
+        Connects and, if the saved session is valid, starts handling updates
+        immediately. Otherwise it stays connected (or waits for API
+        credentials) until a login completes via the web UI
+        (Settings -> Telegram)."""
         print("🚀 DownLee running...")
-        self.client.start()
-        self.loop = self.client.loop  # Store reference for cross-thread scheduling
-        self.client.loop.run_until_complete(self.send_startup_greeting())
-        self.client.run_until_disconnected()
+        try:
+            self.loop = asyncio.get_event_loop()  # For cross-thread scheduling
+        except RuntimeError:
+            self.loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self.loop)
+        self.loop.run_until_complete(self._run())
+
+    async def _run(self):
+        warned_no_api = False
+        while not self._stopping:
+            client = self.client
+            if client is None:
+                if not warned_no_api:
+                    warned_no_api = True
+                    print("⚠️  Telegram API credentials not set — add them via the web UI (Settings → Telegram)")
+                await asyncio.sleep(2)
+                continue
+            warned_no_api = False
+            try:
+                if not client.is_connected():
+                    await client.connect()
+                if await client.is_user_authorized():
+                    await self._on_authorized()
+                else:
+                    print("⚠️  Telegram not authorized — log in via the web UI (Settings → Telegram)")
+                # Returns on explicit disconnect, logout, or credential swap;
+                # web login happens in-flight on this same connection.
+                await client.run_until_disconnected()
+            except Exception as e:
+                logging.error(f"Telegram client error: {e}")
+            self.authorized = False
+            if not self._stopping:
+                await asyncio.sleep(2)
 
     def stop(self):
         """Stop the Telegram client"""
-        self.client.disconnect()
+        self._stopping = True
+        if self.client:
+            self.client.disconnect()

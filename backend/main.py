@@ -22,28 +22,25 @@ def setup_logging():
 
 
 def validate_credentials():
-    """Validate credentials from .env file"""
-    from backend.config import API_ID, API_HASH, CHAT_ID
+    """Warn about missing Telegram credentials in .env (non-fatal).
 
-    errors = []
+    API credentials and monitored channels can all be configured from the
+    web UI (Settings -> Telegram) and are stored in the database; .env
+    values only act as fallback/seed."""
+    from backend.config import API_ID, API_HASH
 
-    # Check API_ID from .env
+    warnings = []
+
     if not API_ID or API_ID == 0:
-        errors.append("API_ID is not set in .env file")
+        warnings.append("API_ID is not set in .env file")
 
-    # Check API_HASH from .env
     if not API_HASH or API_HASH == 'your_api_hash_here':
-        errors.append("API_HASH is not set in .env file")
+        warnings.append("API_HASH is not set in .env file")
 
-    # Check CHAT_ID from .env
-    if not CHAT_ID or CHAT_ID == 0:
-        errors.append("CHAT_ID is not set in .env file")
-
-    if errors:
-        print("❌ Configuration Error:")
-        for error in errors:
-            print(f"   - {error}")
-        return False
+    if warnings:
+        print("⚠️  Telegram credentials missing from .env (can be set in the web UI instead):")
+        for warning in warnings:
+            print(f"   - {warning}")
 
     return True
 

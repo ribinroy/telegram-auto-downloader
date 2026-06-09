@@ -41,6 +41,7 @@ class Download(Base):
     file_meta = Column(Text, nullable=True)  # JSON metadata: video/audio details for video files
     thumb_count = Column(Integer, default=0)  # Number of generated thumbnail images
     status_msg_id = Column(Integer, nullable=True)  # Telegram status message ID for progress updates
+    chat_id = Column(BigInteger, nullable=True)  # Telegram chat the message came from (message_id is per-chat)
 
     def to_dict(self):
         """Convert model to dictionary"""
@@ -65,6 +66,7 @@ class Download(Base):
             'file_meta': json.loads(self.file_meta) if self.file_meta else None,
             'thumb_count': self.thumb_count or 0,
             'status_msg_id': self.status_msg_id,
+            'chat_id': str(self.chat_id) if self.chat_id is not None else None,
         }
 
 
@@ -210,6 +212,11 @@ class DatabaseManager:
                 conn.execute(text('ALTER TABLE downloads ADD COLUMN status_msg_id INTEGER'))
                 conn.commit()
 
+            # Add chat_id column if it doesn't exist (multi-channel support)
+            if 'chat_id' not in columns:
+                conn.execute(text('ALTER TABLE downloads ADD COLUMN chat_id BIGINT'))
+                conn.commit()
+
             # Migrate is_deleted boolean to deleted_at timestamp
             if 'is_deleted' in columns and 'deleted_at' not in columns:
                 conn.execute(text('ALTER TABLE downloads ADD COLUMN deleted_at TIMESTAMP'))
@@ -304,7 +311,8 @@ class DatabaseManager:
 
     def add_download(self, file, status='downloading', progress=0, speed=0,
                      error=None, downloaded_bytes=0, total_bytes=0, pending_time=None,
-                     message_id=None, downloaded_from='telegram', url=None, author=None):
+                     message_id=None, downloaded_from='telegram', url=None, author=None,
+                     chat_id=None):
         """Add a new download entry"""
         session = self.get_session()
         try:
@@ -326,6 +334,7 @@ class DatabaseManager:
                 downloaded_from=downloaded_from,
                 url=url,
                 author=author,
+                chat_id=chat_id,
             )
             session.add(download)
             session.commit()
@@ -363,12 +372,18 @@ class DatabaseManager:
         finally:
             self.close_session()
 
-    def update_download_by_message_id(self, message_id, **kwargs):
-        """Update a download entry by message ID (string UUID or Telegram ID)"""
+    def update_download_by_message_id(self, message_id, chat_id=None, **kwargs):
+        """Update a download entry by message ID (string UUID or Telegram ID).
+
+        Telegram message IDs are only unique per chat, so an optional chat_id
+        narrows the match; without it the most recent record wins."""
         session = self.get_session()
         try:
             msg_id = str(message_id) if message_id is not None else None
-            download = session.query(Download).filter_by(message_id=msg_id).first()
+            query = session.query(Download).filter_by(message_id=msg_id)
+            if chat_id is not None:
+                query = query.filter_by(chat_id=chat_id)
+            download = query.order_by(Download.id.desc()).first()
             if download:
                 for key, value in kwargs.items():
                     if hasattr(download, key):
@@ -455,12 +470,18 @@ class DatabaseManager:
         finally:
             self.close_session()
 
-    def get_download_by_message_id(self, message_id):
-        """Get a download entry by message ID (string UUID or Telegram ID)"""
+    def get_download_by_message_id(self, message_id, chat_id=None):
+        """Get a download entry by message ID (string UUID or Telegram ID).
+
+        Telegram message IDs are only unique per chat, so an optional chat_id
+        narrows the match; without it the most recent record wins."""
         session = self.get_session()
         try:
             msg_id = str(message_id) if message_id is not None else None
-            download = session.query(Download).filter_by(message_id=msg_id).first()
+            query = session.query(Download).filter_by(message_id=msg_id)
+            if chat_id is not None:
+                query = query.filter_by(chat_id=chat_id)
+            download = query.order_by(Download.id.desc()).first()
             return download.to_dict() if download else None
         finally:
             self.close_session()
