@@ -28,6 +28,12 @@ function getAuthHeaders(): HeadersInit {
 export interface LoginResponse {
   token: string;
   user: { id: number; username: string };
+  must_change_password?: boolean;
+}
+
+export interface VerifyResult {
+  valid: boolean;
+  mustChangePassword: boolean;
 }
 
 export async function login(username: string, password: string): Promise<LoginResponse> {
@@ -43,14 +49,16 @@ export async function login(username: string, password: string): Promise<LoginRe
   return response.json();
 }
 
-export async function verifyToken(): Promise<boolean> {
+export async function verifyToken(): Promise<VerifyResult> {
   const token = getToken();
-  if (!token) return false;
+  if (!token) return { valid: false, mustChangePassword: false };
 
   const response = await fetch(`${API_BASE}/api/auth/verify`, {
     headers: getAuthHeaders(),
   });
-  return response.ok;
+  if (!response.ok) return { valid: false, mustChangePassword: false };
+  const data = await response.json().catch(() => ({}));
+  return { valid: true, mustChangePassword: !!data.must_change_password };
 }
 
 export async function updatePassword(currentPassword: string, newPassword: string): Promise<void> {

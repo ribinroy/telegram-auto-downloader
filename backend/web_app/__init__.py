@@ -201,8 +201,17 @@ def get_web_app():
     return _web_app
 
 
+# Routes still usable while a forced password change is pending
+PASSWORD_CHANGE_ALLOWED_PATHS = {'/api/auth/verify', '/api/auth/password'}
+
+
 def token_required(f):
-    """Decorator to require valid JWT token"""
+    """Decorator to require valid JWT token.
+
+    While the user's `must_change_password` flag is set (default credentials),
+    the token only grants access to /api/auth/verify and /api/auth/password —
+    everything else returns 403 with code 'password_change_required'.
+    """
     @wraps(f)
     def decorated(*args, **kwargs):
         token = None
@@ -220,6 +229,13 @@ def token_required(f):
             return jsonify({'error': 'Token has expired'}), 401
         except jwt.InvalidTokenError:
             return jsonify({'error': 'Invalid token'}), 401
+
+        # Checked in the DB (not the token) so the lockdown lifts immediately
+        # after the password change without re-issuing the JWT.
+        request.must_change_password = get_db().user_must_change_password(data.get('user_id'))
+        if request.must_change_password and request.path not in PASSWORD_CHANGE_ALLOWED_PATHS:
+            return jsonify({'error': 'Password change required',
+                            'code': 'password_change_required'}), 403
 
         return f(*args, **kwargs)
     return decorated
@@ -505,13 +521,17 @@ class WebApp:
 
             return jsonify({
                 "token": token,
-                "user": user
+                "user": user,
+                "must_change_password": bool(user.get('must_change_password'))
             })
 
         @self.app.route("/api/auth/verify", methods=["GET"])
         @token_required
         def verify_token():
-            return jsonify({"user": request.user})
+            return jsonify({
+                "user": request.user,
+                "must_change_password": bool(getattr(request, 'must_change_password', False))
+            })
 
         @self.app.route("/api/auth/password", methods=["POST"])
         @token_required
@@ -522,6 +542,9 @@ class WebApp:
 
             if not current_password or not new_password:
                 return jsonify({"error": "Current and new password required"}), 400
+
+            if new_password == 'admin':
+                return jsonify({"error": "The default password 'admin' is not allowed"}), 400
 
             db = get_db()
             result = db.update_user_password(request.user['user_id'], current_password, new_password)

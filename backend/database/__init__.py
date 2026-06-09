@@ -124,6 +124,7 @@ class User(Base):
     role = Column(String(20), default='user')  # 'admin' or 'user'
     telegram_id = Column(BigInteger, nullable=True)  # set for Telegram users
     display_name = Column(String(200), nullable=True)
+    must_change_password = Column(Boolean, default=False)  # force a new password on next web login
     created_at = Column(DateTime, default=datetime.utcnow)
 
     def to_dict(self):
@@ -135,6 +136,7 @@ class User(Base):
             'telegram_id': str(self.telegram_id) if self.telegram_id is not None else None,
             'display_name': self.display_name,
             'is_web': bool(self.password_hash),
+            'must_change_password': bool(self.must_change_password),
             'created_at': f"{self.created_at.isoformat()}Z" if self.created_at else None
         }
 
@@ -260,6 +262,14 @@ class DatabaseManager:
                     conn.commit()
                 if 'display_name' not in user_columns:
                     conn.execute(text('ALTER TABLE users ADD COLUMN display_name VARCHAR(200)'))
+                    conn.commit()
+                if 'must_change_password' not in user_columns:
+                    conn.execute(text('ALTER TABLE users ADD COLUMN must_change_password BOOLEAN DEFAULT FALSE'))
+                    # Existing installs still on the default 'admin' password
+                    # must pick a real one on next login.
+                    conn.execute(
+                        text('UPDATE users SET must_change_password = TRUE WHERE password_hash = :h'),
+                        {'h': User.hash_password('admin')})
                     conn.commit()
 
             # Migrate is_deleted boolean to deleted_at timestamp
@@ -675,8 +685,18 @@ class DatabaseManager:
             if not user.check_password(current_password):
                 return {'error': 'Current password is incorrect'}
             user.password_hash = User.hash_password(new_password)
+            user.must_change_password = False  # forced change satisfied
             session.commit()
             return {'success': True}
+        finally:
+            self.close_session()
+
+    def user_must_change_password(self, user_id: int) -> bool:
+        """Whether the user is required to set a new password before using the app."""
+        session = self.get_session()
+        try:
+            user = session.query(User).filter_by(id=user_id).first()
+            return bool(user and user.must_change_password)
         finally:
             self.close_session()
 
@@ -689,11 +709,12 @@ class DatabaseManager:
                 user = User(
                     username='admin',
                     password_hash=User.hash_password('admin'),
-                    role='admin'
+                    role='admin',
+                    must_change_password=True  # default credentials: force a real password
                 )
                 session.add(user)
                 session.commit()
-                print("Default user 'admin' created")
+                print("Default user 'admin' created (password change required on first login)")
         finally:
             self.close_session()
 
