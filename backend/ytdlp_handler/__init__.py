@@ -322,23 +322,15 @@ class YtdlpDownloader:
 
         # Record download started
         metrics.record_download_started(source)
-        mapping = db.get_download_type_map(source)
 
-        # Use custom folder from mapping if it exists and is accessible
-        output_dir = None
-        if mapping and mapping.get('folder'):
-            custom_folder = Path(mapping['folder'])
-            try:
-                custom_folder.mkdir(parents=True, exist_ok=True)
-                output_dir = custom_folder
-                print(f"[yt-dlp] Using custom folder: {output_dir}")
-            except (OSError, PermissionError) as e:
-                print(f"[yt-dlp] Custom folder not accessible: {e}, falling back to default")
-
-        # Fall back to default folder
-        if output_dir is None:
-            output_dir = DOWNLOAD_DIR / "Videos"
-            output_dir.mkdir(parents=True, exist_ok=True)
+        # Route to the download's connected label folder (set at start_download time),
+        # falling back to the default Videos folder.
+        from backend.utils import label_folder
+        dl_record = db.get_download_by_message_id(message_id)
+        label = db.get_label(dl_record.get('label_id')) if dl_record else None
+        output_dir = label_folder(label, DOWNLOAD_DIR / "Videos")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        print(f"[yt-dlp] Output folder: {output_dir}")
 
         # Use custom title if provided, otherwise use yt-dlp's title
         print(f"[yt-dlp] custom_title parameter: {custom_title}")
@@ -525,7 +517,7 @@ class YtdlpDownloader:
             self.processes.pop(message_id, None)
             self.download_tasks.pop(message_id, None)
 
-    def start_download(self, url: str, loop, format_id: str = None, title: str = None, ext: str = None, filesize: int = None, resolution: str = None, author: str = None) -> dict:
+    def start_download(self, url: str, loop, format_id: str = None, title: str = None, ext: str = None, filesize: int = None, resolution: str = None, author: str = None, label_id: int = None) -> dict:
         """Start a new download and return the download info"""
         db = get_db()
 
@@ -541,6 +533,11 @@ class YtdlpDownloader:
         # Generate UUID for this download
         message_id = generate_uuid()
         domain = self.get_domain(url)
+
+        # Resolve the connected label (override → source default → none)
+        from backend.utils import resolve_label
+        label = resolve_label(domain, label_id)
+        resolved_label_id = label['id'] if label else None
 
         # Create filename from title (without extension for yt-dlp)
         # yt-dlp will add the extension automatically
@@ -560,7 +557,8 @@ class YtdlpDownloader:
             message_id=message_id,
             downloaded_from=domain,
             url=url,
-            author=author
+            author=author,
+            label_id=resolved_label_id,
         )
 
         # Emit new download event

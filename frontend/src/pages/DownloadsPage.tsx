@@ -1,11 +1,12 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Search, Download, Loader2, Plus, X, HardDrive } from 'lucide-react';
 import { useLayoutContext } from '../components/Layout';
 import { ROUTES } from '../routes';
 import { DownloadItem } from '../components/DownloadItem';
 import { AddUrlModal } from '../components/AddUrlModal';
-import type { SortBy, SortOrder } from '../api';
+import { fetchLabels, type SortBy, type SortOrder } from '../api';
+import type { Label } from '../types';
 
 export function DownloadsPage() {
   const {
@@ -20,6 +21,19 @@ export function DownloadsPage() {
 
   const navigate = useNavigate();
   const searchRef = useRef<HTMLInputElement>(null);
+
+  // Labels for showing each download's connected label + destination folder.
+  // Refetched on mount, so renames/edits made in Settings are reflected on return.
+  const [labels, setLabels] = useState<Label[]>([]);
+  const labelsById = useMemo(() => {
+    const m: Record<number, Label> = {};
+    for (const l of labels) m[l.id] = l;
+    return m;
+  }, [labels]);
+
+  useEffect(() => {
+    fetchLabels().then(setLabels).catch(() => {});
+  }, []);
 
   // Focus search on mount
   useEffect(() => {
@@ -192,6 +206,7 @@ export function DownloadsPage() {
               <DownloadItem
                 key={download.id}
                 download={download}
+                label={download.label_id ? labelsById[download.label_id] : undefined}
                 onRetry={onRetry}
                 onStop={onStop}
                 onPause={onPause}

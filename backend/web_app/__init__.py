@@ -163,7 +163,7 @@ class WebApp:
             print("Client disconnected")
 
     def get_downloads_data(self, search='', filter_type='all', sort_by='created_at', sort_order='desc',
-                           limit=30, offset=0, exclude_mapping_ids=None, author=None):
+                           limit=30, offset=0, exclude_mapping_ids=None, author=None, exclude_label_ids=None):
         """Get downloads data (paginated)
 
         Args:
@@ -179,12 +179,8 @@ class WebApp:
         db = get_db()
         all_downloads = db.get_all_downloads()
 
-        # Get sources to exclude based on mapping IDs
-        excluded_sources = []
-        if exclude_mapping_ids:
-            all_mappings = db.get_all_download_type_maps()
-            mapping_by_id = {m['id']: m for m in all_mappings}
-            excluded_sources = [mapping_by_id[mid]['downloaded_from'] for mid in exclude_mapping_ids if mid in mapping_by_id]
+        # Labels to hide from the default view (the "secured" set)
+        excluded_label_ids = set(exclude_label_ids or [])
 
         query = search.lower().strip()
         if query:
@@ -212,9 +208,9 @@ class WebApp:
         else:
             filtered_list = all_downloads
 
-        # Filter out excluded sources
-        if excluded_sources:
-            filtered_list = [d for d in filtered_list if d.get("downloaded_from") not in excluded_sources]
+        # Filter out downloads connected to hidden labels
+        if excluded_label_ids:
+            filtered_list = [d for d in filtered_list if d.get("label_id") not in excluded_label_ids]
 
         # Filter by author
         if author:
@@ -416,11 +412,13 @@ class WebApp:
             sort_order = request.args.get("sort_order", "desc")  # 'asc' or 'desc'
             limit = request.args.get("limit", 30, type=int)
             offset = request.args.get("offset", 0, type=int)
-            # Parse exclude_mapping_ids as comma-separated list of integers
-            exclude_ids_str = request.args.get("exclude_mapping_ids", "")
-            exclude_mapping_ids = [int(x) for x in exclude_ids_str.split(",") if x.strip().isdigit()] if exclude_ids_str else None
+            # Parse exclude_label_ids as comma-separated list of integers (hidden labels)
+            exclude_ids_str = request.args.get("exclude_label_ids", "")
+            exclude_label_ids = [int(x) for x in exclude_ids_str.split(",") if x.strip().isdigit()] if exclude_ids_str else None
             author = request.args.get("author", "").strip() or None
-            return jsonify(self.get_downloads_data(search, filter_type, sort_by, sort_order, limit, offset, exclude_mapping_ids, author))
+            return jsonify(self.get_downloads_data(search, filter_type, sort_by, sort_order, limit, offset,
+                                                   exclude_mapping_ids=None, author=author,
+                                                   exclude_label_ids=exclude_label_ids))
 
         @self.app.route("/api/authors", methods=["GET"])
         @token_required
@@ -640,14 +638,21 @@ class WebApp:
                         DOWNLOAD_DIR / file_name,
                         DOWNLOAD_DIR / "Videos" / file_name,
                     ]
-                    if downloaded_from:
-                        mapping = db.get_download_type_map(downloaded_from)
-                        if mapping and mapping.get("folder"):
-                            possible_paths.insert(0, Path(mapping["folder"]) / file_name)
+                    label = db.get_label(download.get("label_id"))
+                    if label and label.get("folder"):
+                        possible_paths.insert(0, Path(label["folder"]) / file_name)
 
+                    import shutil
                     for file_path in possible_paths:
-                        if file_path.exists():
-                            file_path.unlink()
+                        if file_path.exists() or file_path.is_symlink():
+                            try:
+                                if file_path.is_dir() and not file_path.is_symlink():
+                                    # VPS folder downloads land as a directory
+                                    shutil.rmtree(file_path)
+                                else:
+                                    file_path.unlink()
+                            except OSError as e:
+                                print(f"[Delete] Failed to delete {file_path}: {e}")
                             break
 
             # Delete thumbnails (uses download id for folder name)
@@ -688,6 +693,7 @@ class WebApp:
             ext = data.get("ext")
             filesize = data.get("filesize")
             resolution = data.get("resolution")
+            label_id = data.get("label_id")
 
             if not url:
                 return jsonify({"error": "URL is required"}), 400
@@ -708,7 +714,8 @@ class WebApp:
                 ext=ext,
                 filesize=filesize,
                 resolution=resolution,
-                author=author
+                author=author,
+                label_id=label_id,
             )
 
             if 'error' in result:
@@ -717,95 +724,85 @@ class WebApp:
             return jsonify(result)
 
         # Download type mappings API
-        @self.app.route("/api/mappings", methods=["GET"])
+        # --- Labels (download destinations) ---
+        @self.app.route("/api/labels", methods=["GET"])
         @token_required
-        def get_mappings():
-            """Get all download type mappings"""
-            db = get_db()
-            return jsonify(db.get_all_download_type_maps())
+        def get_labels():
+            """All labels."""
+            return jsonify(get_db().get_labels())
 
-        @self.app.route("/api/mappings/secured", methods=["GET"])
+        @self.app.route("/api/labels/hidden-ids", methods=["GET"])
         @token_required
-        def get_secured_sources():
-            """Get list of secured source types"""
-            db = get_db()
-            return jsonify(db.get_secured_sources())
+        def get_hidden_label_ids():
+            """IDs of hidden labels (drive the secured view)."""
+            return jsonify(get_db().get_hidden_label_ids())
 
-        @self.app.route("/api/mappings/secured-ids", methods=["GET"])
+        @self.app.route("/api/labels", methods=["POST"])
         @token_required
-        def get_secured_mapping_ids():
-            """Get list of secured mapping IDs"""
-            db = get_db()
-            return jsonify(db.get_secured_mapping_ids())
-
-        @self.app.route("/api/mappings/source/<source>", methods=["GET"])
-        @token_required
-        def get_mapping_by_source(source):
-            """Get mapping for a specific source"""
-            from backend.config import DOWNLOAD_DIR
-            db = get_db()
-            mapping = db.get_download_type_map(source)
-            if mapping:
-                mapping["download_folder"] = mapping.get("folder") or str(DOWNLOAD_DIR / "Videos")
-                return jsonify(mapping)
-            return jsonify({"download_folder": str(DOWNLOAD_DIR / "Videos")})
-
-        @self.app.route("/api/mappings", methods=["POST"])
-        @token_required
-        def add_mapping():
-            """Add a new download type mapping"""
-            data = request.json
-            downloaded_from = data.get("downloaded_from")
-            is_secured = data.get("is_secured", False)
-            folder = data.get("folder")
-            quality = data.get("quality")
-
-            if not downloaded_from:
-                return jsonify({"error": "downloaded_from is required"}), 400
-
-            db = get_db()
-            result = db.add_download_type_map(downloaded_from, is_secured, folder, quality)
-
-            if 'error' in result:
+        def add_label():
+            """Create a label. Body: {name, folder?, quality?, is_hidden?}."""
+            data = request.json or {}
+            name = (data.get("name") or "").strip()
+            if not name:
+                return jsonify({"error": "name is required"}), 400
+            result = get_db().add_label(
+                name,
+                folder=(data.get("folder") or None),
+                quality=(data.get("quality") or None),
+                is_hidden=bool(data.get("is_hidden", False)),
+            )
+            if isinstance(result, dict) and result.get("error"):
                 return jsonify(result), 400
-
             return jsonify(result)
 
-        @self.app.route("/api/mappings/<int:map_id>", methods=["PUT"])
+        @self.app.route("/api/labels/<int:label_id>", methods=["PUT"])
         @token_required
-        def update_mapping(map_id):
-            """Update a download type mapping"""
-            data = request.json
-            db = get_db()
-
-            update_data = {}
-            if "downloaded_from" in data:
-                update_data["downloaded_from"] = data["downloaded_from"]
-            if "is_secured" in data:
-                update_data["is_secured"] = data["is_secured"]
-            if "folder" in data:
-                update_data["folder"] = data["folder"]
-            if "quality" in data:
-                update_data["quality"] = data["quality"]
-
-            result = db.update_download_type_map(map_id, **update_data)
-
-            if isinstance(result, dict) and 'error' in result:
+        def update_label(label_id):
+            """Update a label. Body may include name/folder/quality/is_hidden."""
+            data = request.json or {}
+            update = {}
+            for key in ("name", "folder", "quality", "is_hidden"):
+                if key in data:
+                    update[key] = data[key]
+            result = get_db().update_label(label_id, **update)
+            if isinstance(result, dict) and result.get("error"):
                 return jsonify(result), 400
-
             return jsonify(result)
 
-        @self.app.route("/api/mappings/<int:map_id>", methods=["DELETE"])
+        @self.app.route("/api/labels/<int:label_id>", methods=["DELETE"])
         @token_required
-        def delete_mapping(map_id):
-            """Delete a download type mapping"""
-            db = get_db()
-            success = db.delete_download_type_map(map_id)
-
-            if not success:
-                return jsonify({"error": "Mapping not found"}), 404
-
+        def delete_label(label_id):
+            """Delete a label (detaches it from downloads + source defaults).
+            System labels cannot be deleted."""
+            result = get_db().delete_label(label_id)
+            if isinstance(result, dict) and result.get("error"):
+                return jsonify(result), 400
+            if not result:
+                return jsonify({"error": "Label not found"}), 404
             return jsonify({"status": "deleted"})
+
+        # --- Source -> default label ---
+        @self.app.route("/api/source-labels", methods=["GET"])
+        @token_required
+        def get_source_labels():
+            """All source -> default label associations."""
+            return jsonify(get_db().get_source_labels())
+
+        @self.app.route("/api/source-labels", methods=["POST"])
+        @token_required
+        def set_source_label():
+            """Set/clear a source's label. Body: {source, label_id|null, path?}.
+
+            With `path` set, binds a per-path override (e.g. a VPS watched folder);
+            without it, sets the source-wide default.
+            """
+            data = request.json or {}
+            source = (data.get("source") or "").strip()
+            if not source:
+                return jsonify({"error": "source is required"}), 400
+            result = get_db().set_source_label(
+                source, data.get("label_id"), (data.get("path") or "").strip() or None)
+            return jsonify(result)
 
         # Analytics API
         @self.app.route("/api/analytics", methods=["GET"])
@@ -1166,6 +1163,51 @@ class WebApp:
                 if client:
                     client.close()
 
+        @self.app.route("/api/settings/local/browse", methods=["POST"])
+        @token_required
+        def browse_local():
+            """List the contents of a local directory on the home server (on demand).
+
+            Body: {path?} — absolute path to list; defaults to DOWNLOAD_DIR.
+            Returns {path, parent, entries:[{name, path, is_dir}]} with
+            directories first. Used by the folder picker (e.g. label folders).
+            """
+            from backend.config import DOWNLOAD_DIR
+            data = request.json or {}
+            req_path = (data.get("path") or "").strip()
+
+            try:
+                target = Path(req_path).expanduser() if req_path else Path(DOWNLOAD_DIR)
+                target = target.resolve()
+                if not target.is_dir():
+                    return jsonify({"error": "Not a directory"}), 400
+
+                entries = []
+                with os.scandir(target) as it:
+                    for de in it:
+                        try:
+                            is_dir = de.is_dir(follow_symlinks=True)
+                        except OSError:
+                            is_dir = False
+                        entries.append({
+                            "name": de.name,
+                            "path": str(target / de.name),
+                            "is_dir": is_dir,
+                        })
+                entries.sort(key=lambda e: (not e["is_dir"], e["name"].lower()))
+                parent = str(target.parent)
+                return jsonify({
+                    "path": str(target),
+                    "parent": None if target.parent == target else parent,
+                    "entries": entries,
+                })
+            except PermissionError:
+                return jsonify({"error": "Permission denied"}), 403
+            except FileNotFoundError:
+                return jsonify({"error": "Path not found"}), 404
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
+
         @self.app.route("/api/settings/vps/folders", methods=["GET"])
         @token_required
         def get_vps_folders():
@@ -1312,14 +1354,15 @@ class WebApp:
         @self.app.route("/api/vps/download", methods=["POST"])
         @token_required
         def download_vps_file():
-            """Start downloading a single VPS file. Body: {path, size?}."""
+            """Start downloading a single VPS file/folder. Body: {path, size?, label_id?}."""
             if not self.vps_downloader:
                 return jsonify({"error": "VPS downloader not available"}), 503
             data = request.json or {}
             path = (data.get("path") or "").strip()
             if not path:
                 return jsonify({"error": "path is required"}), 400
-            result = self.vps_downloader.start_download(path, int(data.get("size") or 0))
+            result = self.vps_downloader.start_download(
+                path, int(data.get("size") or 0), label_id=data.get("label_id"))
             if result.get("error"):
                 return jsonify(result), 400
             return jsonify(result)
@@ -1368,12 +1411,10 @@ class WebApp:
                 DOWNLOAD_DIR / "Videos" / file_name,
             ]
 
-            # Also check if there's a custom folder mapping
-            downloaded_from = download.get("downloaded_from")
-            if downloaded_from:
-                mapping = db.get_download_type_map(downloaded_from)
-                if mapping and mapping.get("folder"):
-                    possible_paths.insert(0, Path(mapping["folder"]) / file_name)
+            # Also check the download's connected label folder
+            label = db.get_label(download.get("label_id"))
+            if label and label.get("folder"):
+                possible_paths.insert(0, Path(label["folder"]) / file_name)
 
             for file_path in possible_paths:
                 if file_path.exists():
@@ -1434,11 +1475,9 @@ class WebApp:
                 DOWNLOAD_DIR / "Videos" / file_name,
             ]
 
-            downloaded_from = download.get("downloaded_from")
-            if downloaded_from:
-                mapping = db.get_download_type_map(downloaded_from)
-                if mapping and mapping.get("folder"):
-                    possible_paths.insert(0, Path(mapping["folder"]) / file_name)
+            label = db.get_label(download.get("label_id"))
+            if label and label.get("folder"):
+                possible_paths.insert(0, Path(label["folder"]) / file_name)
 
             for path in possible_paths:
                 if path.exists():
@@ -1640,7 +1679,7 @@ class WebApp:
                 dl_id = dl['id']
                 thumb_dir = SCREENSHOTS_DIR / str(dl_id)
                 has_thumbs = thumb_dir.exists() and any(thumb_dir.glob('*.jpg'))
-                file_path = find_file(file_name, dl.get('downloaded_from'))
+                file_path = find_file(file_name, dl.get('downloaded_from'), dl.get('label_id'))
 
                 # File missing, thumbnails exist → delete orphans
                 if not file_path and has_thumbs:

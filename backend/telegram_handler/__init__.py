@@ -144,22 +144,11 @@ class TelegramDownloader:
 
         kind = get_media_folder(msg.file.mime_type)
 
-        # Check for custom folder mapping
-        folder = None
-        mapping = db.get_download_type_map('telegram')
-        if mapping and mapping.get('folder'):
-            from pathlib import Path as P
-            custom_folder = P(mapping['folder'])
-            try:
-                if custom_folder.exists() or custom_folder.parent.exists():
-                    custom_folder.mkdir(parents=True, exist_ok=True)
-                    folder = custom_folder
-            except (OSError, PermissionError):
-                pass
-
-        if folder is None:
-            folder = DOWNLOAD_DIR / kind
-            folder.mkdir(exist_ok=True)
+        # Route to the default label for the 'telegram' source, else DOWNLOAD_DIR/<kind>
+        from backend.utils import resolve_label, label_folder
+        label = resolve_label('telegram')
+        folder = label_folder(label, DOWNLOAD_DIR / kind)
+        folder.mkdir(parents=True, exist_ok=True)
 
         path = folder / filename
 
@@ -345,22 +334,12 @@ class TelegramDownloader:
 
         db = get_db()
 
-        # Check for custom folder mapping for "telegram" source
-        folder = None
-        mapping = db.get_download_type_map('telegram')
-        if mapping and mapping.get('folder'):
-            from pathlib import Path
-            custom_folder = Path(mapping['folder'])
-            try:
-                if custom_folder.exists() or custom_folder.parent.exists():
-                    custom_folder.mkdir(parents=True, exist_ok=True)
-                    folder = custom_folder
-            except (OSError, PermissionError) as e:
-                logging.error(f"Custom folder not accessible: {e}, falling back to default")
-
-        if folder is None:
-            folder = DOWNLOAD_DIR / kind
-            folder.mkdir(exist_ok=True)
+        # Route to the default label for the 'telegram' source, else DOWNLOAD_DIR/<kind>
+        from backend.utils import resolve_label, label_folder
+        label = resolve_label('telegram')
+        label_id = label['id'] if label else None
+        folder = label_folder(label, DOWNLOAD_DIR / kind)
+        folder.mkdir(parents=True, exist_ok=True)
 
         filename = event.file.name or f"{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         path = folder / filename
@@ -389,7 +368,8 @@ class TelegramDownloader:
             total_bytes=0,
             pending_time=None,
             message_id=event.id,
-            author=author
+            author=author,
+            label_id=label_id,
         )
 
         # Emit new download event

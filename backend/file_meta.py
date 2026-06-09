@@ -108,18 +108,18 @@ def extract_meta(probe_data: dict) -> dict:
     return meta
 
 
-def find_file(file_name: str, downloaded_from: str) -> Path | None:
-    """Find the physical file on disk, checking common locations and custom mappings."""
+def find_file(file_name: str, downloaded_from: str = None, label_id: int = None) -> Path | None:
+    """Find the physical file on disk, checking common locations and the
+    download's connected label folder."""
     db = get_db()
     possible_paths = [
         DOWNLOAD_DIR / file_name,
         DOWNLOAD_DIR / "Videos" / file_name,
     ]
 
-    if downloaded_from:
-        mapping = db.get_download_type_map(downloaded_from)
-        if mapping and mapping.get("folder"):
-            possible_paths.insert(0, Path(mapping["folder"]) / file_name)
+    label = db.get_label(label_id)
+    if label and label.get("folder"):
+        possible_paths.insert(0, Path(label["folder"]) / file_name)
 
     for p in possible_paths:
         if p.exists():
@@ -149,7 +149,7 @@ async def extract_and_store_meta(message_id) -> bool:
     if not filename or not is_video_file(filename):
         return False
 
-    file_path = find_file(filename, download.get('downloaded_from'))
+    file_path = find_file(filename, download.get('downloaded_from'), download.get('label_id'))
     if not file_path:
         return False
 
@@ -321,6 +321,6 @@ async def poll_and_extract_meta(message_id):
         return
 
     filename = download.get('file')
-    file_path = find_file(filename, download.get('downloaded_from'))
+    file_path = find_file(filename, download.get('downloaded_from'), download.get('label_id'))
     if file_path:
         await generate_thumbnails(download.get('id'), str(file_path), duration)

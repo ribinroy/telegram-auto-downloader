@@ -14,10 +14,12 @@ import {
   Loader2,
   ExternalLink,
   User,
-  Image
+  Image,
+  Tag,
+  FolderOpen
 } from 'lucide-react';
 import ReactTimeAgo from 'react-time-ago';
-import type { Download } from '../types';
+import type { Download, Label } from '../types';
 import { formatBytes, formatTime, formatSpeed } from '../utils/format';
 import { ConfirmDialog } from './ConfirmDialog';
 import { VideoPlayerModal } from './VideoPlayerModal';
@@ -26,6 +28,7 @@ import { checkVideoFile, getVideoStreamUrl, getThumbUrl } from '../api';
 
 interface DownloadItemProps {
   download: Download;
+  label?: Label;  // The label this download is connected to (for display)
   onRetry: (id: number) => void;
   onStop: (message_id: string) => void;
   onPause: (message_id: string) => void;
@@ -207,7 +210,7 @@ function parseAuthor(author: string | null): { displayName: string; tooltip: str
   return { displayName: author, tooltip: author };
 }
 
-export function DownloadItem({ download, onRetry, onStop, onPause, onResume, onDelete }: DownloadItemProps) {
+export function DownloadItem({ download, label, onRetry, onStop, onPause, onResume, onDelete }: DownloadItemProps) {
   const [confirmAction, setConfirmAction] = useState<'stop' | 'delete' | null>(null);
   const [videoPlayerOpen, setVideoPlayerOpen] = useState(false);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
@@ -222,6 +225,8 @@ export function DownloadItem({ download, onRetry, onStop, onPause, onResume, onD
   const itemRef = useRef<HTMLDivElement>(null);
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
   const progressPercent = download.progress || 0;
+  // Whether the in-progress byte/percent bar is shown (drives where the label chip goes)
+  const showProgressBar = (download.status === 'downloading' || download.status === 'paused' || download.status === 'stopped') && progressPercent > 0;
 
   const isTelegram = download.downloaded_from === 'telegram';
 
@@ -359,6 +364,22 @@ export function DownloadItem({ download, onRetry, onStop, onPause, onResume, onD
     }
   };
 
+  // Label name + destination folder chip, reused wherever the size/bytes are shown
+  const labelChip = label ? (
+    <span className="flex items-center gap-1.5 min-w-0 max-w-full">
+      <span className="flex items-center gap-1 text-xs text-cyan-300 bg-cyan-500/10 border border-cyan-500/20 rounded px-1.5 py-0.5 shrink-0">
+        <Tag className="w-3 h-3" />
+        {label.name}
+      </span>
+      {label.folder && (
+        <span className="flex items-center gap-1 text-xs min-w-0" title={label.folder}>
+          <FolderOpen className="w-3 h-3 shrink-0" />
+          <span className="truncate">{label.folder}</span>
+        </span>
+      )}
+    </span>
+  ) : null;
+
   return (
     <div
       ref={itemRef}
@@ -492,11 +513,14 @@ export function DownloadItem({ download, onRetry, onStop, onPause, onResume, onD
 
             {/* Desktop: progress bar and info shown here */}
             <div className="hidden sm:block">
-              {(download.status === 'downloading' || download.status === 'paused' || download.status === 'stopped') && progressPercent > 0 && (
+              {showProgressBar && (
                 <div className="mb-2">
-                  <div className="flex justify-between text-sm text-slate-400 mb-1">
-                    <span>{formatBytes(download.downloaded_bytes)} / {formatBytes(download.total_bytes)}</span>
-                    <span>{progressPercent.toFixed(1)}%</span>
+                  <div className="flex justify-between items-center gap-3 text-sm text-slate-400 mb-1">
+                    <span className="flex items-center gap-3 min-w-0">
+                      <span className="shrink-0">{formatBytes(download.downloaded_bytes)} / {formatBytes(download.total_bytes)}</span>
+                      {labelChip}
+                    </span>
+                    <span className="shrink-0">{progressPercent.toFixed(1)}%</span>
                   </div>
                   <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
                     <div
@@ -507,7 +531,7 @@ export function DownloadItem({ download, onRetry, onStop, onPause, onResume, onD
                 </div>
               )}
 
-              <div className="flex flex-wrap gap-4 text-sm text-slate-400">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-slate-400">
                 {download.status === 'downloading' && (
                   <>
                     <span>Speed: {formatSpeed(download.speed)}</span>
@@ -517,6 +541,8 @@ export function DownloadItem({ download, onRetry, onStop, onPause, onResume, onD
                 {download.status === 'done' && (
                   <span>Size: {formatBytes(download.total_bytes)}</span>
                 )}
+                {/* Label chip lives in the progress header while a bar is shown */}
+                {!showProgressBar && labelChip}
                 {download.error && (
                   <div className="group relative">
                     <span className="text-red-400 truncate">
@@ -534,12 +560,13 @@ export function DownloadItem({ download, onRetry, onStop, onPause, onResume, onD
 
         {/* Mobile: Progress bar */}
         <div className="sm:hidden">
-          {(download.status === 'downloading' || download.status === 'paused' || download.status === 'stopped') && progressPercent > 0 && (
+          {showProgressBar && (
             <div className="mb-2">
               <div className="flex justify-between text-xs text-slate-400 mb-1">
                 <span>{formatBytes(download.downloaded_bytes)} / {formatBytes(download.total_bytes)}</span>
                 <span>{formatSpeed(download.speed)}</span>
               </div>
+              {labelChip && <div className="mb-1">{labelChip}</div>}
               <div className="h-1.5 bg-slate-700 rounded-full overflow-hidden">
                 <div
                   className={`h-full transition-all duration-300 ${download.status === 'stopped' ? 'bg-yellow-500' : download.status === 'paused' ? 'bg-amber-400' : 'progress-shimmer'}`}
@@ -548,9 +575,10 @@ export function DownloadItem({ download, onRetry, onStop, onPause, onResume, onD
               </div>
             </div>
           )}
-          {download.status === 'done' && (
-            <div className="text-xs text-slate-400 mb-2">
-              Size: {formatBytes(download.total_bytes)}
+          {!showProgressBar && (download.status === 'done' || label) && (
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-400 mb-2">
+              {download.status === 'done' && <span>Size: {formatBytes(download.total_bytes)}</span>}
+              {labelChip}
             </div>
           )}
           {download.error && (
