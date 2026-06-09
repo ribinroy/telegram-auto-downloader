@@ -1,9 +1,18 @@
 import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { X, Link, Loader2, AlertCircle, CheckCircle, Download, Folder } from 'lucide-react';
-import { checkUrl, downloadUrl, fetchMappings } from '../api';
+import { X, Link, Loader2, AlertCircle, CheckCircle, Download, Folder, Magnet, Send } from 'lucide-react';
+import { checkUrl, downloadUrl, fetchMappings, addTorrent, fetchTorrentConfig, fetchVpsFolders, type VpsWatchFolder } from '../api';
 import type { UrlCheckResult, VideoFormat, SourceMapping } from '../types';
 import { formatBytes } from '../utils/format';
+
+const isMagnetLink = (s: string) => s.trim().toLowerCase().startsWith('magnet:');
+
+// Display name from the magnet's dn= param, if present
+function magnetName(magnet: string): string | null {
+  const m = magnet.match(/[?&]dn=([^&]+)/i);
+  if (!m) return null;
+  try { return decodeURIComponent(m[1].replace(/\+/g, ' ')); } catch { return m[1]; }
+}
 
 // Extract domain/source from URL (e.g., youtube.com -> youtube)
 function getSourceFromUrl(url: string): string {
@@ -43,8 +52,50 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
   const [error, setError] = useState<string | null>(null);
   const [customFilename, setCustomFilename] = useState('');
   const [sourceMapping, setSourceMapping] = useState<SourceMapping | null>(null);
+  // Magnet -> VPS torrent client (Transmission) state
+  const [magnetMode, setMagnetMode] = useState(false);
+  const [torrentConfigured, setTorrentConfigured] = useState(false);
+  const [vpsFolders, setVpsFolders] = useState<VpsWatchFolder[]>([]);
+  const [torrentDest, setTorrentDest] = useState('');
+  const [sendingMagnet, setSendingMagnet] = useState(false);
+  const [magnetResult, setMagnetResult] = useState<{ status?: 'added' | 'duplicate'; name?: string } | null>(null);
   const hasAutoChecked = useRef(false);
   const filenameInputRef = useRef<HTMLInputElement>(null);
+
+  const enterMagnetMode = async (magnet: string) => {
+    setUrl(magnet);
+    setMagnetMode(true);
+    setError(null);
+    setCheckResult(null);
+    setSelectedFormat(null);
+    setMagnetResult(null);
+    try {
+      const [cfg, folders] = await Promise.all([fetchTorrentConfig(), fetchVpsFolders()]);
+      setTorrentConfigured(cfg.configured);
+      setVpsFolders(folders.filter(f => f.active));
+      if (!cfg.configured) {
+        setError('Torrent client is not configured — add it under Settings → VPS Connection');
+      }
+    } catch {
+      setTorrentConfigured(false);
+      setError('Failed to load torrent client settings');
+    }
+  };
+
+  const handleSendMagnet = async () => {
+    if (!isMagnetLink(url) || !torrentConfigured || sendingMagnet) return;
+    setSendingMagnet(true);
+    setError(null);
+    try {
+      const res = await addTorrent(url.trim(), torrentDest || null);
+      if (res.error) setError(res.error);
+      else setMagnetResult(res);
+    } catch {
+      setError('Failed to send the magnet link');
+    } finally {
+      setSendingMagnet(false);
+    }
+  };
 
   const doCheck = async (urlToCheck: string) => {
     if (!urlToCheck.trim()) return;
@@ -115,6 +166,10 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
     if (isOpen && initialUrl && !hasAutoChecked.current) {
       hasAutoChecked.current = true;
 
+      if (isMagnetLink(initialUrl)) {
+        enterMagnetMode(initialUrl.trim());
+        return;
+      }
       const normalized = normalizeUrl(initialUrl);
       if (normalized) {
         setUrl(normalized);
@@ -166,10 +221,18 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
     setCustomFilename('');
     setDownloading(false);
     setSourceMapping(null);
+    setMagnetMode(false);
+    setTorrentDest('');
+    setSendingMagnet(false);
+    setMagnetResult(null);
     onClose();
   };
 
   const handleCheckClick = () => {
+    if (isMagnetLink(url)) {
+      enterMagnetMode(url.trim());
+      return;
+    }
     const normalized = normalizeUrl(url);
     if (normalized) {
       setUrl(normalized);
@@ -180,10 +243,12 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !checking && !downloading) {
-      if (checkResult?.supported) {
+    if (e.key === 'Enter' && !checking && !downloading && !sendingMagnet) {
+      if (magnetMode && !magnetResult) {
+        handleSendMagnet();
+      } else if (checkResult?.supported) {
         handleDownload();
-      } else {
+      } else if (!magnetMode) {
         handleCheckClick();
       }
     }
@@ -218,7 +283,7 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
           {/* URL Input */}
           <div>
             <label className="block text-xs sm:text-sm text-slate-400 mb-1.5 sm:mb-2">
-              Video URL (YouTube, Twitter, etc.)
+              Video URL (YouTube, Twitter, etc.) or magnet link
             </label>
             <input
               type="url"
@@ -228,6 +293,8 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
                 setCheckResult(null);
                 setSelectedFormat(null);
                 setError(null);
+                setMagnetMode(false);
+                setMagnetResult(null);
               }}
               onKeyDown={handleKeyDown}
               placeholder="https://youtube.com/watch?v=..."
@@ -241,6 +308,49 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
             <div className="flex items-start gap-2 p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
               <AlertCircle className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
               <p className="text-sm text-red-400">{error}</p>
+            </div>
+          )}
+
+          {/* Magnet link -> VPS torrent client */}
+          {magnetMode && (
+            <div className="p-2.5 sm:p-3 bg-purple-500/10 border border-purple-500/30 rounded-lg space-y-2 sm:space-y-3">
+              <div className="flex items-center gap-2">
+                <Magnet className="w-4 h-4 sm:w-5 sm:h-5 text-purple-400" />
+                <span className="text-xs sm:text-sm text-purple-300 font-medium">
+                  Magnet link — sends to the VPS torrent client
+                </span>
+              </div>
+              {magnetName(url) && (
+                <p className="text-xs sm:text-sm text-white font-medium break-all">{magnetName(url)}</p>
+              )}
+              {magnetResult ? (
+                <div className="flex items-center gap-2 p-2 bg-green-500/10 border border-green-500/30 rounded-lg">
+                  <CheckCircle className="w-4 h-4 text-green-400 shrink-0" />
+                  <span className="text-xs sm:text-sm text-green-400">
+                    {magnetResult.status === 'duplicate' ? 'Already in the torrent client' : 'Sent to the torrent client'}
+                    {magnetResult.name ? `: ${magnetResult.name}` : ''}
+                  </span>
+                </div>
+              ) : (
+                <div>
+                  <p className="text-xs sm:text-sm text-slate-400 mb-1.5">Download to (on the VPS):</p>
+                  <select
+                    value={torrentDest}
+                    onChange={(e) => setTorrentDest(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-600 rounded-lg py-1.5 px-2.5 text-xs sm:text-sm text-white focus:outline-none focus:border-purple-500 transition-colors"
+                  >
+                    <option value="">Client default folder</option>
+                    {vpsFolders.map(f => (
+                      <option key={f.id} value={f.path}>{f.path}{f.auto_sync ? ' (autoSync)' : ''}</option>
+                    ))}
+                  </select>
+                  {torrentDest && vpsFolders.find(f => f.path === torrentDest)?.auto_sync && (
+                    <p className="text-[11px] text-slate-500 mt-1">
+                      autoSync will pull finished files to the home server on its hourly check.
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -333,7 +443,35 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
           >
             Cancel
           </button>
-          {checkResult?.supported ? (
+          {magnetMode ? (
+            magnetResult ? (
+              <button
+                onClick={handleClose}
+                className="flex-1 py-2 sm:py-2.5 px-3 sm:px-4 bg-green-600 hover:bg-green-500 text-white text-sm sm:text-base rounded-lg transition-colors flex items-center justify-center gap-2"
+              >
+                <CheckCircle className="w-4 h-4" />
+                Done
+              </button>
+            ) : (
+              <button
+                onClick={handleSendMagnet}
+                disabled={sendingMagnet || !torrentConfigured}
+                className="flex-1 py-2 sm:py-2.5 px-3 sm:px-4 bg-purple-600 hover:bg-purple-500 disabled:bg-purple-900 disabled:cursor-not-allowed text-white text-sm sm:text-base rounded-lg transition-colors flex items-center justify-center gap-2"
+              >
+                {sendingMagnet ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span className="hidden sm:inline">Sending...</span>
+                  </>
+                ) : (
+                  <>
+                    <Send className="w-4 h-4" />
+                    <span>Send to torrent client</span>
+                  </>
+                )}
+              </button>
+            )
+          ) : checkResult?.supported ? (
             <button
               onClick={handleDownload}
               disabled={downloading}

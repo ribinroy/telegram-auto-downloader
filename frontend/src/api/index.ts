@@ -337,6 +337,65 @@ export async function deleteVpsConfig(): Promise<{ status?: string; configured?:
   return response.json();
 }
 
+// Torrent client (Transmission on the VPS) API
+export interface TorrentConfig {
+  configured: boolean;
+  url: string;
+  username: string;
+  has_password: boolean;
+}
+
+export async function fetchTorrentConfig(): Promise<TorrentConfig> {
+  const response = await fetch(`${API_BASE}/api/settings/torrent`, { headers: getAuthHeaders() });
+  if (response.status === 401) { clearToken(); window.location.reload(); }
+  return response.json();
+}
+
+export async function saveTorrentConfig(
+  config: { url: string; username: string; password?: string }
+): Promise<{ status?: string; configured?: boolean; url?: string; has_password?: boolean; error?: string }> {
+  const response = await fetch(`${API_BASE}/api/settings/torrent`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify(config),
+  });
+  if (response.status === 401) { clearToken(); window.location.reload(); }
+  return response.json();
+}
+
+export async function deleteTorrentConfig(): Promise<{ status?: string; error?: string }> {
+  const response = await fetch(`${API_BASE}/api/settings/torrent`, {
+    method: 'DELETE',
+    headers: getAuthHeaders(),
+  });
+  if (response.status === 401) { clearToken(); window.location.reload(); }
+  return response.json();
+}
+
+export async function testTorrentConnection(
+  config: { url: string; username: string; password?: string }
+): Promise<{ success: boolean; message?: string; error?: string }> {
+  const response = await fetch(`${API_BASE}/api/settings/torrent/test`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify(config),
+  });
+  if (response.status === 401) { clearToken(); window.location.reload(); }
+  return response.json();
+}
+
+export async function addTorrent(
+  magnet: string, downloadDir?: string | null
+): Promise<{ status?: 'added' | 'duplicate'; name?: string; hash?: string; error?: string }> {
+  const response = await fetch(`${API_BASE}/api/torrent/add`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ magnet, download_dir: downloadDir ?? null }),
+  });
+  if (response.status === 401) { clearToken(); window.location.reload(); }
+  return response.json();
+}
+
 export interface VpsBrowseEntry {
   name: string;
   path: string;

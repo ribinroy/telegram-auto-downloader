@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
-import { Loader2, AlertCircle, CheckCircle, Check, Plug, FolderPlus, Folder, FolderOpen, Eye, EyeOff, Trash2, Unplug, Server } from 'lucide-react';
+import { Loader2, AlertCircle, CheckCircle, Check, Plug, FolderPlus, Folder, FolderOpen, Eye, EyeOff, Trash2, Unplug, Server, Magnet } from 'lucide-react';
 import {
   fetchVpsConfig, saveVpsConfig, testVpsConnection, deleteVpsConfig,
   fetchVpsFolders, addVpsFolders, deleteVpsFolder, updateVpsFolder, browseLocal,
-  type VpsConfig, type VpsWatchFolder,
+  fetchTorrentConfig, saveTorrentConfig, deleteTorrentConfig, testTorrentConnection,
+  type VpsConfig, type VpsWatchFolder, type TorrentConfig,
 } from '../api';
 import { FolderBrowser } from './FolderBrowser';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -32,10 +33,87 @@ export function VpsSettings({ onChange }: { onChange?: () => void }) {
   // Watched folder currently picking a local destination folder
   const [destTarget, setDestTarget] = useState<VpsWatchFolder | null>(null);
 
+  // Torrent client (Transmission) config
+  const [torrentConfig, setTorrentConfig] = useState<TorrentConfig | null>(null);
+  const [tUrl, setTUrl] = useState('');
+  const [tUsername, setTUsername] = useState('');
+  const [tPassword, setTPassword] = useState('');
+  const [tSaving, setTSaving] = useState(false);
+  const [tTesting, setTTesting] = useState(false);
+  const [tRemoving, setTRemoving] = useState(false);
+  const [tError, setTError] = useState<string | null>(null);
+  const [tSuccess, setTSuccess] = useState<string | null>(null);
+  const [tTestResult, setTTestResult] = useState<{ success: boolean; message?: string; error?: string } | null>(null);
+
   useEffect(() => {
     loadConfig();
     loadFolders();
+    loadTorrentConfig();
   }, []);
+
+  const loadTorrentConfig = async () => {
+    try {
+      const cfg = await fetchTorrentConfig();
+      setTorrentConfig(cfg);
+      setTUrl(cfg.url || '');
+      setTUsername(cfg.username || '');
+      setTPassword('');
+    } catch { /* section stays unconfigured */ }
+  };
+
+  const torrentInput = () => ({
+    url: tUrl.trim(),
+    username: tUsername.trim(),
+    ...(tPassword ? { password: tPassword } : {}),
+  });
+
+  const handleTorrentTest = async () => {
+    setTTesting(true);
+    setTError(null);
+    setTTestResult(null);
+    try {
+      setTTestResult(await testTorrentConnection(torrentInput()));
+    } catch {
+      setTTestResult({ success: false, error: 'Failed to run connection test' });
+    } finally {
+      setTTesting(false);
+    }
+  };
+
+  const handleTorrentSave = async () => {
+    setTSaving(true);
+    setTError(null);
+    setTSuccess(null);
+    try {
+      const result = await saveTorrentConfig(torrentInput());
+      if (result.error) {
+        setTError(result.error);
+      } else {
+        setTSuccess('Torrent client saved');
+        await loadTorrentConfig();
+        setTimeout(() => setTSuccess(null), 3000);
+      }
+    } catch {
+      setTError('Failed to save torrent client');
+    } finally {
+      setTSaving(false);
+    }
+  };
+
+  const handleTorrentRemove = async () => {
+    setTRemoving(true);
+    setTError(null);
+    setTTestResult(null);
+    try {
+      await deleteTorrentConfig();
+      setTPassword('');
+      await loadTorrentConfig();
+    } catch {
+      setTError('Failed to remove torrent client');
+    } finally {
+      setTRemoving(false);
+    }
+  };
 
   const loadConfig = async () => {
     setLoading(true);
@@ -342,6 +420,121 @@ export function VpsSettings({ onChange }: { onChange?: () => void }) {
           )}
         </form>
       )}
+
+      {/* Torrent client (Transmission) */}
+      <div className="mt-6 pt-5 border-t border-slate-700/60">
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+              <Magnet className="w-4 h-4 text-purple-400" /> Torrent Client (Transmission)
+            </h3>
+            <p className="text-xs text-slate-400">
+              Paste a magnet link on the downloads page to send it to the VPS torrent client.
+            </p>
+          </div>
+          {torrentConfig?.configured && (
+            <span className="flex items-center gap-1.5 text-xs bg-green-500/15 text-green-400 border border-green-500/30 rounded-full px-2.5 py-1 shrink-0">
+              <span className="w-1.5 h-1.5 rounded-full bg-green-400" />
+              Configured
+            </span>
+          )}
+        </div>
+
+        {tSuccess && (
+          <div className="flex items-center gap-2 bg-green-500/20 border border-green-500/50 rounded-lg p-3 mb-3 text-green-400 text-sm">
+            <CheckCircle className="w-4 h-4 shrink-0" />
+            <span>{tSuccess}</span>
+          </div>
+        )}
+        {tError && (
+          <div className="flex items-center gap-2 bg-red-500/20 border border-red-500/50 rounded-lg p-3 mb-3 text-red-400 text-sm">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span>{tError}</span>
+          </div>
+        )}
+
+        <div className="space-y-3">
+          <div>
+            <label className="block text-sm text-slate-400 mb-1">Web/RPC URL</label>
+            <input
+              type="text"
+              value={tUrl}
+              onChange={(e) => setTUrl(e.target.value)}
+              placeholder="e.g., https://your-box.seedhost.eu/user/transmission/web/"
+              className="w-full bg-slate-700/50 border border-slate-600 rounded-lg py-2 px-3 text-white placeholder-slate-400 focus:outline-none focus:border-purple-500 transition-colors"
+            />
+            <p className="text-xs text-slate-500 mt-1">
+              The Transmission web UI URL works — it is normalized to the RPC endpoint on save.
+            </p>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm text-slate-400 mb-1">Username</label>
+              <input
+                type="text"
+                value={tUsername}
+                onChange={(e) => setTUsername(e.target.value)}
+                autoComplete="off"
+                className="w-full bg-slate-700/50 border border-slate-600 rounded-lg py-2 px-3 text-white placeholder-slate-400 focus:outline-none focus:border-purple-500 transition-colors"
+              />
+            </div>
+            <div>
+              <label className="block text-sm text-slate-400 mb-1">Password</label>
+              <input
+                type="password"
+                value={tPassword}
+                onChange={(e) => setTPassword(e.target.value)}
+                placeholder={torrentConfig?.has_password ? '•••••••• (leave blank to keep saved password)' : 'Web UI password'}
+                autoComplete="new-password"
+                className="w-full bg-slate-700/50 border border-slate-600 rounded-lg py-2 px-3 text-white placeholder-slate-400 focus:outline-none focus:border-purple-500 transition-colors"
+              />
+            </div>
+          </div>
+
+          {tTestResult && (
+            <div className={`flex items-center gap-2 border rounded-lg p-3 text-sm ${
+              tTestResult.success
+                ? 'bg-green-500/20 border-green-500/50 text-green-400'
+                : 'bg-red-500/20 border-red-500/50 text-red-400'
+            }`}>
+              {tTestResult.success ? <CheckCircle className="w-4 h-4 shrink-0" /> : <AlertCircle className="w-4 h-4 shrink-0" />}
+              <span>{tTestResult.success ? tTestResult.message : tTestResult.error}</span>
+            </div>
+          )}
+
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={handleTorrentTest}
+              disabled={tTesting || tSaving || !tUrl.trim()}
+              className="flex-1 bg-slate-600 hover:bg-slate-500 text-white font-medium py-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+            >
+              {tTesting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plug className="w-4 h-4" />}
+              Test
+            </button>
+            <button
+              type="button"
+              onClick={handleTorrentSave}
+              disabled={tSaving || tTesting || !tUrl.trim()}
+              className="flex-1 bg-purple-600 hover:bg-purple-500 text-white font-medium py-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+            >
+              {tSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+              Save
+            </button>
+            {torrentConfig?.configured && (
+              <button
+                type="button"
+                onClick={handleTorrentRemove}
+                disabled={tRemoving}
+                title="Remove the saved torrent client"
+                className="px-3 bg-red-500/10 hover:bg-red-500/20 border border-red-500/40 text-red-400 font-medium py-2 rounded-lg transition-colors disabled:opacity-50 flex items-center justify-center"
+              >
+                {tRemoving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Unplug className="w-4 h-4" />}
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
 
       {/* Watched folders */}
       <div className="mt-6 pt-5 border-t border-slate-700/60">

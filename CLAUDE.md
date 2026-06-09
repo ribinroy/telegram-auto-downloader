@@ -18,6 +18,7 @@ Frontend (React/TypeScript/Vite)  <-->  Backend (Python/Flask)  <-->  PostgreSQL
 Main Thread
   |- Flask thread (daemon) ........... REST API + WebSocket (SocketIO, threading mode)
   |- Event loop thread (daemon) ..... asyncio loop for yt-dlp subprocesses
+  |- VPS threads (daemon) ........... one thread per SFTP transfer + hourly autoSync loop
   '- Telegram thread (blocking) ..... Telethon client.start() - blocks main thread
 ```
 
@@ -63,7 +64,8 @@ Main Thread
 |  |- web_app/__init__.py           # Flask routes, WebSocket, JWT auth (~1258 lines)
 |  |- telegram_handler/__init__.py  # Telethon download handler (~436 lines)
 |  |- ytdlp_handler/__init__.py     # yt-dlp subprocess handler (~604 lines)
-|  |- utils/__init__.py             # Helpers (formatBytes, MIME types)
+|  |- vps_handler/__init__.py       # SFTP download handler + hourly autoSync
+|  |- utils/__init__.py             # Helpers (resolve_spec, encryption, MIME types)
 |  |- file_meta.py                  # Video metadata extraction (ffprobe)
 |  |- browser_downloader.py         # Playwright fallback for yt-dlp
 |  '- metrics/__init__.py           # Prometheus counters
@@ -73,17 +75,25 @@ Main Thread
 |  |- vite.config.ts
 |  '- src/
 |     |- main.tsx                   # React entry
-|     |- App.tsx                    # Main app, state, routing
+|     |- App.tsx                    # Main app, routing
+|     |- routes.ts                  # Route constants
 |     |- api/
 |     |  |- index.ts               # REST API client functions
 |     |  '- socket.ts              # WebSocket connection & event handlers
 |     |- types/index.ts            # TypeScript interfaces
 |     |- utils/format.ts           # Formatting helpers
+|     |- pages/
+|     |  |- DownloadsPage.tsx       # Main download list
+|     |  |- VpsPage.tsx             # VPS file browser (watched folders)
+|     |  |- SettingsPage.tsx        # Settings tabs (password/sources/cookies/vps/jobs)
+|     |  '- AnalyticsPage.tsx       # Charts & analytics
 |     '- components/
+|        |- Layout.tsx              # Header, shared downloads state, secured toggle
 |        |- DownloadItem.tsx        # Download list item (progress, thumbnails, actions)
-|        |- AddUrlModal.tsx         # URL download dialog (format selection)
-|        |- SettingsDialog.tsx      # Settings (mappings, cookies, yt-dlp management)
-|        |- AnalyticsPage.tsx       # Charts & analytics
+|        |- AddUrlModal.tsx         # URL download dialog (formats + magnet handoff)
+|        |- SourcesSettings.tsx     # Per-source specs (folder/quality/hidden)
+|        |- VpsSettings.tsx         # SSH connection, torrent client, watched folders
+|        |- FolderBrowser.tsx       # Reusable remote/local folder picker
 |        |- LoginPage.tsx           # JWT auth login
 |        |- StatsHeader.tsx         # Stats bar
 |        |- VideoPlayerModal.tsx    # Video playback
@@ -107,15 +117,21 @@ Main Thread
 - `deleted_at` (soft delete), `file_deleted` (physical file removed)
 - `created_at`, `updated_at`
 
-**`settings`** - Key-value store (cookies, etc.)
+**`settings`** - Key-value store (VPS connection, torrent client config, etc.; secrets Fernet-encrypted)
 - `id` (PK), `key` (unique), `value` (text), `updated_at`
 
-**`download_type_maps`** - Per-source folder & quality mappings
-- `id` (PK), `downloaded_from` (unique), `is_secured`, `folder`, `quality`
+**`download_type_maps`** - Per-source download specs
+- `id` (PK), `downloaded_from` (unique), `is_secured` (hide from default view), `folder`, `quality`
+
+**`vps_watch_folders`** - Watched VPS folders
+- `id` (PK), `path` (remote), `host`/`port`/`username` (owning connection)
+- `auto_sync` (hourly auto-download of new files), `folder` (local destination), `is_secured`
 
 **`users`** - Authentication
 - `id` (PK), `username` (unique), `password_hash` (SHA-256)
 - Default credentials: admin/admin (created on first run)
+
+Note: legacy `labels`/`source_labels` tables and `downloads.label_id` may still exist in older DBs but are unused (the labels feature was reverted; see `_migrate_labels_to_specs()`).
 
 ### Migrations
 - Handled in `DatabaseManager._run_migrations()` using ALTER TABLE statements
@@ -129,7 +145,7 @@ Main Thread
 - `POST /api/auth/password` - Change password
 
 ### Downloads
-- `GET /api/downloads` - List (search, filter, sort, paginate)
+- `GET /api/downloads` - List (search, filter, sort, paginate, `include_hidden`); each item is annotated with computed `hidden` + `dest_folder`
 - `GET /api/stats` - Aggregate statistics
 - `GET /api/authors` - Distinct author list
 - `GET /api/analytics` - Time-series & breakdown analytics
@@ -143,9 +159,22 @@ Main Thread
 - `POST /api/url/download` - Start download with format selection
 - `POST /api/jobs/ytdlp-version` / `POST /api/jobs/ytdlp-upgrade`
 
-### Download Type Mappings
-- CRUD at `/api/mappings` and `/api/mappings/<id>`
-- `/api/mappings/secured` and `/api/mappings/secured-ids`
+### Per-Source Specs (Mappings)
+- CRUD at `/api/mappings` and `/api/mappings/<id>` (folder, quality, is_secured per source)
+
+### VPS (SSH/SFTP)
+- `GET/POST/DELETE /api/settings/vps` - Connection config (password encrypted at rest)
+- `POST /api/settings/vps/test` - Test SSH connection
+- `POST /api/settings/vps/browse` / `POST /api/settings/local/browse` - Remote/local folder listing
+- `GET/POST /api/settings/vps/folders`, `PATCH/DELETE /api/settings/vps/folders/<id>` - Watched folders (PATCH: `auto_sync`, `folder`, `is_secured`)
+- `GET /api/vps/files` - Live listing of watched folders
+- `POST /api/vps/download` - Download a file/directory to the home server
+- `POST /api/vps/delete-remote` - Delete on the VPS
+
+### Torrent Client (Transmission on the VPS)
+- `GET/POST/DELETE /api/settings/torrent` - Config (URL normalized to the RPC endpoint, password encrypted)
+- `POST /api/settings/torrent/test` - session-get connectivity check
+- `POST /api/torrent/add` - Send a magnet link (`{magnet, download_dir?}`); RPC helper `transmission_rpc()` handles the 409 session-id handshake
 
 ### Video Streaming
 - `GET /api/video/stream/<id>` - Range-request video streaming
@@ -202,6 +231,21 @@ All config via `.env` file at project root (loaded by python-dotenv):
 3. Backend spawns `asyncio.create_subprocess_exec("yt-dlp", ...)`
 4. Parses stdout for progress regex, emits WebSocket updates
 5. Tracks in `download_tasks` dict (key: message_id, value: asyncio.Task)
+
+### VPS Downloads (SFTP)
+1. VPS page lists watched folders live over SFTP (`/api/vps/files`)
+2. `POST /api/vps/download` -> `vps_handler.start_download()` runs the transfer in a daemon thread (paramiko is sync), resuming partial files
+3. Destination resolved via `resolve_spec('vps', path=remote_path)`: watched folder's `folder` -> 'vps' source mapping -> `DOWNLOAD_DIR/VPS`
+4. autoSync: hourly scan of `auto_sync` folders on the active connection, downloads files that appear after the baseline snapshot
+
+### Magnet Links (Transmission)
+1. AddUrlModal detects `magnet:` input -> `POST /api/torrent/add`
+2. Backend calls the Transmission RPC API (`transmission_rpc()` in web_app) with optional `download-dir` (e.g. a watched folder, so autoSync fetches the result)
+3. No local download record is created — the torrent lives on the VPS
+
+### Spec Resolution (folder/quality/hidden)
+- `backend/utils.resolve_spec(source, path=None)` reads `download_type_maps` (+ longest-prefix `vps_watch_folders` match for VPS paths)
+- `hidden` is computed at query time in `WebApp._annotate_downloads()` — never stamped on downloads, so spec changes apply retroactively
 
 ## Key Patterns
 
