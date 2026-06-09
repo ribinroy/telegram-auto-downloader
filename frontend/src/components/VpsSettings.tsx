@@ -405,19 +405,18 @@ export function VpsSettings({ onChange }: { onChange?: () => void }) {
               {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
               Done
             </button>
+            {config?.configured && (
+              <button
+                type="button"
+                onClick={() => setConfirmRemove(true)}
+                disabled={removing || saving || testing}
+                title="Remove the saved VPS connection"
+                className="px-3 bg-red-500/10 hover:bg-red-500/20 border border-red-500/40 text-red-400 font-medium py-2 rounded-lg transition-colors disabled:opacity-50 flex items-center justify-center"
+              >
+                {removing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Unplug className="w-4 h-4" />}
+              </button>
+            )}
           </div>
-
-          {config?.configured && (
-            <button
-              type="button"
-              onClick={() => setConfirmRemove(true)}
-              disabled={removing || saving || testing}
-              className="w-full bg-red-500/10 hover:bg-red-500/20 border border-red-500/40 text-red-400 font-medium py-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-            >
-              {removing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Unplug className="w-4 h-4" />}
-              Remove connection
-            </button>
-          )}
         </form>
       )}
 
