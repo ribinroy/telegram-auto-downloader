@@ -243,16 +243,16 @@ export function VpsPage() {
           <h1 className="text-lg sm:text-xl font-semibold text-white">VPS Files</h1>
         </div>
         <div className="flex items-center gap-2">
-          {/* Download-to label selector */}
+          {/* Optional label override — by default each watched folder's own label is used */}
           {labels.length > 0 && (
             <select
               value={selectedLabelId ?? ''}
               onChange={(e) => setSelectedLabelId(e.target.value ? Number(e.target.value) : null)}
-              className="bg-slate-800/50 border border-slate-700 rounded-lg py-2 px-2 sm:px-3 text-xs sm:text-sm text-white focus:outline-none focus:border-cyan-500 transition-colors max-w-[150px]"
-              title="Download new files to this label's folder"
+              className="bg-slate-800/50 border border-slate-700 rounded-lg py-2 px-2 sm:px-3 text-xs sm:text-sm text-white focus:outline-none focus:border-cyan-500 transition-colors max-w-[170px]"
+              title="Optional override: send downloads to this label's folder instead of each watched folder's own label"
             >
-              <option value="">Default label</option>
-              {labels.map(l => <option key={l.id} value={l.id}>↳ {l.name}</option>)}
+              <option value="">Use folder's label</option>
+              {labels.map(l => <option key={l.id} value={l.id}>Override → {l.name}</option>)}
             </select>
           )}
           {/* Folder filter */}
