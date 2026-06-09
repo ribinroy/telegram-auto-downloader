@@ -103,8 +103,10 @@ class VpsDownloader:
         message_id = generate_uuid()
         filename = posixpath.basename(remote_path.rstrip("/")) or remote_path
 
-        # Resolve the connected label (override → 'vps' source default → none)
-        label = resolve_label('vps', label_id)
+        # Resolve the connected label: explicit override → per-folder binding for
+        # this remote path (source_labels row for the watched folder) → 'vps'
+        # source-wide default → none.
+        label = resolve_label('vps', label_id, path=remote_path)
         resolved_label_id = label['id'] if label else None
 
         new_download = db.add_download(

@@ -3,8 +3,10 @@ import { Loader2, AlertCircle, CheckCircle, Check, Plug, FolderPlus, Folder, Tra
 import {
   fetchVpsConfig, saveVpsConfig, testVpsConnection, deleteVpsConfig,
   fetchVpsFolders, addVpsFolders, deleteVpsFolder, setVpsFolderAutoSync,
+  fetchLabels, fetchSourceLabels, setSourceLabel,
   type VpsConfig, type VpsWatchFolder,
 } from '../api';
+import type { Label, SourceLabel } from '../types';
 import { FolderBrowser } from './FolderBrowser';
 import { ConfirmDialog } from './ConfirmDialog';
 
@@ -30,10 +32,37 @@ export function VpsSettings() {
   const [foldersError, setFoldersError] = useState<string | null>(null);
   const [browserOpen, setBrowserOpen] = useState(false);
 
+  // Labels (for per-folder label binding via path-scoped source labels)
+  const [labels, setLabels] = useState<Label[]>([]);
+  const [sourceLabels, setSourceLabels] = useState<SourceLabel[]>([]);
+
   useEffect(() => {
     loadConfig();
     loadFolders();
+    loadLabels();
   }, []);
+
+  const loadLabels = async () => {
+    try {
+      const [ls, sls] = await Promise.all([fetchLabels(), fetchSourceLabels()]);
+      setLabels(ls);
+      setSourceLabels(sls);
+    } catch { /* labels are optional UI; ignore */ }
+  };
+
+  // The label bound to this watched folder (source_labels row: source='vps', path=folder)
+  const folderLabelId = (path: string): number | '' =>
+    sourceLabels.find(s => s.source === 'vps' && s.path === path)?.label_id ?? '';
+
+  const handleSetFolderLabel = async (path: string, labelId: number | null) => {
+    setFoldersError(null);
+    try {
+      await setSourceLabel('vps', labelId, path);
+      setSourceLabels(await fetchSourceLabels());
+    } catch {
+      setFoldersError('Failed to set folder label');
+    }
+  };
 
   const loadConfig = async () => {
     setLoading(true);
@@ -379,6 +408,17 @@ export function VpsSettings() {
                       </span>
                     )}
                   </div>
+                  {/* Per-folder label — downloads from this folder use it (overrides the vps default) */}
+                  <select
+                    value={folderLabelId(f.path)}
+                    onChange={(e) => handleSetFolderLabel(f.path, e.target.value ? Number(e.target.value) : null)}
+                    disabled={inactive}
+                    title="Label for downloads from this folder"
+                    className="bg-slate-800/60 border border-slate-700 rounded-lg py-1 px-2 text-xs text-white focus:outline-none focus:border-cyan-500 shrink-0 max-w-[8rem] disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <option value="">vps default</option>
+                    {labels.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                  </select>
                   {/* autoSync toggle - only for folders on the current connection */}
                   <button
                     onClick={() => handleToggleAutoSync(f)}

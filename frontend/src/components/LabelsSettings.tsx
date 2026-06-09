@@ -137,8 +137,9 @@ export function LabelsSettings({ onChange }: { onChange?: () => void }) {
     } catch { setError('Failed to set source default'); }
   };
 
-  // Sources that don't yet have a default and aren't a known suggestion
-  const usedSources = new Set(sourceLabels.map(s => s.source));
+  // Only source-wide defaults here (path-scoped overrides, e.g. per-VPS-folder, are managed in VPS settings)
+  const defaultSourceLabels = sourceLabels.filter(s => !s.path);
+  const usedSources = new Set(defaultSourceLabels.map(s => s.source));
   const availableSources = KNOWN_SOURCES.filter(s => !usedSources.has(s));
 
   return (
@@ -270,7 +271,7 @@ export function LabelsSettings({ onChange }: { onChange?: () => void }) {
         <h3 className="text-sm font-semibold text-white">Default label per source</h3>
         <p className="text-xs text-slate-400 mb-3">New downloads from a source use this label unless overridden.</p>
         <div className="space-y-2">
-          {sourceLabels.map(sl => (
+          {defaultSourceLabels.map(sl => (
             <div key={sl.source} className="flex items-center gap-2 bg-slate-700/30 rounded-lg p-2.5">
               <span className="text-sm text-slate-200 w-24 shrink-0 capitalize">{sl.source}</span>
               <select

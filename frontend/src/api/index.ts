@@ -260,11 +260,11 @@ export async function fetchSourceLabels(): Promise<SourceLabel[]> {
   return response.json();
 }
 
-export async function setSourceLabel(source: string, label_id: number | null): Promise<SourceLabel | { source: string; label_id: null }> {
+export async function setSourceLabel(source: string, label_id: number | null, path?: string | null): Promise<SourceLabel | { source: string; label_id: null }> {
   const response = await fetch(`${API_BASE}/api/source-labels`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-    body: JSON.stringify({ source, label_id }),
+    body: JSON.stringify({ source, label_id, path: path ?? null }),
   });
   if (response.status === 401) { clearToken(); window.location.reload(); }
   return response.json();

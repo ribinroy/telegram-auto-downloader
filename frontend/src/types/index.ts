@@ -94,6 +94,8 @@ export interface Label {
 export interface SourceLabel {
   id?: number;
   source: string;
+  /** null = source-wide default; set = per-path override (e.g. a VPS folder). */
+  path?: string | null;
   label_id: number | null;
 }
 

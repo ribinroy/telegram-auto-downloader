@@ -783,12 +783,17 @@ class WebApp:
         @self.app.route("/api/source-labels", methods=["POST"])
         @token_required
         def set_source_label():
-            """Set/clear a source's default label. Body: {source, label_id|null}."""
+            """Set/clear a source's label. Body: {source, label_id|null, path?}.
+
+            With `path` set, binds a per-path override (e.g. a VPS watched folder);
+            without it, sets the source-wide default.
+            """
             data = request.json or {}
             source = (data.get("source") or "").strip()
             if not source:
                 return jsonify({"error": "source is required"}), 400
-            result = get_db().set_source_label(source, data.get("label_id"))
+            result = get_db().set_source_label(
+                source, data.get("label_id"), (data.get("path") or "").strip() or None)
             return jsonify(result)
 
         # Analytics API

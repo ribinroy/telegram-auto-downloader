@@ -40,16 +40,17 @@ def decrypt_secret(token: str) -> str:
         return ''
 
 
-def resolve_label(source, override_label_id=None):
+def resolve_label(source, override_label_id=None, path=None):
     """Resolve the label dict for a download: an explicit override wins,
-    otherwise the source's default label, otherwise None."""
+    otherwise a per-path source binding (longest matching prefix of `path`),
+    otherwise the source-wide default, otherwise None."""
     from backend.database import get_db
     db = get_db()
     if override_label_id:
         label = db.get_label(override_label_id)
         if label:
             return label
-    return db.get_default_label_for_source(source)
+    return db.get_label_for_source(source, path)
 
 
 def label_folder(label, default: Path) -> Path:

@@ -5,7 +5,7 @@ import json
 import hashlib
 import uuid
 from datetime import datetime
-from sqlalchemy import create_engine, Column, Integer, BigInteger, String, Float, DateTime, Text, Boolean
+from sqlalchemy import create_engine, Column, Integer, BigInteger, String, Float, DateTime, Text, Boolean, UniqueConstraint
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, scoped_session
 
@@ -141,15 +141,22 @@ class Label(Base):
 
 
 class SourceLabel(Base):
-    """The default label for a download source (e.g. 'telegram', 'vps', 'youtube')."""
+    """A label binding for a download source (e.g. 'telegram', 'vps', 'youtube').
+
+    With path=NULL it is the source-wide default. With a path set it is a
+    per-path override (used for VPS: each watched folder can have its own label);
+    a download under that path uses this label instead of the source default.
+    """
     __tablename__ = 'source_labels'
+    __table_args__ = (UniqueConstraint('source', 'path', name='uq_source_labels_source_path'),)
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    source = Column(String(100), unique=True, nullable=False)
+    source = Column(String(100), nullable=False)
+    path = Column(String(1024), nullable=True)
     label_id = Column(Integer, nullable=False)
 
     def to_dict(self):
-        return {'id': self.id, 'source': self.source, 'label_id': self.label_id}
+        return {'id': self.id, 'source': self.source, 'path': self.path, 'label_id': self.label_id}
 
 
 class User(Base):
@@ -286,6 +293,20 @@ class DatabaseManager:
             if 'label_id' not in columns:
                 conn.execute(text('ALTER TABLE downloads ADD COLUMN label_id INTEGER'))
                 conn.commit()
+
+            # source_labels: add per-path overrides (e.g. per-VPS-folder labels).
+            # Add the `path` column and drop the legacy unique-on-source constraint
+            # so a source can have a default row (path NULL) plus per-path rows.
+            if inspector.has_table('source_labels'):
+                sl_columns = [c['name'] for c in inspector.get_columns('source_labels')]
+                if 'path' not in sl_columns:
+                    conn.execute(text('ALTER TABLE source_labels ADD COLUMN path VARCHAR(1024)'))
+                    conn.commit()
+                try:
+                    conn.execute(text('ALTER TABLE source_labels DROP CONSTRAINT IF EXISTS source_labels_source_key'))
+                    conn.commit()
+                except Exception:
+                    pass
 
             # Ensure labels.is_system exists (for DBs created before this column)
             if inspector.has_table('labels'):
@@ -830,37 +851,61 @@ class DatabaseManager:
         finally:
             self.close_session()
 
-    def set_source_label(self, source: str, label_id):
-        """Set (or clear, if label_id is None) the default label for a source."""
+    def set_source_label(self, source: str, label_id, path: str = None):
+        """Set (or clear, if label_id is None) the label for a source. With
+        `path` set, binds a per-path override (e.g. a specific VPS folder);
+        with path None, sets the source-wide default."""
+        path = path or None
         session = self.get_session()
         try:
-            existing = session.query(SourceLabel).filter_by(source=source).first()
+            existing = session.query(SourceLabel).filter_by(source=source, path=path).first()
             if label_id is None:
                 if existing:
                     session.delete(existing)
                     session.commit()
-                return {'source': source, 'label_id': None}
+                return {'source': source, 'path': path, 'label_id': None}
             if existing:
                 existing.label_id = label_id
             else:
-                existing = SourceLabel(source=source, label_id=label_id)
+                existing = SourceLabel(source=source, path=path, label_id=label_id)
                 session.add(existing)
             session.commit()
             return existing.to_dict()
         finally:
             self.close_session()
 
-    def get_default_label_for_source(self, source: str):
-        """Resolve the default label dict for a source, or None."""
+    def get_label_for_source(self, source: str, path: str = None):
+        """Resolve the label dict for a source, optionally for a specific path.
+
+        A per-path row whose path is a prefix of `path` wins (longest match);
+        otherwise the source-wide default (path IS NULL). Returns None if neither.
+        """
         session = self.get_session()
         try:
-            sl = session.query(SourceLabel).filter_by(source=source).first()
-            if not sl:
+            rows = session.query(SourceLabel).filter_by(source=source).all()
+            chosen = None
+            if path:
+                best_len = -1
+                for r in rows:
+                    if not r.path:
+                        continue
+                    base = r.path.rstrip('/')
+                    if path == r.path or path == base or path.startswith(base + '/'):
+                        if len(base) > best_len:
+                            best_len = len(base)
+                            chosen = r
+            if chosen is None:
+                chosen = next((r for r in rows if not r.path), None)
+            if not chosen:
                 return None
-            label = session.query(Label).filter_by(id=sl.label_id).first()
+            label = session.query(Label).filter_by(id=chosen.label_id).first()
             return label.to_dict() if label else None
         finally:
             self.close_session()
+
+    def get_default_label_for_source(self, source: str):
+        """Resolve the source-wide default label dict for a source, or None."""
+        return self.get_label_for_source(source, None)
 
     # --- VPS watch folders ---
     def get_vps_watch_folders(self):
