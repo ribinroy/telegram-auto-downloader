@@ -114,12 +114,16 @@ class DownloadTypeMap(Base):
 
 
 class User(Base):
-    """User model for authentication"""
+    """User model: web login accounts and Telegram users who interacted
+    with the bot (the latter have no password)."""
     __tablename__ = 'users'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     username = Column(String(100), unique=True, nullable=False)
-    password_hash = Column(String(64), nullable=False)  # SHA-256 hash
+    password_hash = Column(String(64), nullable=True)  # SHA-256 hash; null for Telegram-only users
+    role = Column(String(20), default='user')  # 'admin' or 'user'
+    telegram_id = Column(BigInteger, nullable=True)  # set for Telegram users
+    display_name = Column(String(200), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     def to_dict(self):
@@ -127,6 +131,10 @@ class User(Base):
         return {
             'id': self.id,
             'username': self.username,
+            'role': self.role or 'user',
+            'telegram_id': str(self.telegram_id) if self.telegram_id is not None else None,
+            'display_name': self.display_name,
+            'is_web': bool(self.password_hash),
             'created_at': f"{self.created_at.isoformat()}Z" if self.created_at else None
         }
 
@@ -138,6 +146,27 @@ class User(Base):
     def check_password(self, password: str) -> bool:
         """Check if provided password matches"""
         return self.password_hash == self.hash_password(password)
+
+
+class BotQuery(Base):
+    """A bot chat command: tagging the bot with `key` runs `command` (shell)
+    and replies with its output. Admin-only."""
+    __tablename__ = 'bot_queries'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    key = Column(String(64), unique=True, nullable=False)
+    command = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'key': self.key,
+            'command': self.command,
+            'created_at': f"{self.created_at.isoformat()}Z" if self.created_at else None,
+            'updated_at': f"{self.updated_at.isoformat()}Z" if self.updated_at else None,
+        }
 
 
 class VpsWatchFolder(Base):
@@ -217,6 +246,22 @@ class DatabaseManager:
                 conn.execute(text('ALTER TABLE downloads ADD COLUMN chat_id BIGINT'))
                 conn.commit()
 
+            # Users: roles + Telegram identity (bot interaction tracking)
+            if inspector.has_table('users'):
+                user_columns = [c['name'] for c in inspector.get_columns('users')]
+                if 'role' not in user_columns:
+                    conn.execute(text("ALTER TABLE users ADD COLUMN role VARCHAR(20) DEFAULT 'user'"))
+                    # Existing web-login users keep full access
+                    conn.execute(text("UPDATE users SET role='admin' WHERE password_hash IS NOT NULL"))
+                    conn.execute(text('ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL'))
+                    conn.commit()
+                if 'telegram_id' not in user_columns:
+                    conn.execute(text('ALTER TABLE users ADD COLUMN telegram_id BIGINT'))
+                    conn.commit()
+                if 'display_name' not in user_columns:
+                    conn.execute(text('ALTER TABLE users ADD COLUMN display_name VARCHAR(200)'))
+                    conn.commit()
+
             # Migrate is_deleted boolean to deleted_at timestamp
             if 'is_deleted' in columns and 'deleted_at' not in columns:
                 conn.execute(text('ALTER TABLE downloads ADD COLUMN deleted_at TIMESTAMP'))
@@ -257,6 +302,38 @@ class DatabaseManager:
         # One-time reverse migration: fold the retired labels system back into
         # per-source mappings and per-watchfolder specs.
         self._migrate_labels_to_specs()
+
+        # One-time migration: bot queries from the settings JSON blob into
+        # their own table.
+        self._migrate_bot_queries()
+
+    def _migrate_bot_queries(self):
+        """Move queries stored in the legacy 'bot_queries' settings key into
+        the bot_queries table. Idempotent: the setting is removed after."""
+        session = self.get_session()
+        try:
+            setting = session.query(Settings).filter_by(key='bot_queries').first()
+            if not setting:
+                return
+            try:
+                queries = json.loads(setting.value or '[]')
+            except Exception:
+                queries = []
+            existing = {q.key for q in session.query(BotQuery).all()}
+            for q in queries:
+                key = (q.get('key') or '').strip().lower()
+                if key and key not in existing:
+                    session.add(BotQuery(key=key, command=q.get('command') or ''))
+            session.delete(setting)
+            # Mark as seeded so defaults aren't re-added if all are deleted
+            if not session.query(Settings).filter_by(key='bot_queries_seeded').first():
+                session.add(Settings(key='bot_queries_seeded', value='1'))
+            session.commit()
+            print(f"Migrated {len(queries)} bot queries to the bot_queries table")
+        except Exception:
+            session.rollback()
+        finally:
+            self.close_session()
 
     def _migrate_labels_to_specs(self):
         """Copy label bindings back into download_type_maps (source-wide) and
@@ -611,11 +688,109 @@ class DatabaseManager:
             if user_count == 0:
                 user = User(
                     username='admin',
-                    password_hash=User.hash_password('admin')
+                    password_hash=User.hash_password('admin'),
+                    role='admin'
                 )
                 session.add(user)
                 session.commit()
                 print("Default user 'admin' created")
+        finally:
+            self.close_session()
+
+    def upsert_telegram_user(self, telegram_id: int, username: str = None, display_name: str = None):
+        """Register (or refresh) a Telegram user who interacted with the bot.
+        New users get the 'user' role; promote to admin in Settings -> Users."""
+        session = self.get_session()
+        try:
+            user = session.query(User).filter_by(telegram_id=telegram_id).first()
+            if user:
+                if display_name and user.display_name != display_name:
+                    user.display_name = display_name
+                if username and user.username != username:
+                    taken = session.query(User).filter(
+                        User.username == username, User.id != user.id).first()
+                    if not taken:
+                        user.username = username
+                session.commit()
+                return user.to_dict()
+            uname = username or f'tg_{telegram_id}'
+            if session.query(User).filter_by(username=uname).first():
+                uname = f'{uname}_{telegram_id}'
+            user = User(username=uname, password_hash=None, role='user',
+                        telegram_id=telegram_id, display_name=display_name)
+            session.add(user)
+            session.commit()
+            return user.to_dict()
+        finally:
+            self.close_session()
+
+    def get_users(self):
+        """All users (web + Telegram) for the management UI."""
+        session = self.get_session()
+        try:
+            return [u.to_dict() for u in session.query(User).order_by(User.id).all()]
+        finally:
+            self.close_session()
+
+    def update_user_role(self, user_id: int, role: str):
+        """Change a user's role. Returns the updated dict or None."""
+        session = self.get_session()
+        try:
+            user = session.query(User).filter_by(id=user_id).first()
+            if not user:
+                return None
+            user.role = role
+            session.commit()
+            return user.to_dict()
+        finally:
+            self.close_session()
+
+    # Bot query methods
+    def get_bot_queries(self):
+        """All bot queries ordered by key."""
+        session = self.get_session()
+        try:
+            return [q.to_dict() for q in session.query(BotQuery).order_by(BotQuery.key).all()]
+        finally:
+            self.close_session()
+
+    def upsert_bot_query(self, key: str, command: str, original_key: str = None):
+        """Create or update a query. original_key supports renames."""
+        session = self.get_session()
+        try:
+            key = key.strip().lower()
+            query = None
+            if original_key:
+                query = session.query(BotQuery).filter_by(key=original_key.strip().lower()).first()
+            if query is None:
+                query = session.query(BotQuery).filter_by(key=key).first()
+            if query:
+                # Renaming onto an existing other key would violate uniqueness
+                clash = session.query(BotQuery).filter(
+                    BotQuery.key == key, BotQuery.id != query.id).first()
+                if clash:
+                    session.delete(clash)
+                query.key = key
+                query.command = command
+                query.updated_at = datetime.utcnow()
+            else:
+                query = BotQuery(key=key, command=command)
+                session.add(query)
+            session.commit()
+            return query.to_dict()
+        finally:
+            self.close_session()
+
+    def delete_bot_query(self, key: str):
+        """Delete a query by key. Returns True if a row was removed."""
+        session = self.get_session()
+        try:
+            query = session.query(BotQuery).filter_by(key=key.strip().lower()).first()
+            if not query:
+                return False
+            session.delete(query)
+            session.commit()
+            return True
         finally:
             self.close_session()
 

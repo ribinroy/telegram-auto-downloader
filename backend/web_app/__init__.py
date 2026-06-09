@@ -1211,6 +1211,28 @@ class WebApp:
             except Exception as e:
                 return jsonify({"error": str(e)}), 400
 
+        # Users (web logins + Telegram users who interacted with the bot)
+        @self.app.route("/api/users", methods=["GET"])
+        @token_required
+        def list_users():
+            return jsonify({"users": get_db().get_users()})
+
+        @self.app.route("/api/users/<int:user_id>", methods=["PATCH"])
+        @token_required
+        def update_user(user_id):
+            """Change a user's role (admin/user). Web-login users stay admin."""
+            role = ((request.json or {}).get("role") or "").strip().lower()
+            if role not in ("admin", "user"):
+                return jsonify({"error": "Role must be 'admin' or 'user'"}), 400
+            db = get_db()
+            target = next((u for u in db.get_users() if u["id"] == user_id), None)
+            if not target:
+                return jsonify({"error": "User not found"}), 404
+            if target.get("is_web") and role != "admin":
+                return jsonify({"error": "Web login users are always admins"}), 400
+            updated = db.update_user_role(user_id, role)
+            return jsonify({"user": updated})
+
         # Bot queries (key -> shell snippet, triggered by tagging the bot)
         @self.app.route("/api/settings/queries", methods=["GET"])
         @token_required
@@ -1232,21 +1254,16 @@ class WebApp:
                 return jsonify({"error": "Key must be a single word (max 64 chars)"}), 400
             if key == 'help':
                 return jsonify({"error": "'help' is reserved for listing the available queries"}), 400
-            queries = [q for q in self.telegram_downloader.get_queries()
-                       if (q.get('key') or '').strip().lower() not in (key, original_key)]
-            queries.append({"key": key, "command": command})
-            queries.sort(key=lambda q: q['key'])
-            get_db().set_setting('bot_queries', json.dumps(queries))
-            return jsonify({"queries": queries})
+            db = get_db()
+            db.upsert_bot_query(key, command, original_key=original_key)
+            return jsonify({"queries": db.get_bot_queries()})
 
         @self.app.route("/api/settings/queries/<key>", methods=["DELETE"])
         @token_required
         def delete_bot_query(key):
-            key = key.strip().lower()
-            queries = [q for q in self.telegram_downloader.get_queries()
-                       if (q.get('key') or '').strip().lower() != key]
-            get_db().set_setting('bot_queries', json.dumps(queries))
-            return jsonify({"queries": queries})
+            db = get_db()
+            db.delete_bot_query(key)
+            return jsonify({"queries": db.get_bot_queries()})
 
         @self.app.route("/api/settings/queries/test", methods=["POST"])
         @token_required

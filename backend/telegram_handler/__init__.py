@@ -19,7 +19,6 @@ from backend.file_meta import poll_and_extract_meta, is_video_file
 
 CHANNELS_SETTING_KEY = 'telegram_channels'
 API_SETTING_KEY = 'telegram_api'
-QUERIES_SETTING_KEY = 'bot_queries'
 QUERY_TIMEOUT = 30  # seconds a query snippet may run
 
 # Seeded on first run so the Queries tab has working examples
@@ -759,18 +758,16 @@ class TelegramDownloader:
     # ------------------------------------------------------------------
 
     def get_queries(self):
-        """Load the configured queries, seeding a 'health' example once."""
+        """Load the configured queries from the bot_queries table, seeding
+        the default examples on first run."""
         db = get_db()
-        raw = db.get_setting(QUERIES_SETTING_KEY)
-        if raw is None:
-            db.set_setting(QUERIES_SETTING_KEY, json.dumps(DEFAULT_QUERIES))
-            return [dict(q) for q in DEFAULT_QUERIES]
-        try:
-            queries = json.loads(raw)
-            return queries if isinstance(queries, list) else []
-        except Exception as e:
-            logging.error(f"Failed to parse {QUERIES_SETTING_KEY}: {e}")
-            return []
+        queries = db.get_bot_queries()
+        if not queries and not db.get_setting('bot_queries_seeded'):
+            for q in DEFAULT_QUERIES:
+                db.upsert_bot_query(q['key'], q['command'])
+            db.set_setting('bot_queries_seeded', '1')
+            queries = db.get_bot_queries()
+        return queries
 
     @staticmethod
     def _query_env(extra_env=None):
@@ -821,11 +818,31 @@ class TelegramDownloader:
         return cls._format_query_output((out or b'').decode(errors='replace'), '', proc.returncode)
 
     async def _handle_mention(self, event):
-        """Run a configured query when a message tagging the account (or a DM)
-        matches a query key. 'help' lists the available keys."""
+        """Register whoever tags the account (or DMs it) in the users table,
+        and run a configured query if the message matches a key — admins only.
+        'help' lists the available keys."""
         try:
             if not (event.mentioned or event.is_private):
                 return
+
+            # Anyone who interacts with the bot is recorded in the users
+            # table (role 'user' by default; promote in Settings -> Users)
+            role = None
+            sender = None
+            try:
+                sender = await event.get_sender()
+            except Exception as e:
+                logging.error(f"Could not resolve message sender: {e}")
+            if sender and not getattr(sender, 'bot', False):
+                name = ' '.join(filter(None, [getattr(sender, 'first_name', None),
+                                              getattr(sender, 'last_name', None)]))
+                user_rec = get_db().upsert_telegram_user(
+                    sender.id,
+                    username=getattr(sender, 'username', None),
+                    display_name=name or None,
+                )
+                role = (user_rec or {}).get('role')
+
             text = event.raw_text or ''
             # Strip the @username tag so "@DownLeeBot health" becomes "health"
             me = await self.client.get_me()
@@ -839,26 +856,32 @@ class TelegramDownloader:
             queries = self.get_queries()
             query = next((q for q in queries
                           if (q.get('key') or '').strip().lower() == key), None)
+            if not query and key != 'help':
+                return
+
+            if role != 'admin':
+                await event.reply('⛔ Sorry, only admins can run queries.', parse_mode=None)
+                return
+
             if query:
                 # Expose the invoker and chat to the snippet as env vars
                 extra_env = {}
+                if sender:
+                    name = ' '.join(filter(None, [getattr(sender, 'first_name', None),
+                                                  getattr(sender, 'last_name', None)]))
+                    extra_env['SENDER_NAME'] = name or getattr(sender, 'username', None) or ''
+                    extra_env['SENDER_USERNAME'] = getattr(sender, 'username', None) or ''
+                    extra_env['SENDER_ID'] = str(getattr(sender, 'id', ''))
                 try:
-                    sender = await event.get_sender()
-                    if sender:
-                        name = ' '.join(filter(None, [getattr(sender, 'first_name', None),
-                                                      getattr(sender, 'last_name', None)]))
-                        extra_env['SENDER_NAME'] = name or getattr(sender, 'username', None) or ''
-                        extra_env['SENDER_USERNAME'] = getattr(sender, 'username', None) or ''
-                        extra_env['SENDER_ID'] = str(getattr(sender, 'id', ''))
                     chat = await event.get_chat()
                     extra_env['CHAT_TITLE'] = getattr(chat, 'title', None) or ''
-                except Exception as e:
-                    logging.error(f"Could not resolve query sender info: {e}")
+                except Exception:
+                    pass
                 reply = await self.run_query_command(query.get('command') or '', extra_env)
                 # Telegram message limit is 4096 chars; no markdown parsing so
                 # arbitrary command output can't break the reply
                 await event.reply(reply[:4000], parse_mode=None)
-            elif key == 'help':
+            else:  # help
                 keys = ', '.join(sorted((q.get('key') or '') for q in queries))
                 await event.reply(f'Available queries: {keys or "(none configured)"}', parse_mode=None)
         except Exception as e:

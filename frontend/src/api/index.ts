@@ -371,6 +371,39 @@ export function fetchTelegramDialogs(): Promise<{ dialogs?: TelegramDialog[]; er
   return telegramRequest('/dialogs');
 }
 
+// Users (web logins + Telegram users who interacted with the bot)
+export interface AppUser {
+  id: number;
+  username: string;
+  role: 'admin' | 'user';
+  telegram_id: string | null;
+  display_name: string | null;
+  is_web: boolean;
+  created_at: string | null;
+}
+
+export async function fetchUsers(): Promise<{ users: AppUser[] }> {
+  const response = await fetch(`${API_BASE}/api/users`, { headers: getAuthHeaders() });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  return response.json();
+}
+
+export async function updateUserRole(userId: number, role: 'admin' | 'user'): Promise<{ user?: AppUser; error?: string }> {
+  const response = await fetch(`${API_BASE}/api/users/${userId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ role }),
+  });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  return response.json();
+}
+
 // Bot queries (key -> shell snippet triggered from Telegram)
 export interface BotQuery {
   key: string;
