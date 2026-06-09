@@ -773,6 +773,13 @@ class TelegramDownloader:
     def _query_env(extra_env=None):
         env = dict(os.environ)
         env['DOWNLOAD_DIR'] = str(DOWNLOAD_DIR)
+        # The systemd unit pins PATH to the venv only — make sure snippets can
+        # still find standard tools (df, awk, lsblk, smartctl, ...)
+        parts = [p for p in env.get('PATH', '').split(':') if p]
+        for p in ('/usr/local/sbin', '/usr/local/bin', '/usr/sbin', '/usr/bin', '/sbin', '/bin'):
+            if p not in parts:
+                parts.append(p)
+        env['PATH'] = ':'.join(parts)
         if extra_env:
             env.update({k: str(v) for k, v in extra_env.items() if v is not None})
         return env
