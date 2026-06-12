@@ -27,6 +27,14 @@ logger = logging.getLogger(__name__)
 
 SYNC_INTERVAL_SECONDS = 3600  # check autoSync folders hourly
 
+# Bounded transfer window: paramiko's get()/prefetch()/readv() issue read
+# requests for the WHOLE file up front and buffer responses in memory ahead
+# of the consumer, which balloons to gigabytes on large files. Instead we
+# read in batches of pipelined requests and fully drain each batch, so at
+# most TRANSFER_BATCH * TRANSFER_CHUNK bytes (8 MiB) are in flight.
+TRANSFER_CHUNK = 1 << 17  # 128 KiB per request
+TRANSFER_BATCH = 64       # concurrent requests per batch
+
 
 class _Cancelled(Exception):
     """Raised inside the SFTP progress callback to abort a download."""
@@ -37,6 +45,7 @@ class VpsDownloader:
         self.download_tasks = download_tasks
         self.loop = loop
         self.threads = {}      # message_id -> threading.Thread
+        self.clients = {}      # message_id -> active transfer's SSHClient (for forced abort)
         self.cancelled = set()  # message_ids requested to stop
         # autoSync baseline: folder path -> set of filenames already accounted for
         self._seen = {}
@@ -188,6 +197,7 @@ class VpsDownloader:
             strip_prefix = posixpath.dirname(remote_path.rstrip("/"))
 
             client, sftp = self._open_sftp()
+            self.clients[message_id] = client
             st = sftp.stat(remote_path)
             is_dir = stat_module.S_ISDIR(st.st_mode)
 
@@ -256,17 +266,26 @@ class VpsDownloader:
             self.emit_status(message_id, 'stopped')
             metrics.record_download_stopped('vps')
         except Exception as e:
-            # Keep partial files so a retry can resume.
-            logger.error(f"[vps] Download error for {remote_path}: {e}")
-            db.update_download_by_message_id(message_id, status='failed', speed=0, error=str(e))
-            self.emit_status(message_id, 'failed', str(e))
-            metrics.record_download_failed('vps', 'exception')
+            if message_id in self.cancelled:
+                # stop_download() force-closed the connection mid-transfer;
+                # report it as a stop, not a failure.
+                logger.info(f"[vps] Download stopped (partial kept): {remote_path}")
+                db.update_download_by_message_id(message_id, status='stopped', speed=0)
+                self.emit_status(message_id, 'stopped')
+                metrics.record_download_stopped('vps')
+            else:
+                # Keep partial files so a retry can resume.
+                logger.error(f"[vps] Download error for {remote_path}: {e}")
+                db.update_download_by_message_id(message_id, status='failed', speed=0, error=str(e))
+                self.emit_status(message_id, 'failed', str(e))
+                metrics.record_download_failed('vps', 'exception')
         finally:
             if client:
                 try:
                     client.close()
                 except Exception:
                     pass
+            self.clients.pop(message_id, None)
             self.cancelled.discard(message_id)
             self.threads.pop(message_id, None)
             self.download_tasks.pop(message_id, None)
@@ -274,43 +293,34 @@ class VpsDownloader:
     def _transfer_file(self, sftp, remote, local: Path, rsize: int, bump):
         """Copy a remote file to local, resuming from the local file's size.
 
-        Uses paramiko's pipelined paths for speed: a fresh file uses the
-        optimized prefetched ``get()``; a resumed file uses concurrent ranged
-        reads (``readv``) over just the missing tail."""
+        Reads concurrent ranged requests in bounded batches (see
+        TRANSFER_CHUNK/TRANSFER_BATCH) so memory stays flat regardless of
+        file size, for both fresh and resumed downloads."""
         start_offset = 0
         if local.exists():
             ls = local.stat().st_size
             if rsize and ls >= rsize:
                 return  # already complete
             start_offset = ls
+        if not rsize:
+            rsize = sftp.stat(remote).st_size or 0
 
-        # Fast path: fresh download via paramiko's prefetched get()
-        if start_offset == 0:
-            sent = [0]
-
-            def cb(done, _total):
-                bump(done - sent[0])  # bump() raises _Cancelled if stopped
-                sent[0] = done
-
-            sftp.get(remote, str(local), callback=cb)
-            return
-
-        # Resume path: append the missing tail using concurrent ranged reads
         rf = sftp.open(remote, 'rb')
         try:
-            rf.set_pipelined(True)
-            with open(local, 'ab') as lf:
+            with open(local, 'ab' if start_offset else 'wb') as lf:
                 if rsize:
-                    chunk = 1 << 17  # 128 KiB requests, fetched concurrently by readv
-                    ranges = [(off, min(chunk, rsize - off)) for off in range(start_offset, rsize, chunk)]
-                    for data in rf.readv(ranges):
-                        lf.write(data)
-                        bump(len(data))
+                    offsets = range(start_offset, rsize, TRANSFER_CHUNK)
+                    for i in range(0, len(offsets), TRANSFER_BATCH):
+                        batch = [(off, min(TRANSFER_CHUNK, rsize - off))
+                                 for off in offsets[i:i + TRANSFER_BATCH]]
+                        for data in rf.readv(batch):
+                            lf.write(data)
+                            bump(len(data))  # raises _Cancelled if stopped
                 else:
-                    rf.prefetch()
+                    # Size unknown: plain sequential reads until EOF
                     rf.seek(start_offset)
                     while True:
-                        data = rf.read(1 << 17)
+                        data = rf.read(TRANSFER_CHUNK)
                         if not data:
                             break
                         lf.write(data)
@@ -318,9 +328,29 @@ class VpsDownloader:
         finally:
             rf.close()
 
-    def stop_download(self, message_id: str):
-        """Request cancellation of an in-flight VPS download (keeps partial)."""
+    def stop_download(self, message_id: str, timeout: float = 15.0) -> bool:
+        """Stop an in-flight VPS download and wait until the transfer thread
+        has actually exited (partial files are kept for resume).
+
+        The thread normally aborts at its next progress callback; if it is
+        stuck in a blocking SFTP call (stalled connection, long directory
+        walk), its SSH connection is force-closed to unblock it.
+        Returns True once the download is no longer running."""
+        thread = self.threads.get(message_id)
+        if not thread or not thread.is_alive():
+            self.cancelled.discard(message_id)
+            return True
         self.cancelled.add(message_id)
+        thread.join(2.0)
+        if thread.is_alive():
+            client = self.clients.get(message_id)
+            if client:
+                try:
+                    client.close()  # aborts blocking SFTP I/O in the transfer thread
+                except Exception:
+                    pass
+            thread.join(timeout)
+        return not thread.is_alive()
 
     # --- Remote delete ----------------------------------------------------
     def _rmtree(self, sftp, path):

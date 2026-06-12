@@ -663,7 +663,9 @@ class WebApp:
                 # VPS and yt-dlp both use UUIDs - distinguish by source
                 download = db.get_download_by_message_id(message_id)
                 if download and download.get("downloaded_from") == "vps" and self.vps_downloader:
-                    self.vps_downloader.stop_download(message_id)
+                    # Blocks until the transfer thread has actually exited
+                    if not self.vps_downloader.stop_download(message_id):
+                        return jsonify({"error": "Download did not stop in time"}), 500
                 elif self.ytdlp_downloader:
                     # yt-dlp download - stop via ytdlp_downloader
                     self.ytdlp_downloader.stop_download(message_id)
@@ -756,7 +758,10 @@ class WebApp:
                 # VPS and yt-dlp both use UUIDs - distinguish by source
                 download = db.get_download_by_message_id(message_id)
                 if download and download.get("downloaded_from") == "vps" and self.vps_downloader:
-                    self.vps_downloader.stop_download(message_id)
+                    # Wait for the transfer thread to fully exit so the partial
+                    # file can't be re-created after it is deleted below
+                    if not self.vps_downloader.stop_download(message_id):
+                        return jsonify({"error": "Download did not stop in time"}), 500
                 elif self.ytdlp_downloader:
                     # yt-dlp download - stop via ytdlp_downloader
                     self.ytdlp_downloader.stop_download(message_id)
@@ -1733,7 +1738,10 @@ class WebApp:
             """
             import stat as stat_module
             db = get_db()
+            include_hidden = request.args.get("include_hidden", "false").lower() == "true"
             watch_folders = annotate_vps_folders(db.get_vps_watch_folders())
+            if not include_hidden:
+                watch_folders = [wf for wf in watch_folders if not wf.get("is_secured")]
             # Map existing VPS downloads by remote path for live status
             existing = {}
             for d in db.get_all_downloads():

@@ -168,7 +168,7 @@ function VpsFileRow({
 }
 
 export function VpsPage() {
-  const { downloads, onStop, onRetry, vpsReady } = useLayoutContext();
+  const { downloads, onStop, onRetry, vpsReady, showSecured } = useLayoutContext();
   const navigate = useNavigate();
   const [groups, setGroups] = useState<VpsFolderGroup[]>([]);
   const [loading, setLoading] = useState(true);
@@ -180,13 +180,13 @@ export function VpsPage() {
     setLoading(true);
     setError(null);
     try {
-      setGroups(await fetchVpsFiles());
+      setGroups(await fetchVpsFiles(showSecured));
     } catch {
       setError('Failed to load VPS files');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [showSecured]);
 
   useEffect(() => { loadFiles(); }, [loadFiles]);
 
