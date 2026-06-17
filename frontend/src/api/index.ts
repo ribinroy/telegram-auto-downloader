@@ -587,6 +587,11 @@ export interface TorrentStatus {
   eta: number | null;
   download_dir: string;
   error: string | null;
+  peers_connected: number;
+  seeds_connected: number;
+  leeches_connected: number;
+  seeds_total: number | null;
+  leeches_total: number | null;
 }
 
 export async function fetchTorrentList(): Promise<{ configured: boolean; torrents?: TorrentStatus[]; error?: string }> {

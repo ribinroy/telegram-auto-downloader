@@ -173,14 +173,25 @@ class TorrentRoutesMixin:
                 "id", "name", "hashString", "status", "percentDone",
                 "rateDownload", "rateUpload", "totalSize", "eta",
                 "downloadDir", "errorString",
+                "peersConnected", "peersSendingToUs", "peersGettingFromUs",
+                "trackerStats",
             ]
             try:
                 result = transmission_rpc("torrent-get", {"fields": fields})
             except ValueError as e:
                 return jsonify({"configured": True, "error": str(e)}), 502
+
+            def tracker_max(stats, key):
+                """Best (max) tracker-reported count across trackers; trackers
+                that haven't reported yet use -1, which we ignore. None if
+                nothing has reported."""
+                vals = [s.get(key) for s in (stats or []) if isinstance(s.get(key), int) and s.get(key) >= 0]
+                return max(vals) if vals else None
+
             torrents = []
             for t in result.get("torrents", []):
                 eta = t.get("eta")
+                stats = t.get("trackerStats") or []
                 torrents.append({
                     "id": t.get("id"),
                     "name": t.get("name"),
@@ -193,6 +204,13 @@ class TorrentRoutesMixin:
                     "eta": eta if isinstance(eta, int) and eta >= 0 else None,
                     "download_dir": t.get("downloadDir"),
                     "error": t.get("errorString") or None,
+                    # Connected peers we're exchanging with
+                    "peers_connected": t.get("peersConnected") or 0,
+                    "seeds_connected": t.get("peersSendingToUs") or 0,
+                    "leeches_connected": t.get("peersGettingFromUs") or 0,
+                    # Swarm totals reported by trackers (may be null until reported)
+                    "seeds_total": tracker_max(stats, "seederCount"),
+                    "leeches_total": tracker_max(stats, "leecherCount"),
                 })
             return jsonify({"configured": True, "torrents": torrents})
 
