@@ -54,7 +54,7 @@ export function TorrentStatusPanel() {
 
   useEffect(() => {
     load();
-    const timer = setInterval(load, 4000);
+    const timer = setInterval(load, 20000);
     return () => clearInterval(timer);
   }, [load]);
 
