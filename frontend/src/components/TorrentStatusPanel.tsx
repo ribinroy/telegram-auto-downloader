@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Magnet, ArrowDown, ArrowUp, Play, Pause, Trash2, Loader2,
+  Magnet, ArrowDown, ArrowUp, Play, Pause, Trash2, Loader2, Search, X,
 } from 'lucide-react';
 import { fetchTorrentList, torrentAction, type TorrentStatus } from '../api';
 import { formatBytes, formatTime } from '../utils/format';
@@ -28,6 +28,7 @@ export function TorrentStatusPanel() {
   // IDs with an action in flight (buttons disabled), and the torrent pending removal.
   const [busy, setBusy] = useState<Set<number>>(new Set());
   const [removeTarget, setRemoveTarget] = useState<TorrentStatus | null>(null);
+  const [search, setSearch] = useState('');
   // Guard against overlapping polls when a request runs longer than the interval.
   const inFlight = useRef(false);
 
@@ -86,8 +87,32 @@ export function TorrentStatusPanel() {
     );
   }
 
+  const query = search.trim().toLowerCase();
+  const filtered = query ? torrents.filter(t => t.name.toLowerCase().includes(query)) : torrents;
+
   return (
     <div className="space-y-2">
+      {/* Search */}
+      <div className="relative mb-2">
+        <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search torrents..."
+          className="w-full bg-slate-800/50 border border-slate-700 rounded-lg py-2 pl-9 pr-9 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 transition-colors"
+        />
+        {search && (
+          <button
+            onClick={() => setSearch('')}
+            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white transition-colors"
+            title="Clear search"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        )}
+      </div>
+
       {error && (
         <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-2.5 text-red-400 text-sm">{error}</div>
       )}
@@ -102,7 +127,19 @@ export function TorrentStatusPanel() {
         </div>
       )}
 
-      {torrents.map(t => {
+      {!error && torrents.length > 0 && filtered.length === 0 && (
+        <div className="min-h-[30vh] flex items-center justify-center text-slate-400">
+          <div className="text-center">
+            <Search className="w-12 h-12 mx-auto mb-4 opacity-50" />
+            <p>No torrents match "{search.trim()}"</p>
+            <button onClick={() => setSearch('')} className="text-sm text-cyan-400 hover:text-cyan-300 mt-1">
+              Clear search
+            </button>
+          </div>
+        </div>
+      )}
+
+      {filtered.map(t => {
         const style = STATUS_STYLES[t.status] ?? STATUS_STYLES.unknown;
         const active = t.status === 'downloading';
         const paused = t.status === 'stopped';
@@ -159,9 +196,9 @@ export function TorrentStatusPanel() {
       <ConfirmDialog
         isOpen={removeTarget !== null}
         title="Remove torrent?"
-        message={`Remove "${removeTarget?.name}" from the torrent client. "Remove" keeps the downloaded files on the VPS; "Remove + delete data" also deletes them from the VPS (cannot be undone).`}
+        message={`Remove "${removeTarget?.name}" from the torrent client. "Remove" keeps the downloaded files on the VPS; "Remove with data" also deletes them from the VPS (cannot be undone).`}
         confirmText="Remove"
-        extraActionText="Remove + delete data"
+        extraActionText="Remove with data"
         variant="danger"
         onConfirm={() => { const t = removeTarget; setRemoveTarget(null); if (t) runAction('remove', t, false); }}
         onExtraAction={() => { const t = removeTarget; setRemoveTarget(null); if (t) runAction('remove', t, true); }}
