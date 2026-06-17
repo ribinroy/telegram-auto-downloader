@@ -718,8 +718,8 @@ export interface VpsFolderGroup {
   entries: VpsFileEntry[];
 }
 
-export async function fetchVpsFiles(): Promise<VpsFolderGroup[]> {
-  const response = await fetch(`${API_BASE}/api/vps/files`, {
+export async function fetchVpsFiles(includeHidden = false): Promise<VpsFolderGroup[]> {
+  const response = await fetch(`${API_BASE}/api/vps/files${includeHidden ? '?include_hidden=true' : ''}`, {
     headers: getAuthHeaders(),
   });
   if (response.status === 401) {
