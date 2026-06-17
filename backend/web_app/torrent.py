@@ -136,3 +136,16 @@ def transmission_rpc(method: str, arguments: dict = None, config: dict = None, t
         return body.get("arguments", {})
     raise ValueError("Transmission session negotiation failed")
 
+
+def transmission_get_torrent(torrent_hash, config=None):
+    """Fetch a single torrent's live fields by hash. Returns the raw torrent
+    dict (percentDone, rateDownload, eta, status, totalSize, errorString, name)
+    or None if Transmission no longer knows about it."""
+    res = transmission_rpc("torrent-get", {
+        "ids": [torrent_hash],
+        "fields": ["hashString", "name", "percentDone", "rateDownload",
+                   "eta", "status", "totalSize", "errorString"],
+    }, config=config)
+    torrents = res.get("torrents", [])
+    return torrents[0] if torrents else None
+

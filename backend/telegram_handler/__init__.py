@@ -817,17 +817,60 @@ class TelegramDownloader:
                 ))
                 torrent = result.get('torrent-added') or result.get('torrent-duplicate') or {}
                 name = torrent.get('name') or 'torrent'
+                torrent_hash = torrent.get('hashString')
                 duplicate = 'torrent-duplicate' in result
-                await event.reply(
-                    f"🧲 {'Already in torrent client' if duplicate else 'Downloading'}: {name}",
+                reply = await event.reply(
+                    f"🧲 Already in torrent client: {name}" if duplicate
+                    else f"`{name}` download progress: 0%",
                     parse_mode=None,
                 )
+                # Live-edit the reply with download progress until it completes.
+                if torrent_hash and reply:
+                    asyncio.create_task(self._track_torrent_progress(reply, torrent_hash, name))
             except Exception as e:
                 logging.error(f"Failed to add Telegram magnet: {e}")
                 try:
                     await event.reply(f"❌ Could not add magnet: {e}", parse_mode=None)
                 except Exception:
                     pass
+
+    async def _safe_edit(self, msg, text):
+        """Edit a Telegram message, ignoring not-modified/deleted/flood errors."""
+        try:
+            await msg.edit(text)
+        except Exception:
+            pass
+
+    async def _track_torrent_progress(self, reply_msg, torrent_hash, name, interval=15, max_polls=2880):
+        """Poll Transmission and edit the Telegram reply with live progress until
+        the torrent completes, errors, or is removed. max_polls caps runtime so a
+        stalled torrent can't leak the task (default ~12h at a 15s interval)."""
+        from functools import partial
+        from backend.web_app import transmission_get_torrent
+        loop = asyncio.get_event_loop()
+        last_text = None
+        for _ in range(max_polls):
+            await asyncio.sleep(interval)
+            try:
+                t = await loop.run_in_executor(None, partial(transmission_get_torrent, torrent_hash))
+            except Exception as e:
+                logging.error(f"Torrent progress poll failed for {name}: {e}")
+                continue
+            if t is None:
+                await self._safe_edit(reply_msg, f"🧲 {name}: removed from torrent client")
+                return
+            if t.get('errorString'):
+                await self._safe_edit(reply_msg, f"❌ {name}: {t['errorString']}")
+                return
+            pct = round((t.get('percentDone') or 0) * 100, 1)
+            if pct >= 100:
+                await self._safe_edit(reply_msg, f"✅ Downloaded: {name}")
+                return
+            text = f"`{name}` download progress: {round(pct)}%"
+            if text != last_text:
+                last_text = text
+                await self._safe_edit(reply_msg, text)
+        await self._safe_edit(reply_msg, f"⬇️ {name}: still downloading — check the dashboard")
 
     # ------------------------------------------------------------------
     # Chat queries (key -> shell snippet, managed in Settings -> Queries)
