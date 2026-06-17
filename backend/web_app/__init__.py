@@ -1651,6 +1651,35 @@ class WebApp:
                 })
             return jsonify({"configured": True, "torrents": torrents})
 
+        @self.app.route("/api/torrent/action", methods=["POST"])
+        @token_required
+        def torrent_action():
+            """Control a torrent on the VPS Transmission.
+            Body: {action: start|stop|remove, ids: [int], delete_data?: bool}.
+            'stop' covers pause; 'remove' deletes the torrent (and its data on
+            the VPS when delete_data is true)."""
+            data = request.json or {}
+            action = (data.get("action") or "").strip()
+            ids = data.get("ids")
+            if not isinstance(ids, list) or not ids:
+                return jsonify({"error": "ids must be a non-empty list"}), 400
+            method_map = {
+                "start": "torrent-start",
+                "stop": "torrent-stop",
+                "remove": "torrent-remove",
+            }
+            method = method_map.get(action)
+            if not method:
+                return jsonify({"error": f"Unknown action: {action}"}), 400
+            args = {"ids": ids}
+            if action == "remove" and data.get("delete_data"):
+                args["delete-local-data"] = True
+            try:
+                transmission_rpc(method, args)
+            except ValueError as e:
+                return jsonify({"error": str(e)}), 502
+            return jsonify({"status": "ok", "action": action, "ids": ids})
+
         @self.app.route("/api/settings/vps/browse", methods=["POST"])
         @token_required
         def browse_vps():

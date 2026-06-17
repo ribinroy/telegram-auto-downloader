@@ -595,6 +595,18 @@ export async function fetchTorrentList(): Promise<{ configured: boolean; torrent
   return response.json();
 }
 
+export async function torrentAction(
+  action: 'start' | 'stop' | 'remove', ids: number[], deleteData = false
+): Promise<{ status?: string; error?: string }> {
+  const response = await fetch(`${API_BASE}/api/torrent/action`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ action, ids, delete_data: deleteData }),
+  });
+  if (response.status === 401) { clearToken(); window.location.reload(); }
+  return response.json();
+}
+
 export async function addTorrent(
   magnet: string, downloadDir?: string | null
 ): Promise<{ status?: 'added' | 'duplicate'; name?: string; hash?: string; error?: string }> {

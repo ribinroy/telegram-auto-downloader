@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Magnet, RefreshCw, ChevronDown, ChevronRight, ArrowDown, ArrowUp } from 'lucide-react';
-import { fetchTorrentList, type TorrentStatus } from '../api';
+import {
+  Magnet, RefreshCw, ChevronDown, ChevronRight, ArrowDown, ArrowUp,
+  Play, Pause, Trash2, Loader2,
+} from 'lucide-react';
+import { fetchTorrentList, torrentAction, type TorrentStatus } from '../api';
 import { formatBytes, formatTime } from '../utils/format';
+import { ConfirmDialog } from './ConfirmDialog';
 
 const STATUS_STYLES: Record<TorrentStatus['status'], { label: string; cls: string }> = {
   downloading: { label: 'Downloading', cls: 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30' },
@@ -20,6 +24,9 @@ export function TorrentStatusPanel() {
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
+  // IDs with an action in flight (buttons disabled), and the torrent pending removal.
+  const [busy, setBusy] = useState<Set<number>>(new Set());
+  const [removeTarget, setRemoveTarget] = useState<TorrentStatus | null>(null);
   // Guard against overlapping polls when a request runs longer than the interval.
   const inFlight = useRef(false);
 
@@ -44,6 +51,17 @@ export function TorrentStatusPanel() {
     const timer = setInterval(load, 4000);
     return () => clearInterval(timer);
   }, [load]);
+
+  const runAction = async (action: 'start' | 'stop' | 'remove', t: TorrentStatus, deleteData = false) => {
+    setBusy(prev => new Set(prev).add(t.id));
+    try {
+      const res = await torrentAction(action, [t.id], deleteData);
+      if (res.error) setError(res.error);
+      await load();
+    } finally {
+      setBusy(prev => { const next = new Set(prev); next.delete(t.id); return next; });
+    }
+  };
 
   // Hide entirely until we know there is something to show.
   if (!loaded || !configured) return null;
@@ -72,11 +90,31 @@ export function TorrentStatusPanel() {
           {torrents.map(t => {
             const style = STATUS_STYLES[t.status] ?? STATUS_STYLES.unknown;
             const active = t.status === 'downloading';
+            const paused = t.status === 'stopped';
+            const isBusy = busy.has(t.id);
             return (
               <div key={t.hash} className="rounded-lg border border-slate-700/50 bg-slate-800/40 p-3">
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-sm text-white truncate min-w-0" title={t.name}>{t.name}</span>
-                  <span className={`text-xs border rounded-full px-2 py-0.5 shrink-0 ${style.cls}`}>{style.label}</span>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className={`text-xs border rounded-full px-2 py-0.5 ${style.cls}`}>{style.label}</span>
+                    <button
+                      onClick={() => runAction(paused ? 'start' : 'stop', t)}
+                      disabled={isBusy}
+                      title={paused ? 'Resume' : 'Pause'}
+                      className="p-1.5 bg-slate-700/50 hover:bg-slate-600/50 text-slate-300 rounded-lg transition-colors disabled:opacity-50"
+                    >
+                      {isBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : paused ? <Play className="w-3.5 h-3.5" /> : <Pause className="w-3.5 h-3.5" />}
+                    </button>
+                    <button
+                      onClick={() => setRemoveTarget(t)}
+                      disabled={isBusy}
+                      title="Remove torrent"
+                      className="p-1.5 border border-red-500/40 bg-red-500/10 hover:bg-red-500/25 text-red-400 rounded-lg transition-colors disabled:opacity-50"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 </div>
 
                 <div className="mt-2 h-1.5 bg-slate-700 rounded-full overflow-hidden">
@@ -104,6 +142,18 @@ export function TorrentStatusPanel() {
           })}
         </div>
       )}
+
+      <ConfirmDialog
+        isOpen={removeTarget !== null}
+        title="Remove torrent?"
+        message={`Remove "${removeTarget?.name}" from the torrent client. "Remove" keeps the downloaded files on the VPS; "Remove + delete data" also deletes them from the VPS (cannot be undone).`}
+        confirmText="Remove"
+        extraActionText="Remove + delete data"
+        variant="danger"
+        onConfirm={() => { const t = removeTarget; setRemoveTarget(null); if (t) runAction('remove', t, false); }}
+        onExtraAction={() => { const t = removeTarget; setRemoveTarget(null); if (t) runAction('remove', t, true); }}
+        onCancel={() => setRemoveTarget(null)}
+      />
     </div>
   );
 }
