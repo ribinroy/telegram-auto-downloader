@@ -735,6 +735,10 @@ class TelegramDownloader:
 
     async def _handle_new_file(self, event):
         """Handle new file messages from Telegram"""
+        # A reply to a completed-torrent prompt triggers the VPS→DownLee transfer.
+        if await self._maybe_handle_downlee_reply(event):
+            return
+
         # Magnet links in a channel message are handed off to the VPS torrent
         # client (routed to telegram/downloads, temp in telegram/progress).
         magnets = re.findall(r'magnet:\?[^\s]+', event.raw_text or '', flags=re.IGNORECASE)
@@ -887,7 +891,9 @@ class TelegramDownloader:
                     'size': t.get('totalSize') or 0, 'msg': reply_msg,
                 }
                 await self._safe_edit(
-                    reply_msg, f"`{name}` download complete. Download to DownLee? (react 👍)")
+                    reply_msg,
+                    f"`{name}` download complete. Reply to this message (or react 👍) "
+                    f"to download it to DownLee.")
                 return
             text = f"`{name}` download progress: {round(pct)}%"
             if text != last_text:
@@ -909,9 +915,29 @@ class TelegramDownloader:
         return any(getattr(getattr(rc, 'reaction', None), 'emoticon', None) in THUMBS
                    for rc in results)
 
+    async def _maybe_handle_downlee_reply(self, event):
+        """If `event` is a reply to a completed-torrent prompt, start the
+        VPS→DownLee transfer and return True. Triggers on any reply to the
+        prompt (the prompt asks the user to reply to download)."""
+        reply_to = getattr(event.message, 'reply_to', None)
+        reply_to_id = getattr(reply_to, 'reply_to_msg_id', None) if reply_to else None
+        if reply_to_id is None:
+            return False
+        key = (event.chat_id, reply_to_id)
+        pending = self._pending_downlee.get(key)
+        if not pending:
+            return False
+        del self._pending_downlee[key]  # trigger once
+        await self._start_downlee_from_torrent(pending)
+        return True
+
     async def _handle_reaction(self, update):
         """Raw-update handler: when a completed-torrent prompt gets a 👍, pull the
-        files down to DownLee. Non-reaction updates are ignored."""
+        files down to DownLee. Non-reaction updates are ignored.
+
+        (Replying to the prompt is the primary trigger — see
+        _maybe_handle_downlee_reply — since reaction updates aren't always
+        delivered, especially to bot accounts.)"""
         try:
             msg_id = getattr(update, 'msg_id', None)
             peer = getattr(update, 'peer', None)
