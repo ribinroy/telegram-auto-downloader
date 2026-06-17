@@ -59,6 +59,9 @@ class TelegramDownloader:
         self._handler = None  # Currently registered NewMessage handler
         self._mention_handler = None  # Command handler for messages tagging the account
         self._seen_users = {}  # telegram_id -> (username, name): skips repeat DB upserts
+        # (chat_id, msg_id) -> {path, name, size, msg}: completed torrents awaiting
+        # a "download" reply to pull the files down to DownLee.
+        self._pending_downlee = {}
 
         # Pending web-login state (phone -> code -> optional 2FA password)
         self._login_phone = None
@@ -721,6 +724,17 @@ class TelegramDownloader:
 
     async def _handle_new_file(self, event):
         """Handle new file messages from Telegram"""
+        # A reply to a completed-torrent prompt triggers the VPS→DownLee transfer.
+        if await self._maybe_handle_downlee_reply(event):
+            return
+
+        # Magnet links in a channel message are handed off to the VPS torrent
+        # client (routed to telegram/downloads, temp in telegram/progress).
+        magnets = re.findall(r'magnet:\?[^\s]+', event.raw_text or '', flags=re.IGNORECASE)
+        if magnets:
+            await self._handle_magnet(event, magnets)
+            return
+
         if not event.file:
             return
 
@@ -782,6 +796,222 @@ class TelegramDownloader:
         # Start background metadata extraction for video files
         if is_video_file(filename):
             asyncio.create_task(poll_and_extract_meta(event.id))
+
+    async def _handle_magnet(self, event, magnets):
+        """Send magnet links from a monitored channel to the VPS torrent client.
+        They download into telegram/downloads (temp in telegram/progress) and
+        start automatically. The transmission RPC is sync, so it runs in an
+        executor to avoid blocking the Telegram event loop."""
+        from functools import partial
+        from backend.web_app import transmission_telegram_dirs, transmission_add_magnet
+        loop = asyncio.get_event_loop()
+
+        try:
+            download_dir, progress_dir = await loop.run_in_executor(None, transmission_telegram_dirs)
+        except Exception as e:
+            logging.error(f"Cannot route Telegram magnet to torrent client: {e}")
+            try:
+                await event.reply(f"❌ Torrent client not ready: {e}", parse_mode=None)
+            except Exception:
+                pass
+            return
+
+        for magnet in magnets:
+            try:
+                result = await loop.run_in_executor(None, partial(
+                    transmission_add_magnet, magnet,
+                    download_dir=download_dir, incomplete_dir=progress_dir,
+                ))
+                torrent = result.get('torrent-added') or result.get('torrent-duplicate') or {}
+                name = torrent.get('name') or 'torrent'
+                torrent_hash = torrent.get('hashString')
+                duplicate = 'torrent-duplicate' in result
+                reply = await event.reply(
+                    f"🧲 Already in torrent client: {name}" if duplicate
+                    else f"`{name}` download progress: 0%",
+                    parse_mode=None,
+                )
+                # Live-edit the reply with download progress until it completes.
+                if torrent_hash and reply:
+                    asyncio.create_task(self._track_torrent_progress(reply, torrent_hash, name))
+            except Exception as e:
+                logging.error(f"Failed to add Telegram magnet: {e}")
+                try:
+                    await event.reply(f"❌ Could not add magnet: {e}", parse_mode=None)
+                except Exception:
+                    pass
+
+    async def _safe_edit(self, msg, text):
+        """Edit a Telegram message, ignoring not-modified/deleted/flood errors."""
+        try:
+            await msg.edit(text)
+        except Exception:
+            pass
+
+    async def _track_torrent_progress(self, reply_msg, torrent_hash, name, interval=15, max_polls=2880):
+        """Poll Transmission and edit the Telegram reply with live progress until
+        the torrent completes, errors, or is removed. max_polls caps runtime so a
+        stalled torrent can't leak the task (default ~12h at a 15s interval)."""
+        import posixpath
+        from functools import partial
+        from backend.web_app import transmission_get_torrent, transmission_rpc, transmission_telegram_dirs
+        loop = asyncio.get_event_loop()
+        last_text = None
+        for _ in range(max_polls):
+            await asyncio.sleep(interval)
+            try:
+                t = await loop.run_in_executor(None, partial(transmission_get_torrent, torrent_hash))
+            except Exception as e:
+                logging.error(f"Torrent progress poll failed for {name}: {e}")
+                continue
+            if t is None:
+                await self._safe_edit(reply_msg, f"🧲 {name}: removed from torrent client")
+                return
+            # A magnet's name is only a placeholder until metadata arrives.
+            name = t.get('name') or name
+            if t.get('errorString'):
+                await self._safe_edit(reply_msg, f"❌ {name}: {t['errorString']}")
+                return
+            pct = round((t.get('percentDone') or 0) * 100, 1)
+            if pct >= 100:
+                download_dir = (t.get('downloadDir') or '').rstrip('/')
+                # Best-effort: force Transmission to move the files out of the
+                # temp/progress dir into the final download dir.
+                if download_dir:
+                    try:
+                        await loop.run_in_executor(None, partial(
+                            transmission_rpc, "torrent-set-location",
+                            {"ids": [torrent_hash], "location": download_dir, "move": True}))
+                    except Exception as e:
+                        logging.error(f"torrent-set-location failed for {name}: {e}")
+                # Candidate remote paths: final dir first, then the temp dir in
+                # case the move hasn't landed yet (resolved over SFTP on demand).
+                candidates = [posixpath.join(download_dir, name)] if download_dir else []
+                try:
+                    tg_dl, tg_prog = await loop.run_in_executor(None, transmission_telegram_dirs)
+                    candidates += [posixpath.join(tg_dl, name), posixpath.join(tg_prog, name)]
+                except Exception:
+                    pass
+                seen = set()
+                candidates = [c for c in candidates if not (c in seen or seen.add(c))]
+                key = (reply_msg.chat_id, reply_msg.id)
+                self._pending_downlee[key] = {
+                    'candidates': candidates, 'name': name,
+                    'size': t.get('totalSize') or 0, 'msg': reply_msg,
+                }
+                await self._safe_edit(
+                    reply_msg,
+                    f"`{name}` download complete. Reply \"download\" to this message "
+                    f"to download it to DownLee.")
+                return
+            text = f"`{name}` download progress: {round(pct)}%"
+            if text != last_text:
+                last_text = text
+                await self._safe_edit(reply_msg, text)
+        await self._safe_edit(reply_msg, f"⬇️ {name}: still downloading — check the dashboard")
+
+    async def _maybe_handle_downlee_reply(self, event):
+        """If `event` replies "download" to a completed-torrent prompt, start the
+        VPS→DownLee transfer and return True."""
+        reply_to = getattr(event.message, 'reply_to', None)
+        reply_to_id = getattr(reply_to, 'reply_to_msg_id', None) if reply_to else None
+        if reply_to_id is None:
+            return False
+        key = (event.chat_id, reply_to_id)
+        pending = self._pending_downlee.get(key)
+        if not pending:
+            return False
+        if 'download' not in (event.raw_text or '').strip().lower():
+            return False
+        del self._pending_downlee[key]  # trigger once
+        await self._start_downlee_from_torrent(pending)
+        return True
+
+    @staticmethod
+    def _resolve_existing_remote(candidates):
+        """Return the first candidate remote path that exists over SFTP. Falls
+        back to the first candidate if the check itself fails; returns None if
+        none of the candidates exist yet."""
+        if not candidates:
+            return None
+        from backend.web_app import open_vps_sftp
+        client = None
+        try:
+            client, sftp = open_vps_sftp()
+            for c in candidates:
+                try:
+                    sftp.stat(c)
+                    return c
+                except IOError:
+                    continue
+            return None
+        except Exception as e:
+            logging.error(f"SFTP path resolve failed: {e}")
+            return candidates[0]
+        finally:
+            if client:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+
+    async def _start_downlee_from_torrent(self, pending):
+        """Start the VPS→DownLee transfer for a completed torrent and report back
+        on its Telegram message."""
+        from functools import partial
+        from backend.web_app import get_web_app
+        msg, name = pending['msg'], pending['name']
+        candidates = pending.get('candidates') or ([pending['path']] if pending.get('path') else [])
+        web = get_web_app()
+        if not (web and getattr(web, 'vps_downloader', None)):
+            await self._safe_edit(msg, f"`{name}` — VPS downloader unavailable")
+            return
+        loop = asyncio.get_event_loop()
+        path = await loop.run_in_executor(None, partial(self._resolve_existing_remote, candidates))
+        if not path:
+            await self._safe_edit(msg, f"❌ `{name}`: files not found on the VPS yet — try again shortly")
+            return
+        try:
+            res = await loop.run_in_executor(None, partial(
+                web.vps_downloader.start_download, path, pending.get('size') or 0))
+        except Exception as e:
+            logging.error(f"Failed to start DownLee transfer for {name}: {e}")
+            await self._safe_edit(msg, f"❌ `{name}`: could not start download to DownLee")
+            return
+        if res and res.get('error'):
+            await self._safe_edit(msg, f"❌ `{name}`: {res['error']}")
+            return
+        await self._safe_edit(msg, f"⬇️ `{name}` downloading to DownLee: 0%")
+        message_id = res.get('message_id') if res else None
+        if message_id:
+            asyncio.create_task(self._track_downlee_progress(msg, message_id, name))
+
+    async def _track_downlee_progress(self, msg, message_id, name, interval=10, max_polls=4320):
+        """Poll the VPS→DownLee transfer's DB record and edit the Telegram message
+        with its progress until it finishes (done/failed/stopped). max_polls caps
+        runtime (~12h at a 10s interval) so the task can't leak."""
+        db = get_db()
+        last_text = None
+        for _ in range(max_polls):
+            await asyncio.sleep(interval)
+            dl = db.get_download_by_message_id(message_id)
+            if not dl:
+                return
+            status = dl.get('status')
+            if status == 'done':
+                await self._safe_edit(msg, f"✅ `{name}` downloaded to DownLee")
+                return
+            if status in ('failed', 'stopped'):
+                err = dl.get('error')
+                await self._safe_edit(
+                    msg, f"❌ `{name}` DownLee download {status}" + (f": {err}" if err else ""))
+                return
+            pct = round(dl.get('progress') or 0)
+            text = f"⬇️ `{name}` downloading to DownLee: {pct}%"
+            if text != last_text:
+                last_text = text
+                await self._safe_edit(msg, text)
+        await self._safe_edit(msg, f"⬇️ `{name}`: still downloading to DownLee — check the dashboard")
 
     # ------------------------------------------------------------------
     # Chat queries (key -> shell snippet, managed in Settings -> Queries)

@@ -533,6 +533,7 @@ export interface TorrentConfig {
   url: string;
   username: string;
   has_password: boolean;
+  incomplete_dir: string;
 }
 
 export async function fetchTorrentConfig(): Promise<TorrentConfig> {
@@ -542,8 +543,8 @@ export async function fetchTorrentConfig(): Promise<TorrentConfig> {
 }
 
 export async function saveTorrentConfig(
-  config: { url: string; username: string; password?: string }
-): Promise<{ status?: string; configured?: boolean; url?: string; has_password?: boolean; error?: string }> {
+  config: { url: string; username: string; password?: string; incomplete_dir?: string }
+): Promise<{ status?: string; configured?: boolean; url?: string; has_password?: boolean; incomplete_dir?: string; warning?: string | null; error?: string }> {
   const response = await fetch(`${API_BASE}/api/settings/torrent`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
@@ -569,6 +570,43 @@ export async function testTorrentConnection(
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
     body: JSON.stringify(config),
+  });
+  if (response.status === 401) { clearToken(); window.location.reload(); }
+  return response.json();
+}
+
+export interface TorrentStatus {
+  id: number;
+  name: string;
+  hash: string;
+  status: 'stopped' | 'check-wait' | 'checking' | 'download-wait' | 'downloading' | 'seed-wait' | 'seeding' | 'unknown';
+  percent_done: number;
+  rate_download: number;
+  rate_upload: number;
+  total_size: number;
+  eta: number | null;
+  download_dir: string;
+  error: string | null;
+  peers_connected: number;
+  seeds_connected: number;
+  leeches_connected: number;
+  seeds_total: number | null;
+  leeches_total: number | null;
+}
+
+export async function fetchTorrentList(): Promise<{ configured: boolean; torrents?: TorrentStatus[]; error?: string }> {
+  const response = await fetch(`${API_BASE}/api/torrent/list`, { headers: getAuthHeaders() });
+  if (response.status === 401) { clearToken(); window.location.reload(); }
+  return response.json();
+}
+
+export async function torrentAction(
+  action: 'start' | 'stop' | 'remove', ids: number[], deleteData = false
+): Promise<{ status?: string; error?: string }> {
+  const response = await fetch(`${API_BASE}/api/torrent/action`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ action, ids, delete_data: deleteData }),
   });
   if (response.status === 401) { clearToken(); window.location.reload(); }
   return response.json();

@@ -2,10 +2,11 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   HardDrive, Folder, File as FileIcon, Download as DownloadIcon, RefreshCw, Loader2,
-  CheckCircle, XCircle, StopCircle, Calendar, Square, Play, Settings, Trash2, Search, X,
+  CheckCircle, XCircle, StopCircle, Calendar, Square, Play, Settings, Trash2, Search, X, Magnet,
 } from 'lucide-react';
 import ReactTimeAgo from 'react-time-ago';
 import { useLayoutContext } from '../components/Layout';
+import { TorrentStatusPanel } from '../components/TorrentStatusPanel';
 import { fetchVpsFiles, downloadVpsFile, deleteVpsRemote, type VpsFileEntry, type VpsFolderGroup } from '../api';
 import { formatBytes, formatSpeed, formatTime } from '../utils/format';
 import { ConfirmDialog } from '../components/ConfirmDialog';
@@ -175,6 +176,7 @@ export function VpsPage() {
   const [error, setError] = useState<string | null>(null);
   const [folderFilter, setFolderFilter] = useState('');
   const [search, setSearch] = useState('');
+  const [tab, setTab] = useState<'files' | 'torrents'>('files');
 
   const loadFiles = useCallback(async () => {
     setLoading(true);
@@ -236,14 +238,14 @@ export function VpsPage() {
   return (
     <div className="max-w-7xl mx-auto px-3 sm:px-4 pt-2 sm:pt-4 pb-24 w-full">
       {/* Header */}
-      <div className="flex items-center justify-between gap-3 mb-4 sm:mb-6">
+      <div className="flex items-center justify-between gap-3 mb-4">
         <div className="flex items-center gap-2 min-w-0">
           <HardDrive className="w-5 h-5 text-purple-400 shrink-0" />
-          <h1 className="text-lg sm:text-xl font-semibold text-white">VPS Files</h1>
+          <h1 className="text-lg sm:text-xl font-semibold text-white">VPS</h1>
         </div>
         <div className="flex items-center gap-2">
-          {/* Folder filter */}
-          {folderOptions.length > 1 && (
+          {/* Folder filter (Files tab only) */}
+          {tab === 'files' && folderOptions.length > 1 && (
             <select
               value={folderFilter}
               onChange={(e) => setFolderFilter(e.target.value)}
@@ -256,15 +258,17 @@ export function VpsPage() {
               ))}
             </select>
           )}
-          <button
-            onClick={loadFiles}
-            disabled={loading}
-            className="flex items-center gap-2 bg-slate-700/50 hover:bg-slate-600/50 text-slate-300 text-sm py-2 px-3 rounded-lg transition-colors"
-            title="Refresh listing"
-          >
-            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-            <span className="hidden sm:inline">Refresh</span>
-          </button>
+          {tab === 'files' && (
+            <button
+              onClick={loadFiles}
+              disabled={loading}
+              className="flex items-center gap-2 bg-slate-700/50 hover:bg-slate-600/50 text-slate-300 text-sm py-2 px-3 rounded-lg transition-colors"
+              title="Refresh listing"
+            >
+              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+              <span className="hidden sm:inline">Refresh</span>
+            </button>
+          )}
           <button
             onClick={() => navigate(ROUTES.SETTINGS_VPS)}
             className="flex items-center gap-2 bg-slate-700/50 hover:bg-slate-600/50 text-slate-300 text-sm py-2 px-3 rounded-lg transition-colors"
@@ -276,6 +280,34 @@ export function VpsPage() {
         </div>
       </div>
 
+      {/* Tabs */}
+      <div className="flex items-center gap-1 mb-4 border-b border-slate-700/60">
+        <button
+          onClick={() => setTab('files')}
+          className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+            tab === 'files'
+              ? 'border-cyan-500 text-white'
+              : 'border-transparent text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Folder className="w-4 h-4" /> Files
+        </button>
+        <button
+          onClick={() => setTab('torrents')}
+          className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+            tab === 'torrents'
+              ? 'border-purple-500 text-white'
+              : 'border-transparent text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Magnet className="w-4 h-4" /> Torrents
+        </button>
+      </div>
+
+      {tab === 'torrents' ? (
+        <TorrentStatusPanel />
+      ) : (
+      <>
       {/* Search */}
       <div className="relative mb-4">
         <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
@@ -367,6 +399,8 @@ export function VpsPage() {
         <p className="text-xs text-slate-500 mt-4 text-center">
           {inactiveCount} folder{inactiveCount !== 1 ? 's' : ''} on other VPS connections hidden.
         </p>
+      )}
+      </>
       )}
     </div>
   );

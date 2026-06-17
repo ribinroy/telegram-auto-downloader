@@ -38,6 +38,7 @@ export function VpsSettings({ onChange }: { onChange?: () => void }) {
   const [tUrl, setTUrl] = useState('');
   const [tUsername, setTUsername] = useState('');
   const [tPassword, setTPassword] = useState('');
+  const [tIncompleteDir, setTIncompleteDir] = useState('');
   const [tSaving, setTSaving] = useState(false);
   const [tTesting, setTTesting] = useState(false);
   const [tRemoving, setTRemoving] = useState(false);
@@ -58,12 +59,14 @@ export function VpsSettings({ onChange }: { onChange?: () => void }) {
       setTUrl(cfg.url || '');
       setTUsername(cfg.username || '');
       setTPassword('');
+      setTIncompleteDir(cfg.incomplete_dir || '');
     } catch { /* section stays unconfigured */ }
   };
 
   const torrentInput = () => ({
     url: tUrl.trim(),
     username: tUsername.trim(),
+    incomplete_dir: tIncompleteDir.trim(),
     ...(tPassword ? { password: tPassword } : {}),
   });
 
@@ -88,6 +91,9 @@ export function VpsSettings({ onChange }: { onChange?: () => void }) {
       const result = await saveTorrentConfig(torrentInput());
       if (result.error) {
         setTError(result.error);
+      } else if (result.warning) {
+        setTError(result.warning);
+        await loadTorrentConfig();
       } else {
         setTSuccess('Torrent client saved');
         await loadTorrentConfig();
@@ -488,6 +494,20 @@ export function VpsSettings({ onChange }: { onChange?: () => void }) {
                 className="w-full bg-slate-700/50 border border-slate-600 rounded-lg py-2 px-3 text-white placeholder-slate-400 focus:outline-none focus:border-purple-500 transition-colors"
               />
             </div>
+          </div>
+
+          <div>
+            <label className="block text-sm text-slate-400 mb-1">Temp (incomplete) folder</label>
+            <input
+              type="text"
+              value={tIncompleteDir}
+              onChange={(e) => setTIncompleteDir(e.target.value)}
+              placeholder="e.g., /home/user/downloads/.incomplete (leave blank to disable)"
+              className="w-full bg-slate-700/50 border border-slate-600 rounded-lg py-2 px-3 text-white placeholder-slate-400 focus:outline-none focus:border-purple-500 transition-colors"
+            />
+            <p className="text-xs text-slate-500 mt-1">
+              Remote path on the VPS. Active torrents download here, then move to the destination folder when complete.
+            </p>
           </div>
 
           {tTestResult && (
