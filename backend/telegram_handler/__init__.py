@@ -721,6 +721,13 @@ class TelegramDownloader:
 
     async def _handle_new_file(self, event):
         """Handle new file messages from Telegram"""
+        # Magnet links in a channel message are handed off to the VPS torrent
+        # client (routed to telegram/downloads, temp in telegram/progress).
+        magnets = re.findall(r'magnet:\?[^\s]+', event.raw_text or '', flags=re.IGNORECASE)
+        if magnets:
+            await self._handle_magnet(event, magnets)
+            return
+
         if not event.file:
             return
 
@@ -782,6 +789,45 @@ class TelegramDownloader:
         # Start background metadata extraction for video files
         if is_video_file(filename):
             asyncio.create_task(poll_and_extract_meta(event.id))
+
+    async def _handle_magnet(self, event, magnets):
+        """Send magnet links from a monitored channel to the VPS torrent client.
+        They download into telegram/downloads (temp in telegram/progress) and
+        start automatically. The transmission RPC is sync, so it runs in an
+        executor to avoid blocking the Telegram event loop."""
+        from functools import partial
+        from backend.web_app import transmission_telegram_dirs, transmission_add_magnet
+        loop = asyncio.get_event_loop()
+
+        try:
+            download_dir, progress_dir = await loop.run_in_executor(None, transmission_telegram_dirs)
+        except Exception as e:
+            logging.error(f"Cannot route Telegram magnet to torrent client: {e}")
+            try:
+                await event.reply(f"❌ Torrent client not ready: {e}", parse_mode=None)
+            except Exception:
+                pass
+            return
+
+        for magnet in magnets:
+            try:
+                result = await loop.run_in_executor(None, partial(
+                    transmission_add_magnet, magnet,
+                    download_dir=download_dir, incomplete_dir=progress_dir,
+                ))
+                torrent = result.get('torrent-added') or result.get('torrent-duplicate') or {}
+                name = torrent.get('name') or 'torrent'
+                duplicate = 'torrent-duplicate' in result
+                await event.reply(
+                    f"🧲 {'Already in torrent client' if duplicate else 'Downloading'}: {name}",
+                    parse_mode=None,
+                )
+            except Exception as e:
+                logging.error(f"Failed to add Telegram magnet: {e}")
+                try:
+                    await event.reply(f"❌ Could not add magnet: {e}", parse_mode=None)
+                except Exception:
+                    pass
 
     # ------------------------------------------------------------------
     # Chat queries (key -> shell snippet, managed in Settings -> Queries)

@@ -103,6 +103,46 @@ def apply_torrent_session(cfg):
     transmission_rpc("session-set", args, config=cfg)
 
 
+# Telegram-sourced magnets are routed to dedicated subfolders under
+# Transmission's base download dir (in-progress data temps through 'progress').
+TELEGRAM_TORRENT_SUBDIR = "telegram/downloads"
+TELEGRAM_PROGRESS_SUBDIR = "telegram/progress"
+
+
+def transmission_add_magnet(magnet, download_dir=None, incomplete_dir=None, paused=False, config=None):
+    """Add a magnet to Transmission. When `incomplete_dir` is given it overrides
+    the session temp dir for this add (Transmission's incomplete-dir is
+    session-wide but only active torrents are affected, so applying it right
+    before the add gives each new torrent its own temp dir). Falls back to the
+    saved config's incomplete dir otherwise. Returns the torrent-add result."""
+    cfg = config or load_torrent_config()
+    if not cfg:
+        raise ValueError("Torrent client is not configured")
+    temp = incomplete_dir if incomplete_dir is not None else cfg.get("incomplete_dir")
+    if temp:
+        apply_torrent_session({**cfg, "incomplete_dir": temp})
+    args = {"filename": magnet}
+    if download_dir:
+        args["download-dir"] = download_dir
+    if paused:
+        args["paused"] = True
+    return transmission_rpc("torrent-add", args, config=cfg)
+
+
+def transmission_telegram_dirs(config=None):
+    """Resolve the absolute (download_dir, incomplete_dir) for Telegram-sourced
+    magnets, derived from Transmission's configured base download dir."""
+    import posixpath
+    cfg = config or load_torrent_config()
+    if not cfg:
+        raise ValueError("Torrent client is not configured")
+    base = (transmission_rpc("session-get", config=cfg).get("download-dir") or "").rstrip("/")
+    if base:
+        return (posixpath.join(base, TELEGRAM_TORRENT_SUBDIR),
+                posixpath.join(base, TELEGRAM_PROGRESS_SUBDIR))
+    return TELEGRAM_TORRENT_SUBDIR, TELEGRAM_PROGRESS_SUBDIR
+
+
 def transmission_rpc(method: str, arguments: dict = None, config: dict = None, timeout: int = 20):
     """Call the Transmission RPC API (saved config unless one is passed in).
 
@@ -1590,16 +1630,9 @@ class WebApp:
             magnet = (data.get("magnet") or "").strip()
             if not magnet.lower().startswith("magnet:"):
                 return jsonify({"error": "Not a magnet link"}), 400
-            args = {"filename": magnet}
             download_dir = (data.get("download_dir") or "").strip()
-            if download_dir:
-                args["download-dir"] = download_dir
-            cfg = load_torrent_config()
             try:
-                # Ensure the temp folder is in effect (survives Transmission restarts)
-                if cfg and cfg.get("incomplete_dir"):
-                    apply_torrent_session(cfg)
-                result = transmission_rpc("torrent-add", args, config=cfg)
+                result = transmission_add_magnet(magnet, download_dir=download_dir or None)
             except ValueError as e:
                 return jsonify({"error": str(e)}), 502
             added = result.get("torrent-added")
