@@ -58,10 +58,9 @@ class TelegramDownloader:
         self._stopping = False
         self._handler = None  # Currently registered NewMessage handler
         self._mention_handler = None  # Command handler for messages tagging the account
-        self._reaction_handler = None  # Raw handler for 👍 reactions on torrent prompts
         self._seen_users = {}  # telegram_id -> (username, name): skips repeat DB upserts
         # (chat_id, msg_id) -> {path, name, size, msg}: completed torrents awaiting
-        # a 👍 reaction to pull the files down to DownLee.
+        # a "download" reply to pull the files down to DownLee.
         self._pending_downlee = {}
 
         # Pending web-login state (phone -> code -> optional 2FA password)
