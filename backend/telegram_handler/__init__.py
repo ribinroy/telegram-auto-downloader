@@ -180,22 +180,12 @@ class TelegramDownloader:
         if self._handler:
             self.client.remove_event_handler(self._handler)
             self._handler = None
-        if self._reaction_handler:
-            self.client.remove_event_handler(self._reaction_handler)
-            self._reaction_handler = None
 
         async def handle_mention(event):
             await self._handle_mention(event)
 
         self._mention_handler = handle_mention
         self.client.add_event_handler(handle_mention, events.NewMessage(incoming=True))
-
-        # Raw handler for reactions (no high-level Telethon event); filtered inside.
-        async def handle_reaction(update):
-            await self._handle_reaction(update)
-
-        self._reaction_handler = handle_reaction
-        self.client.add_event_handler(handle_reaction, events.Raw)
 
         ids = self.chat_ids()
         print(f"📡 Listening for new files on {len(ids)} channel(s): {ids}")
@@ -892,7 +882,7 @@ class TelegramDownloader:
                 }
                 await self._safe_edit(
                     reply_msg,
-                    f"`{name}` download complete. Reply to this message (or react 👍) "
+                    f"`{name}` download complete. Reply \"download\" to this message "
                     f"to download it to DownLee.")
                 return
             text = f"`{name}` download progress: {round(pct)}%"
@@ -901,24 +891,9 @@ class TelegramDownloader:
                 await self._safe_edit(reply_msg, text)
         await self._safe_edit(reply_msg, f"⬇️ {name}: still downloading — check the dashboard")
 
-    @staticmethod
-    def _reactions_have_thumbsup(update):
-        """True if the reaction update carries a 👍. Handles both the user-account
-        aggregate (UpdateMessageReactions.reactions.results) and the bot form
-        (UpdateBotMessageReaction.new_reactions)."""
-        THUMBS = {'👍'}
-        new = getattr(update, 'new_reactions', None)
-        if new is not None:  # bot account: explicit list of added reactions
-            return any(getattr(r, 'emoticon', None) in THUMBS for r in new)
-        reactions = getattr(update, 'reactions', None)
-        results = getattr(reactions, 'results', None) or []
-        return any(getattr(getattr(rc, 'reaction', None), 'emoticon', None) in THUMBS
-                   for rc in results)
-
     async def _maybe_handle_downlee_reply(self, event):
-        """If `event` is a reply to a completed-torrent prompt, start the
-        VPS→DownLee transfer and return True. Triggers on any reply to the
-        prompt (the prompt asks the user to reply to download)."""
+        """If `event` replies "download" to a completed-torrent prompt, start the
+        VPS→DownLee transfer and return True."""
         reply_to = getattr(event.message, 'reply_to', None)
         reply_to_id = getattr(reply_to, 'reply_to_msg_id', None) if reply_to else None
         if reply_to_id is None:
@@ -927,33 +902,11 @@ class TelegramDownloader:
         pending = self._pending_downlee.get(key)
         if not pending:
             return False
+        if 'download' not in (event.raw_text or '').strip().lower():
+            return False
         del self._pending_downlee[key]  # trigger once
         await self._start_downlee_from_torrent(pending)
         return True
-
-    async def _handle_reaction(self, update):
-        """Raw-update handler: when a completed-torrent prompt gets a 👍, pull the
-        files down to DownLee. Non-reaction updates are ignored.
-
-        (Replying to the prompt is the primary trigger — see
-        _maybe_handle_downlee_reply — since reaction updates aren't always
-        delivered, especially to bot accounts.)"""
-        try:
-            msg_id = getattr(update, 'msg_id', None)
-            peer = getattr(update, 'peer', None)
-            if msg_id is None or peer is None:
-                return
-            if not (hasattr(update, 'reactions') or hasattr(update, 'new_reactions')):
-                return
-            key = (tg_utils.get_peer_id(peer), msg_id)
-            pending = self._pending_downlee.get(key)
-            if not pending or not self._reactions_have_thumbsup(update):
-                return
-            # Trigger once: drop it before starting so repeat reactions are no-ops.
-            del self._pending_downlee[key]
-            await self._start_downlee_from_torrent(pending)
-        except Exception as e:
-            logging.error(f"Reaction handler failed: {e}")
 
     async def _start_downlee_from_torrent(self, pending):
         """Start the VPS→DownLee transfer for a completed torrent and report back
