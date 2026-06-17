@@ -61,7 +61,14 @@ Main Thread
 |  |- main.py                       # App initialization & thread orchestration
 |  |- config/__init__.py            # Environment config (from .env)
 |  |- database/__init__.py          # SQLAlchemy models, DatabaseManager, migrations
-|  |- web_app/__init__.py           # Flask routes, WebSocket, JWT auth (~1258 lines)
+|  |- web_app/                      # Flask app package (split by concern)
+|  |  |- __init__.py                # WebApp class (composes route mixins) + public re-exports
+|  |  |- base.py                    # Shared globals (socketio/web_app), JWT token_required
+|  |  |- torrent.py                 # Transmission RPC helpers (add/list/session/telegram dirs)
+|  |  |- vps.py                     # VPS SSH/SFTP connection helpers
+|  |  |- helpers.py                 # Misc helpers (candidate_file_paths)
+|  |  '- routes/                    # Per-domain Flask route mixins (auth, downloads, url,
+|  |                                #   analytics, settings, vps_settings, torrent, vps_browse, media)
 |  |- telegram_handler/__init__.py  # Telethon download handler (~436 lines)
 |  |- ytdlp_handler/__init__.py     # yt-dlp subprocess handler (~604 lines)
 |  |- vps_handler/__init__.py       # SFTP download handler + hourly autoSync
@@ -242,8 +249,9 @@ All config via `.env` file at project root (loaded by python-dotenv):
 
 ### Magnet Links (Transmission)
 1. AddUrlModal detects `magnet:` input -> `POST /api/torrent/add`
-2. Backend calls the Transmission RPC API (`transmission_rpc()` in web_app) with optional `download-dir` (e.g. a watched folder, so autoSync fetches the result)
+2. Backend calls the Transmission RPC API (`transmission_rpc()` in `web_app/torrent.py`) with optional `download-dir` (e.g. a watched folder, so autoSync fetches the result)
 3. No local download record is created — the torrent lives on the VPS
+4. **Telegram-sourced magnets**: a magnet link posted in a monitored channel is detected in `telegram_handler._handle_new_file()` and handed off via `transmission_add_magnet()`. Routed to `<base>/telegram/downloads` (temp in `<base>/telegram/progress`, derived from Transmission's session download-dir by `transmission_telegram_dirs()`), auto-started, and the bot replies with the torrent name. The per-torrent temp dir is applied right before the add (Transmission's incomplete-dir is session-wide but only affects active torrents).
 
 ### Spec Resolution (folder/quality/hidden)
 - `backend/utils.resolve_spec(source, path=None)` reads `download_type_maps` (+ longest-prefix `vps_watch_folders` match for VPS paths)
