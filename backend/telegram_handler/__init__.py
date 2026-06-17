@@ -949,8 +949,38 @@ class TelegramDownloader:
             return
         if res and res.get('error'):
             await self._safe_edit(msg, f"❌ `{name}`: {res['error']}")
-        else:
-            await self._safe_edit(msg, f"⬇️ `{name}` downloading to DownLee…")
+            return
+        await self._safe_edit(msg, f"⬇️ `{name}` downloading to DownLee: 0%")
+        message_id = res.get('message_id') if res else None
+        if message_id:
+            asyncio.create_task(self._track_downlee_progress(msg, message_id, name))
+
+    async def _track_downlee_progress(self, msg, message_id, name, interval=10, max_polls=4320):
+        """Poll the VPS→DownLee transfer's DB record and edit the Telegram message
+        with its progress until it finishes (done/failed/stopped). max_polls caps
+        runtime (~12h at a 10s interval) so the task can't leak."""
+        db = get_db()
+        last_text = None
+        for _ in range(max_polls):
+            await asyncio.sleep(interval)
+            dl = db.get_download_by_message_id(message_id)
+            if not dl:
+                return
+            status = dl.get('status')
+            if status == 'done':
+                await self._safe_edit(msg, f"✅ `{name}` downloaded to DownLee")
+                return
+            if status in ('failed', 'stopped'):
+                err = dl.get('error')
+                await self._safe_edit(
+                    msg, f"❌ `{name}` DownLee download {status}" + (f": {err}" if err else ""))
+                return
+            pct = round(dl.get('progress') or 0)
+            text = f"⬇️ `{name}` downloading to DownLee: {pct}%"
+            if text != last_text:
+                last_text = text
+                await self._safe_edit(msg, text)
+        await self._safe_edit(msg, f"⬇️ `{name}`: still downloading to DownLee — check the dashboard")
 
     # ------------------------------------------------------------------
     # Chat queries (key -> shell snippet, managed in Settings -> Queries)
