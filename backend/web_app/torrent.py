@@ -144,7 +144,7 @@ def transmission_get_torrent(torrent_hash, config=None):
     res = transmission_rpc("torrent-get", {
         "ids": [torrent_hash],
         "fields": ["hashString", "name", "percentDone", "rateDownload",
-                   "eta", "status", "totalSize", "errorString"],
+                   "eta", "status", "totalSize", "errorString", "downloadDir"],
     }, config=config)
     torrents = res.get("torrents", [])
     return torrents[0] if torrents else None

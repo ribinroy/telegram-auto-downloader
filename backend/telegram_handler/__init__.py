@@ -58,7 +58,11 @@ class TelegramDownloader:
         self._stopping = False
         self._handler = None  # Currently registered NewMessage handler
         self._mention_handler = None  # Command handler for messages tagging the account
+        self._reaction_handler = None  # Raw handler for 👍 reactions on torrent prompts
         self._seen_users = {}  # telegram_id -> (username, name): skips repeat DB upserts
+        # (chat_id, msg_id) -> {path, name, size, msg}: completed torrents awaiting
+        # a 👍 reaction to pull the files down to DownLee.
+        self._pending_downlee = {}
 
         # Pending web-login state (phone -> code -> optional 2FA password)
         self._login_phone = None
@@ -176,12 +180,22 @@ class TelegramDownloader:
         if self._handler:
             self.client.remove_event_handler(self._handler)
             self._handler = None
+        if self._reaction_handler:
+            self.client.remove_event_handler(self._reaction_handler)
+            self._reaction_handler = None
 
         async def handle_mention(event):
             await self._handle_mention(event)
 
         self._mention_handler = handle_mention
         self.client.add_event_handler(handle_mention, events.NewMessage(incoming=True))
+
+        # Raw handler for reactions (no high-level Telethon event); filtered inside.
+        async def handle_reaction(update):
+            await self._handle_reaction(update)
+
+        self._reaction_handler = handle_reaction
+        self.client.add_event_handler(handle_reaction, events.Raw)
 
         ids = self.chat_ids()
         print(f"📡 Listening for new files on {len(ids)} channel(s): {ids}")
@@ -864,13 +878,79 @@ class TelegramDownloader:
                 return
             pct = round((t.get('percentDone') or 0) * 100, 1)
             if pct >= 100:
-                await self._safe_edit(reply_msg, f"✅ Downloaded: {name}")
+                import posixpath
+                base = (t.get('downloadDir') or '').rstrip('/')
+                remote_path = posixpath.join(base, name) if base else name
+                key = (reply_msg.chat_id, reply_msg.id)
+                self._pending_downlee[key] = {
+                    'path': remote_path, 'name': name,
+                    'size': t.get('totalSize') or 0, 'msg': reply_msg,
+                }
+                await self._safe_edit(
+                    reply_msg, f"`{name}` download complete. Download to DownLee? (react 👍)")
                 return
             text = f"`{name}` download progress: {round(pct)}%"
             if text != last_text:
                 last_text = text
                 await self._safe_edit(reply_msg, text)
         await self._safe_edit(reply_msg, f"⬇️ {name}: still downloading — check the dashboard")
+
+    @staticmethod
+    def _reactions_have_thumbsup(update):
+        """True if the reaction update carries a 👍. Handles both the user-account
+        aggregate (UpdateMessageReactions.reactions.results) and the bot form
+        (UpdateBotMessageReaction.new_reactions)."""
+        THUMBS = {'👍'}
+        new = getattr(update, 'new_reactions', None)
+        if new is not None:  # bot account: explicit list of added reactions
+            return any(getattr(r, 'emoticon', None) in THUMBS for r in new)
+        reactions = getattr(update, 'reactions', None)
+        results = getattr(reactions, 'results', None) or []
+        return any(getattr(getattr(rc, 'reaction', None), 'emoticon', None) in THUMBS
+                   for rc in results)
+
+    async def _handle_reaction(self, update):
+        """Raw-update handler: when a completed-torrent prompt gets a 👍, pull the
+        files down to DownLee. Non-reaction updates are ignored."""
+        try:
+            msg_id = getattr(update, 'msg_id', None)
+            peer = getattr(update, 'peer', None)
+            if msg_id is None or peer is None:
+                return
+            if not (hasattr(update, 'reactions') or hasattr(update, 'new_reactions')):
+                return
+            key = (tg_utils.get_peer_id(peer), msg_id)
+            pending = self._pending_downlee.get(key)
+            if not pending or not self._reactions_have_thumbsup(update):
+                return
+            # Trigger once: drop it before starting so repeat reactions are no-ops.
+            del self._pending_downlee[key]
+            await self._start_downlee_from_torrent(pending)
+        except Exception as e:
+            logging.error(f"Reaction handler failed: {e}")
+
+    async def _start_downlee_from_torrent(self, pending):
+        """Start the VPS→DownLee transfer for a completed torrent and report back
+        on its Telegram message."""
+        from functools import partial
+        from backend.web_app import get_web_app
+        msg, name, path = pending['msg'], pending['name'], pending['path']
+        web = get_web_app()
+        if not (web and getattr(web, 'vps_downloader', None)):
+            await self._safe_edit(msg, f"`{name}` — VPS downloader unavailable")
+            return
+        loop = asyncio.get_event_loop()
+        try:
+            res = await loop.run_in_executor(None, partial(
+                web.vps_downloader.start_download, path, pending.get('size') or 0))
+        except Exception as e:
+            logging.error(f"Failed to start DownLee transfer for {name}: {e}")
+            await self._safe_edit(msg, f"❌ `{name}`: could not start download to DownLee")
+            return
+        if res and res.get('error'):
+            await self._safe_edit(msg, f"❌ `{name}`: {res['error']}")
+        else:
+            await self._safe_edit(msg, f"⬇️ `{name}` downloading to DownLee…")
 
     # ------------------------------------------------------------------
     # Chat queries (key -> shell snippet, managed in Settings -> Queries)
