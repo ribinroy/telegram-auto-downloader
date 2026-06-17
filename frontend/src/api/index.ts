@@ -592,6 +592,7 @@ export interface TorrentStatus {
   leeches_connected: number;
   seeds_total: number | null;
   leeches_total: number | null;
+  added_date: number;
 }
 
 export async function fetchTorrentList(): Promise<{ configured: boolean; torrents?: TorrentStatus[]; error?: string }> {

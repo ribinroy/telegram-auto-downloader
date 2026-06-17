@@ -108,7 +108,8 @@ export function TorrentStatusPanel() {
   }
 
   const query = search.trim().toLowerCase();
-  const filtered = query ? torrents.filter(t => t.name.toLowerCase().includes(query)) : torrents;
+  const sorted = [...torrents].sort((a, b) => b.added_date - a.added_date);
+  const filtered = query ? sorted.filter(t => t.name.toLowerCase().includes(query)) : sorted;
 
   return (
     <div className="space-y-2">
