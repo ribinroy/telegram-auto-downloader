@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Magnet, ArrowDown, ArrowUp, Play, Pause, Trash2, Loader2, Search, X,
+  Magnet, ArrowDown, ArrowUp, Play, Pause, Trash2, Loader2, Search, X, Check,
 } from 'lucide-react';
-import { fetchTorrentList, torrentAction, type TorrentStatus } from '../api';
+import { fetchTorrentList, torrentAction, downloadVpsFile, type TorrentStatus } from '../api';
 import { formatBytes, formatTime } from '../utils/format';
 import { ConfirmDialog } from './ConfirmDialog';
+import { Tooltip } from './Tooltip';
 import { ROUTES } from '../routes';
 import { useNavigate } from 'react-router-dom';
 
@@ -29,6 +30,9 @@ export function TorrentStatusPanel() {
   const [busy, setBusy] = useState<Set<number>>(new Set());
   const [removeTarget, setRemoveTarget] = useState<TorrentStatus | null>(null);
   const [search, setSearch] = useState('');
+  // DownLee transfer state: torrents with a transfer being started / already started.
+  const [dlBusy, setDlBusy] = useState<Set<number>>(new Set());
+  const [dlStarted, setDlStarted] = useState<Set<number>>(new Set());
   // Guard against overlapping polls when a request runs longer than the interval.
   const inFlight = useRef(false);
 
@@ -62,6 +66,22 @@ export function TorrentStatusPanel() {
       await load();
     } finally {
       setBusy(prev => { const next = new Set(prev); next.delete(t.id); return next; });
+    }
+  };
+
+  // Pull a finished torrent's files from the VPS down to DownLee (home server).
+  const downloadToDownlee = async (t: TorrentStatus) => {
+    setError(null);
+    setDlBusy(prev => new Set(prev).add(t.id));
+    try {
+      const remotePath = `${(t.download_dir || '').replace(/\/+$/, '')}/${t.name}`;
+      const res = await downloadVpsFile(remotePath);
+      if (res.error) setError(res.error);
+      else setDlStarted(prev => new Set(prev).add(t.id));
+    } catch {
+      setError('Failed to start the download to DownLee');
+    } finally {
+      setDlBusy(prev => { const next = new Set(prev); next.delete(t.id); return next; });
     }
   };
 
@@ -144,12 +164,31 @@ export function TorrentStatusPanel() {
         const active = t.status === 'downloading';
         const paused = t.status === 'stopped';
         const isBusy = busy.has(t.id);
+        const done = t.percent_done >= 100;
+        const dlInFlight = dlBusy.has(t.id);
+        const dlDone = dlStarted.has(t.id);
         return (
           <div key={t.hash} className="rounded-xl border border-slate-700/50 bg-slate-800/30 p-3 sm:p-4">
             <div className="flex items-center justify-between gap-3">
               <span className="text-sm sm:text-base text-white font-medium truncate min-w-0" title={t.name}>{t.name}</span>
               <div className="flex items-center gap-2 shrink-0">
                 <span className={`text-xs border rounded-full px-2 py-0.5 ${style.cls}`}>{style.label}</span>
+                {done && (
+                  <Tooltip content={dlDone ? 'Sent to DownLee' : 'Download to DownLee'} position="top">
+                    <button
+                      onClick={() => downloadToDownlee(t)}
+                      disabled={dlInFlight}
+                      className="flex items-center gap-1.5 py-1.5 px-2.5 rounded-lg font-medium text-white bg-gradient-to-r from-purple-500/30 to-cyan-500/30 border border-purple-400/40 hover:from-purple-500/45 hover:to-cyan-500/45 transition-colors disabled:opacity-50"
+                    >
+                      {dlInFlight
+                        ? <Loader2 className="w-4 h-4 animate-spin" />
+                        : dlDone
+                          ? <Check className="w-4 h-4 text-green-400" />
+                          : <img src="/logo.png" alt="" className="w-4 h-4" />}
+                      <ArrowDown className="w-3.5 h-3.5" />
+                    </button>
+                  </Tooltip>
+                )}
                 <button
                   onClick={() => runAction(paused ? 'start' : 'stop', t)}
                   disabled={isBusy}
