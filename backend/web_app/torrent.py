@@ -82,13 +82,17 @@ def transmission_add_magnet(magnet, download_dir=None, incomplete_dir=None, paus
 
 def transmission_telegram_dirs(config=None):
     """Resolve the absolute (download_dir, incomplete_dir) for Telegram-sourced
-    magnets, derived from Transmission's configured base download dir."""
+    magnets. The telegram folder sits at the ROOT (the parent of Transmission's
+    default download dir), not nested inside it — i.e. for a default dir of
+    `<root>/movies` the telegram dirs are `<root>/telegram/...`, not
+    `<root>/movies/telegram/...`."""
     import posixpath
     cfg = config or load_torrent_config()
     if not cfg:
         raise ValueError("Torrent client is not configured")
-    base = (transmission_rpc("session-get", config=cfg).get("download-dir") or "").rstrip("/")
-    if base:
+    default_dir = (transmission_rpc("session-get", config=cfg).get("download-dir") or "").rstrip("/")
+    base = posixpath.dirname(default_dir)  # parent of the default download dir
+    if base and base != "/":
         return (posixpath.join(base, TELEGRAM_TORRENT_SUBDIR),
                 posixpath.join(base, TELEGRAM_PROGRESS_SUBDIR))
     return TELEGRAM_TORRENT_SUBDIR, TELEGRAM_PROGRESS_SUBDIR

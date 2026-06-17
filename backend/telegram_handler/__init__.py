@@ -852,8 +852,9 @@ class TelegramDownloader:
         """Poll Transmission and edit the Telegram reply with live progress until
         the torrent completes, errors, or is removed. max_polls caps runtime so a
         stalled torrent can't leak the task (default ~12h at a 15s interval)."""
+        import posixpath
         from functools import partial
-        from backend.web_app import transmission_get_torrent
+        from backend.web_app import transmission_get_torrent, transmission_rpc, transmission_telegram_dirs
         loop = asyncio.get_event_loop()
         last_text = None
         for _ in range(max_polls):
@@ -866,17 +867,36 @@ class TelegramDownloader:
             if t is None:
                 await self._safe_edit(reply_msg, f"🧲 {name}: removed from torrent client")
                 return
+            # A magnet's name is only a placeholder until metadata arrives.
+            name = t.get('name') or name
             if t.get('errorString'):
                 await self._safe_edit(reply_msg, f"❌ {name}: {t['errorString']}")
                 return
             pct = round((t.get('percentDone') or 0) * 100, 1)
             if pct >= 100:
-                import posixpath
-                base = (t.get('downloadDir') or '').rstrip('/')
-                remote_path = posixpath.join(base, name) if base else name
+                download_dir = (t.get('downloadDir') or '').rstrip('/')
+                # Best-effort: force Transmission to move the files out of the
+                # temp/progress dir into the final download dir.
+                if download_dir:
+                    try:
+                        await loop.run_in_executor(None, partial(
+                            transmission_rpc, "torrent-set-location",
+                            {"ids": [torrent_hash], "location": download_dir, "move": True}))
+                    except Exception as e:
+                        logging.error(f"torrent-set-location failed for {name}: {e}")
+                # Candidate remote paths: final dir first, then the temp dir in
+                # case the move hasn't landed yet (resolved over SFTP on demand).
+                candidates = [posixpath.join(download_dir, name)] if download_dir else []
+                try:
+                    tg_dl, tg_prog = await loop.run_in_executor(None, transmission_telegram_dirs)
+                    candidates += [posixpath.join(tg_dl, name), posixpath.join(tg_prog, name)]
+                except Exception:
+                    pass
+                seen = set()
+                candidates = [c for c in candidates if not (c in seen or seen.add(c))]
                 key = (reply_msg.chat_id, reply_msg.id)
                 self._pending_downlee[key] = {
-                    'path': remote_path, 'name': name,
+                    'candidates': candidates, 'name': name,
                     'size': t.get('totalSize') or 0, 'msg': reply_msg,
                 }
                 await self._safe_edit(
@@ -907,17 +927,50 @@ class TelegramDownloader:
         await self._start_downlee_from_torrent(pending)
         return True
 
+    @staticmethod
+    def _resolve_existing_remote(candidates):
+        """Return the first candidate remote path that exists over SFTP. Falls
+        back to the first candidate if the check itself fails; returns None if
+        none of the candidates exist yet."""
+        if not candidates:
+            return None
+        from backend.web_app import open_vps_sftp
+        client = None
+        try:
+            client, sftp = open_vps_sftp()
+            for c in candidates:
+                try:
+                    sftp.stat(c)
+                    return c
+                except IOError:
+                    continue
+            return None
+        except Exception as e:
+            logging.error(f"SFTP path resolve failed: {e}")
+            return candidates[0]
+        finally:
+            if client:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+
     async def _start_downlee_from_torrent(self, pending):
         """Start the VPS→DownLee transfer for a completed torrent and report back
         on its Telegram message."""
         from functools import partial
         from backend.web_app import get_web_app
-        msg, name, path = pending['msg'], pending['name'], pending['path']
+        msg, name = pending['msg'], pending['name']
+        candidates = pending.get('candidates') or ([pending['path']] if pending.get('path') else [])
         web = get_web_app()
         if not (web and getattr(web, 'vps_downloader', None)):
             await self._safe_edit(msg, f"`{name}` — VPS downloader unavailable")
             return
         loop = asyncio.get_event_loop()
+        path = await loop.run_in_executor(None, partial(self._resolve_existing_remote, candidates))
+        if not path:
+            await self._safe_edit(msg, f"❌ `{name}`: files not found on the VPS yet — try again shortly")
+            return
         try:
             res = await loop.run_in_executor(None, partial(
                 web.vps_downloader.start_download, path, pending.get('size') or 0))
