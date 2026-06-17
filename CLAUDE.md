@@ -172,9 +172,11 @@ Note: legacy `labels`/`source_labels` tables and `downloads.label_id` may still 
 - `POST /api/vps/delete-remote` - Delete on the VPS
 
 ### Torrent Client (Transmission on the VPS)
-- `GET/POST/DELETE /api/settings/torrent` - Config (URL normalized to the RPC endpoint, password encrypted)
+- `GET/POST/DELETE /api/settings/torrent` - Config (URL normalized to the RPC endpoint, password encrypted; `incomplete_dir` = temp folder for in-progress downloads)
 - `POST /api/settings/torrent/test` - session-get connectivity check
 - `POST /api/torrent/add` - Send a magnet link (`{magnet, download_dir?}`); RPC helper `transmission_rpc()` handles the 409 session-id handshake
+- `GET /api/torrent/list` - Live status of all torrents (name, status label, percent, down/up rate, size, ETA, download dir, error)
+- Temp folder: `apply_torrent_session()` pushes `incomplete-dir`/`incomplete-dir-enabled` via `session-set` (applied on config save + re-applied before each add). Transmission downloads into the temp dir, then moves to the torrent's `download-dir` on completion.
 
 ### Video Streaming
 - `GET /api/video/stream/<id>` - Range-request video streaming

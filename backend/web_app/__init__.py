@@ -87,7 +87,20 @@ def load_torrent_config():
         "url": cfg["url"],
         "username": cfg.get("username", ""),
         "password": decrypt_secret(cfg.get("password_enc", "")),
+        "incomplete_dir": cfg.get("incomplete_dir", ""),
     }
+
+
+def apply_torrent_session(cfg):
+    """Push session-wide settings to Transmission. Currently configures the
+    incomplete (temp) download directory: while a torrent downloads, its data
+    lives in `incomplete-dir`, then Transmission moves it to the torrent's
+    `download-dir` on completion. Raises ValueError if the RPC fails."""
+    incomplete = (cfg.get("incomplete_dir") or "").strip()
+    args = {"incomplete-dir-enabled": bool(incomplete)}
+    if incomplete:
+        args["incomplete-dir"] = incomplete
+    transmission_rpc("session-set", args, config=cfg)
 
 
 def transmission_rpc(method: str, arguments: dict = None, config: dict = None, timeout: int = 20):
@@ -1465,7 +1478,7 @@ class WebApp:
             from backend.utils import decrypt_secret
             raw = get_db().get_setting("torrent_config")
             if not raw:
-                return jsonify({"configured": False, "url": "", "username": "", "has_password": False})
+                return jsonify({"configured": False, "url": "", "username": "", "has_password": False, "incomplete_dir": ""})
             try:
                 cfg = json.loads(raw)
             except Exception:
@@ -1475,6 +1488,7 @@ class WebApp:
                 "url": cfg.get("url", ""),
                 "username": cfg.get("username", ""),
                 "has_password": bool(decrypt_secret(cfg.get("password_enc", ""))),
+                "incomplete_dir": cfg.get("incomplete_dir", ""),
             })
 
         @self.app.route("/api/settings/torrent", methods=["POST"])
@@ -1501,17 +1515,36 @@ class WebApp:
                     except Exception:
                         password_enc = ""
 
+            incomplete_dir = (data.get("incomplete_dir") or "").strip()
             cfg = {
                 "url": url,
                 "username": (data.get("username") or "").strip(),
                 "password_enc": password_enc,
+                "incomplete_dir": incomplete_dir,
             }
             db.set_setting("torrent_config", json.dumps(cfg))
+
+            # Push the incomplete (temp) dir to Transmission immediately so it
+            # takes effect for the whole instance. Best-effort: a save still
+            # succeeds if Transmission is unreachable — it is re-applied on add.
+            warning = None
+            try:
+                apply_torrent_session({
+                    "url": url,
+                    "username": cfg["username"],
+                    "password": decrypt_secret(password_enc),
+                    "incomplete_dir": incomplete_dir,
+                })
+            except ValueError as e:
+                warning = f"Saved, but could not apply temp folder to Transmission: {e}"
+
             return jsonify({
                 "status": "saved",
                 "configured": True,
                 "url": url,
                 "has_password": bool(decrypt_secret(password_enc)),
+                "incomplete_dir": incomplete_dir,
+                "warning": warning,
             })
 
         @self.app.route("/api/settings/torrent", methods=["DELETE"])
@@ -1561,8 +1594,12 @@ class WebApp:
             download_dir = (data.get("download_dir") or "").strip()
             if download_dir:
                 args["download-dir"] = download_dir
+            cfg = load_torrent_config()
             try:
-                result = transmission_rpc("torrent-add", args)
+                # Ensure the temp folder is in effect (survives Transmission restarts)
+                if cfg and cfg.get("incomplete_dir"):
+                    apply_torrent_session(cfg)
+                result = transmission_rpc("torrent-add", args, config=cfg)
             except ValueError as e:
                 return jsonify({"error": str(e)}), 502
             added = result.get("torrent-added")
@@ -1574,6 +1611,45 @@ class WebApp:
                 "hash": torrent.get("hashString"),
                 "download_dir": download_dir or None,
             })
+
+        @self.app.route("/api/torrent/list", methods=["GET"])
+        @token_required
+        def list_torrents():
+            """List the torrents currently known to the VPS Transmission, with
+            live download status. Returns {configured, torrents:[...]}."""
+            # Transmission status codes -> readable labels
+            STATUS_LABELS = {
+                0: "stopped", 1: "check-wait", 2: "checking",
+                3: "download-wait", 4: "downloading", 5: "seed-wait", 6: "seeding",
+            }
+            if not load_torrent_config():
+                return jsonify({"configured": False, "torrents": []})
+            fields = [
+                "id", "name", "hashString", "status", "percentDone",
+                "rateDownload", "rateUpload", "totalSize", "eta",
+                "downloadDir", "errorString",
+            ]
+            try:
+                result = transmission_rpc("torrent-get", {"fields": fields})
+            except ValueError as e:
+                return jsonify({"configured": True, "error": str(e)}), 502
+            torrents = []
+            for t in result.get("torrents", []):
+                eta = t.get("eta")
+                torrents.append({
+                    "id": t.get("id"),
+                    "name": t.get("name"),
+                    "hash": t.get("hashString"),
+                    "status": STATUS_LABELS.get(t.get("status"), "unknown"),
+                    "percent_done": round((t.get("percentDone") or 0) * 100, 1),
+                    "rate_download": t.get("rateDownload") or 0,
+                    "rate_upload": t.get("rateUpload") or 0,
+                    "total_size": t.get("totalSize") or 0,
+                    "eta": eta if isinstance(eta, int) and eta >= 0 else None,
+                    "download_dir": t.get("downloadDir"),
+                    "error": t.get("errorString") or None,
+                })
+            return jsonify({"configured": True, "torrents": torrents})
 
         @self.app.route("/api/settings/vps/browse", methods=["POST"])
         @token_required

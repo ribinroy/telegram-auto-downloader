@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import ReactTimeAgo from 'react-time-ago';
 import { useLayoutContext } from '../components/Layout';
+import { TorrentStatusPanel } from '../components/TorrentStatusPanel';
 import { fetchVpsFiles, downloadVpsFile, deleteVpsRemote, type VpsFileEntry, type VpsFolderGroup } from '../api';
 import { formatBytes, formatSpeed, formatTime } from '../utils/format';
 import { ConfirmDialog } from '../components/ConfirmDialog';
@@ -275,6 +276,9 @@ export function VpsPage() {
           </button>
         </div>
       </div>
+
+      {/* Live torrent status from the VPS Transmission */}
+      <TorrentStatusPanel />
 
       {/* Search */}
       <div className="relative mb-4">
