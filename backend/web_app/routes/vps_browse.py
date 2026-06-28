@@ -264,14 +264,22 @@ class VpsBrowseRoutesMixin:
         @self.app.route("/api/vps/download", methods=["POST"])
         @token_required
         def download_vps_file():
-            """Start downloading a single VPS file/folder. Body: {path, size?}."""
+            """Start downloading a single VPS file/folder.
+            Body: {path, size?, client?} — when `client` is a configured torrent
+            client with a local folder set, files land there on the home server."""
             if not self.vps_downloader:
                 return jsonify({"error": "VPS downloader not available"}), 503
             data = request.json or {}
             path = (data.get("path") or "").strip()
             if not path:
                 return jsonify({"error": "path is required"}), 400
-            result = self.vps_downloader.start_download(path, int(data.get("size") or 0))
+            # Per-client local destination override (torrent "Download to DownLee").
+            dest = None
+            from backend.web_app.torrent import CLIENTS, read_torrent_settings
+            client = (data.get("client") or "").strip()
+            if client in CLIENTS:
+                dest = ((read_torrent_settings().get(client) or {}).get("local_dir") or "").strip() or None
+            result = self.vps_downloader.start_download(path, int(data.get("size") or 0), dest=dest)
             if result.get("error"):
                 return jsonify(result), 400
             return jsonify(result)

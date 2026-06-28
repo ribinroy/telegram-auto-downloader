@@ -263,6 +263,34 @@ class TelegramDownloader:
         self._register_handler()
         return {'channels': self.get_channels()}
 
+    def set_channel_torrent_client(self, chat_id, client):
+        """Set (or clear) the torrent client a channel's magnets are sent to.
+        `client` is 'transmission'/'qbittorrent', or None to use the global
+        default. Returns the updated channels or an error dict."""
+        from backend.web_app.torrent import CLIENTS
+        if client in ('', 'none', None):
+            client = None
+        elif client not in CLIENTS:
+            return {'error': 'Unknown torrent client'}
+        match = next((c for c in self.channels if c['id'] == chat_id), None)
+        if not match:
+            return {'error': 'Channel is not monitored'}
+        if client is None:
+            match.pop('torrent_client', None)
+        else:
+            match['torrent_client'] = client
+        self._save_channels()
+        return {'channels': self.get_channels()}
+
+    def torrent_client_for_chat(self, chat_id):
+        """Resolve which torrent client a chat's magnets go to: the channel's
+        own setting, else the global Telegram default. None if neither is set."""
+        from backend.web_app.torrent import get_telegram_default
+        match = next((c for c in self.channels if c['id'] == chat_id), None)
+        if match and match.get('torrent_client'):
+            return match['torrent_client']
+        return get_telegram_default()
+
     async def list_dialogs(self, limit=200):
         """List the account's dialogs (channels/groups first) for the picker UI."""
         if self.client is None:
@@ -798,18 +826,30 @@ class TelegramDownloader:
             asyncio.create_task(poll_and_extract_meta(event.id))
 
     async def _handle_magnet(self, event, magnets):
-        """Send magnet links from a monitored channel to the VPS torrent client.
-        They download into telegram/downloads (temp in telegram/progress) and
-        start automatically. The transmission RPC is sync, so it runs in an
-        executor to avoid blocking the Telegram event loop."""
+        """Send magnet links from a monitored channel to the configured default
+        torrent client. They download into telegram/downloads (temp in
+        telegram/progress) and start automatically. The client calls are sync, so
+        they run in an executor to avoid blocking the Telegram event loop."""
         from functools import partial
-        from backend.web_app import transmission_telegram_dirs, transmission_add_magnet
+        from backend.web_app import torrent_telegram_dirs, torrent_add_magnet
         loop = asyncio.get_event_loop()
 
+        client = self.torrent_client_for_chat(event.chat_id)
+        if not client:
+            try:
+                await event.reply(
+                    "❌ No torrent client set for this channel's magnets "
+                    "(set one in Settings → Telegram, or a default in Settings → VPS).",
+                    parse_mode=None)
+            except Exception:
+                pass
+            return
+
         try:
-            download_dir, progress_dir = await loop.run_in_executor(None, transmission_telegram_dirs)
+            download_dir, progress_dir = await loop.run_in_executor(
+                None, partial(torrent_telegram_dirs, client))
         except Exception as e:
-            logging.error(f"Cannot route Telegram magnet to torrent client: {e}")
+            logging.error(f"Cannot route Telegram magnet to {client}: {e}")
             try:
                 await event.reply(f"❌ Torrent client not ready: {e}", parse_mode=None)
             except Exception:
@@ -819,13 +859,12 @@ class TelegramDownloader:
         for magnet in magnets:
             try:
                 result = await loop.run_in_executor(None, partial(
-                    transmission_add_magnet, magnet,
+                    torrent_add_magnet, client, magnet,
                     download_dir=download_dir, incomplete_dir=progress_dir,
                 ))
-                torrent = result.get('torrent-added') or result.get('torrent-duplicate') or {}
-                name = torrent.get('name') or 'torrent'
-                torrent_hash = torrent.get('hashString')
-                duplicate = 'torrent-duplicate' in result
+                name = result.get('name') or 'torrent'
+                torrent_hash = result.get('hash')
+                duplicate = result.get('duplicate')
                 reply = await event.reply(
                     f"🧲 Already in torrent client: {name}" if duplicate
                     else f"`{name}` download progress: 0%",
@@ -833,7 +872,7 @@ class TelegramDownloader:
                 )
                 # Live-edit the reply with download progress until it completes.
                 if torrent_hash and reply:
-                    asyncio.create_task(self._track_torrent_progress(reply, torrent_hash, name))
+                    asyncio.create_task(self._track_torrent_progress(reply, torrent_hash, name, client))
             except Exception as e:
                 logging.error(f"Failed to add Telegram magnet: {e}")
                 try:
@@ -848,19 +887,19 @@ class TelegramDownloader:
         except Exception:
             pass
 
-    async def _track_torrent_progress(self, reply_msg, torrent_hash, name, interval=15, max_polls=2880):
-        """Poll Transmission and edit the Telegram reply with live progress until
-        the torrent completes, errors, or is removed. max_polls caps runtime so a
-        stalled torrent can't leak the task (default ~12h at a 15s interval)."""
+    async def _track_torrent_progress(self, reply_msg, torrent_hash, name, client, interval=15, max_polls=2880):
+        """Poll the torrent client and edit the Telegram reply with live progress
+        until the torrent completes, errors, or is removed. max_polls caps runtime
+        so a stalled torrent can't leak the task (default ~12h at a 15s interval)."""
         import posixpath
         from functools import partial
-        from backend.web_app import transmission_get_torrent, transmission_rpc, transmission_telegram_dirs
+        from backend.web_app import torrent_get, torrent_set_location, torrent_telegram_dirs
         loop = asyncio.get_event_loop()
         last_text = None
         for _ in range(max_polls):
             await asyncio.sleep(interval)
             try:
-                t = await loop.run_in_executor(None, partial(transmission_get_torrent, torrent_hash))
+                t = await loop.run_in_executor(None, partial(torrent_get, client, torrent_hash))
             except Exception as e:
                 logging.error(f"Torrent progress poll failed for {name}: {e}")
                 continue
@@ -869,26 +908,25 @@ class TelegramDownloader:
                 return
             # A magnet's name is only a placeholder until metadata arrives.
             name = t.get('name') or name
-            if t.get('errorString'):
-                await self._safe_edit(reply_msg, f"❌ {name}: {t['errorString']}")
+            if t.get('error'):
+                await self._safe_edit(reply_msg, f"❌ {name}: {t['error']}")
                 return
-            pct = round((t.get('percentDone') or 0) * 100, 1)
+            pct = t.get('percent_done') or 0
             if pct >= 100:
-                download_dir = (t.get('downloadDir') or '').rstrip('/')
-                # Best-effort: force Transmission to move the files out of the
+                download_dir = (t.get('download_dir') or '').rstrip('/')
+                # Best-effort: force the client to move the files out of the
                 # temp/progress dir into the final download dir.
                 if download_dir:
                     try:
                         await loop.run_in_executor(None, partial(
-                            transmission_rpc, "torrent-set-location",
-                            {"ids": [torrent_hash], "location": download_dir, "move": True}))
+                            torrent_set_location, client, [torrent_hash], download_dir))
                     except Exception as e:
                         logging.error(f"torrent-set-location failed for {name}: {e}")
                 # Candidate remote paths: final dir first, then the temp dir in
                 # case the move hasn't landed yet (resolved over SFTP on demand).
                 candidates = [posixpath.join(download_dir, name)] if download_dir else []
                 try:
-                    tg_dl, tg_prog = await loop.run_in_executor(None, transmission_telegram_dirs)
+                    tg_dl, tg_prog = await loop.run_in_executor(None, partial(torrent_telegram_dirs, client))
                     candidates += [posixpath.join(tg_dl, name), posixpath.join(tg_prog, name)]
                 except Exception:
                     pass
@@ -897,7 +935,8 @@ class TelegramDownloader:
                 key = (reply_msg.chat_id, reply_msg.id)
                 self._pending_downlee[key] = {
                     'candidates': candidates, 'name': name,
-                    'size': t.get('totalSize') or 0, 'msg': reply_msg,
+                    'size': t.get('total_size') or 0, 'msg': reply_msg,
+                    'client': client,
                 }
                 await self._safe_edit(
                     reply_msg,
@@ -971,9 +1010,16 @@ class TelegramDownloader:
         if not path:
             await self._safe_edit(msg, f"❌ `{name}`: files not found on the VPS yet — try again shortly")
             return
+        # Land the files in the source channel's torrent client local folder, if set.
+        dest = None
+        client = pending.get('client')
+        if client:
+            from backend.web_app.torrent import CLIENTS, read_torrent_settings
+            if client in CLIENTS:
+                dest = ((read_torrent_settings().get(client) or {}).get('local_dir') or '').strip() or None
         try:
             res = await loop.run_in_executor(None, partial(
-                web.vps_downloader.start_download, path, pending.get('size') or 0))
+                web.vps_downloader.start_download, path, pending.get('size') or 0, dest))
         except Exception as e:
             logging.error(f"Failed to start DownLee transfer for {name}: {e}")
             await self._safe_edit(msg, f"❌ `{name}`: could not start download to DownLee")

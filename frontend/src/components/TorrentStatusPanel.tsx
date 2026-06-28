@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Magnet, ArrowDown, ArrowUp, Play, Pause, Trash2, Loader2, Search, X, Check, Sprout, Users,
+  Magnet, ArrowDown, ArrowUp, Play, Pause, Trash2, Loader2, Search, X, Check, Sprout, Users, RotateCw,
 } from 'lucide-react';
-import { fetchTorrentList, torrentAction, downloadVpsFile, type TorrentStatus } from '../api';
+import { fetchTorrentList, torrentAction, downloadVpsFile, type TorrentStatus, type TorrentClient } from '../api';
 import { formatBytes, formatTime } from '../utils/format';
 import { ConfirmDialog } from './ConfirmDialog';
 import { Tooltip } from './Tooltip';
@@ -20,21 +20,23 @@ const STATUS_STYLES: Record<TorrentStatus['status'], { label: string; cls: strin
   unknown: { label: 'Unknown', cls: 'bg-slate-500/15 text-slate-300 border-slate-500/30' },
 };
 
-export function TorrentStatusPanel({ onCountChange }: { onCountChange?: (n: number) => void } = {}) {
+export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentClient; onCountChange?: (n: number) => void }) {
   const navigate = useNavigate();
   const [torrents, setTorrents] = useState<TorrentStatus[]>([]);
   const [configured, setConfigured] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
-  // IDs with an action in flight (buttons disabled), and the torrent pending removal.
-  const [busy, setBusy] = useState<Set<number>>(new Set());
+  // Hashes with an action in flight (buttons disabled), and the torrent pending removal.
+  const [busy, setBusy] = useState<Set<string>>(new Set());
   const [removeTarget, setRemoveTarget] = useState<TorrentStatus | null>(null);
   const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [sortBy, setSortBy] = useState<'created' | 'name' | 'status'>('created');
   // DownLee transfer state: torrents with a transfer being started / already started.
-  const [dlBusy, setDlBusy] = useState<Set<number>>(new Set());
-  const [dlStarted, setDlStarted] = useState<Set<number>>(new Set());
-  // Multi-select: chosen torrent ids + whether the bulk remove dialog is open.
-  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [dlBusy, setDlBusy] = useState<Set<string>>(new Set());
+  const [dlStarted, setDlStarted] = useState<Set<string>>(new Set());
+  // Multi-select: chosen torrent hashes + whether the bulk remove dialog is open.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkRemove, setBulkRemove] = useState(false);
   // Guard against overlapping polls when a request runs longer than the interval.
   const inFlight = useRef(false);
@@ -43,7 +45,7 @@ export function TorrentStatusPanel({ onCountChange }: { onCountChange?: (n: numb
     if (inFlight.current) return;
     inFlight.current = true;
     try {
-      const res = await fetchTorrentList();
+      const res = await fetchTorrentList(client);
       setConfigured(res.configured);
       setError(res.error ?? null);
       setTorrents(res.torrents ?? []);
@@ -53,7 +55,7 @@ export function TorrentStatusPanel({ onCountChange }: { onCountChange?: (n: numb
       inFlight.current = false;
       setLoaded(true);
     }
-  }, []);
+  }, [client]);
 
   useEffect(() => {
     load();
@@ -62,53 +64,57 @@ export function TorrentStatusPanel({ onCountChange }: { onCountChange?: (n: numb
   }, [load]);
 
   // Report the torrent count up so the parent can show it in the tab label.
-  useEffect(() => { onCountChange?.(torrents.length); }, [torrents.length, onCountChange]);
+  // Route through a ref and depend only on the count, so an unstable callback
+  // from the parent can never turn this into a render loop.
+  const onCountChangeRef = useRef(onCountChange);
+  onCountChangeRef.current = onCountChange;
+  useEffect(() => { onCountChangeRef.current?.(torrents.length); }, [torrents.length]);
 
-  const runAction = async (action: 'start' | 'stop' | 'remove', t: TorrentStatus, deleteData = false) => {
-    setBusy(prev => new Set(prev).add(t.id));
+  const runAction = async (action: 'start' | 'stop' | 'remove' | 'verify', t: TorrentStatus, deleteData = false) => {
+    setBusy(prev => new Set(prev).add(t.hash));
     try {
-      const res = await torrentAction(action, [t.id], deleteData);
+      const res = await torrentAction(client, action, [t.hash], deleteData);
       if (res.error) setError(res.error);
       await load();
     } finally {
-      setBusy(prev => { const next = new Set(prev); next.delete(t.id); return next; });
+      setBusy(prev => { const next = new Set(prev); next.delete(t.hash); return next; });
     }
   };
 
   // Run an action across all currently-selected torrents in one RPC call.
   const runBulkAction = async (action: 'start' | 'stop' | 'remove', deleteData = false) => {
-    const ids = torrents.filter(t => selected.has(t.id)).map(t => t.id);
-    if (ids.length === 0) return;
-    setBusy(prev => { const next = new Set(prev); ids.forEach(i => next.add(i)); return next; });
+    const hashes = torrents.filter(t => selected.has(t.hash)).map(t => t.hash);
+    if (hashes.length === 0) return;
+    setBusy(prev => { const next = new Set(prev); hashes.forEach(h => next.add(h)); return next; });
     try {
-      const res = await torrentAction(action, ids, deleteData);
+      const res = await torrentAction(client, action, hashes, deleteData);
       if (res.error) setError(res.error);
       await load();
     } finally {
-      setBusy(prev => { const next = new Set(prev); ids.forEach(i => next.delete(i)); return next; });
+      setBusy(prev => { const next = new Set(prev); hashes.forEach(h => next.delete(h)); return next; });
       if (action === 'remove') setSelected(new Set());
     }
   };
 
-  const toggleSelect = (id: number) => setSelected(prev => {
+  const toggleSelect = (hash: string) => setSelected(prev => {
     const next = new Set(prev);
-    next.has(id) ? next.delete(id) : next.add(id);
+    next.has(hash) ? next.delete(hash) : next.add(hash);
     return next;
   });
 
   // Pull a finished torrent's files from the VPS down to DownLee (home server).
   const downloadToDownlee = async (t: TorrentStatus) => {
     setError(null);
-    setDlBusy(prev => new Set(prev).add(t.id));
+    setDlBusy(prev => new Set(prev).add(t.hash));
     try {
       const remotePath = `${(t.download_dir || '').replace(/\/+$/, '')}/${t.name}`;
-      const res = await downloadVpsFile(remotePath);
+      const res = await downloadVpsFile(remotePath, undefined, client);
       if (res.error) setError(res.error);
-      else setDlStarted(prev => new Set(prev).add(t.id));
+      else setDlStarted(prev => new Set(prev).add(t.hash));
     } catch {
       setError('Failed to start the download to DownLee');
     } finally {
-      setDlBusy(prev => { const next = new Set(prev); next.delete(t.id); return next; });
+      setDlBusy(prev => { const next = new Set(prev); next.delete(t.hash); return next; });
     }
   };
 
@@ -135,97 +141,133 @@ export function TorrentStatusPanel({ onCountChange }: { onCountChange?: (n: numb
   }
 
   const query = search.trim().toLowerCase();
-  const sorted = [...torrents].sort((a, b) => b.added_date - a.added_date);
-  const filtered = query ? sorted.filter(t => t.name.toLowerCase().includes(query)) : sorted;
+  // Distinct statuses present, for the status filter dropdown.
+  const statusesPresent = [...new Set(torrents.map(t => t.status))].sort();
+  const comparators: Record<typeof sortBy, (a: TorrentStatus, b: TorrentStatus) => number> = {
+    created: (a, b) => b.added_date - a.added_date,
+    name: (a, b) => (a.name || '').localeCompare(b.name || ''),
+    status: (a, b) => a.status.localeCompare(b.status) || b.added_date - a.added_date,
+  };
+  const filtered = torrents
+    .filter(t => (query ? t.name.toLowerCase().includes(query) : true))
+    .filter(t => (statusFilter ? t.status === statusFilter : true))
+    .sort(comparators[sortBy]);
 
-  const selectedCount = torrents.filter(t => selected.has(t.id)).length;
-  const allFilteredSelected = filtered.length > 0 && filtered.every(t => selected.has(t.id));
+  const selectedCount = torrents.filter(t => selected.has(t.hash)).length;
+  const allFilteredSelected = filtered.length > 0 && filtered.every(t => selected.has(t.hash));
   const toggleSelectAll = () => setSelected(prev => {
     if (allFilteredSelected) {
       const next = new Set(prev);
-      filtered.forEach(t => next.delete(t.id));
+      filtered.forEach(t => next.delete(t.hash));
       return next;
     }
-    return new Set([...prev, ...filtered.map(t => t.id)]);
+    return new Set([...prev, ...filtered.map(t => t.hash)]);
   });
-  const bulkBusy = torrents.some(t => selected.has(t.id) && busy.has(t.id));
+  const bulkBusy = torrents.some(t => selected.has(t.hash) && busy.has(t.hash));
 
   return (
     <div className="space-y-2">
-      {/* Search */}
-      <div className="relative mb-2">
-        <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-        <input
-          type="text"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search torrents..."
-          className="w-full bg-slate-800/50 border border-slate-700 rounded-lg py-2 pl-9 pr-9 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 transition-colors"
-        />
-        {search && (
+      {/* Toolbar: select-all · search · bulk actions (single row) */}
+      <div className="flex items-center gap-2">
+        {filtered.length > 0 && (
           <button
-            onClick={() => setSearch('')}
-            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white transition-colors"
-            title="Clear search"
+            onClick={toggleSelectAll}
+            className="flex items-center gap-1.5 shrink-0 text-sm text-slate-300 hover:text-white transition-colors"
+            title={allFilteredSelected ? 'Deselect all' : 'Select all'}
           >
-            <X className="w-4 h-4" />
+            <span className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${
+              allFilteredSelected ? 'bg-purple-500 border-purple-500' : 'border-slate-500'
+            }`}>
+              {allFilteredSelected && <Check className="w-3.5 h-3.5 text-white" />}
+            </span>
+            {selectedCount > 0 && <span className="hidden sm:inline">{selectedCount}</span>}
           </button>
+        )}
+
+        <div className="relative flex-1 min-w-0">
+          <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search torrents..."
+            className="w-full bg-slate-800/50 border border-slate-700 rounded-lg py-2 pl-9 pr-9 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 transition-colors"
+          />
+          {search && (
+            <button
+              onClick={() => setSearch('')}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white transition-colors"
+              title="Clear search"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+
+        {/* Status filter */}
+        <select
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value)}
+          title="Filter by status"
+          className="shrink-0 bg-slate-800/50 border border-slate-700 rounded-lg py-2 px-2 text-sm text-white focus:outline-none focus:border-purple-500 transition-colors cursor-pointer max-w-[130px]"
+        >
+          <option value="">All statuses</option>
+          {statusesPresent.map(s => (
+            <option key={s} value={s}>{(STATUS_STYLES[s] ?? STATUS_STYLES.unknown).label}</option>
+          ))}
+        </select>
+
+        {/* Sort field */}
+        <select
+          value={sortBy}
+          onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
+          title="Sort by"
+          className="shrink-0 bg-slate-800/50 border border-slate-700 rounded-lg py-2 px-2 text-sm text-white focus:outline-none focus:border-purple-500 transition-colors cursor-pointer"
+        >
+          <option value="created">Created</option>
+          <option value="name">Name</option>
+          <option value="status">Status</option>
+        </select>
+
+        {selectedCount > 0 && (
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={() => runBulkAction('start')}
+              disabled={bulkBusy}
+              title="Resume selected"
+              className="flex items-center gap-1.5 py-2 px-2.5 rounded-lg text-sm bg-slate-700/50 hover:bg-slate-600/50 text-slate-200 transition-colors disabled:opacity-50"
+            >
+              <Play className="w-4 h-4" /> <span className="hidden sm:inline">Resume</span>
+            </button>
+            <button
+              onClick={() => runBulkAction('stop')}
+              disabled={bulkBusy}
+              title="Pause selected"
+              className="flex items-center gap-1.5 py-2 px-2.5 rounded-lg text-sm bg-slate-700/50 hover:bg-slate-600/50 text-slate-200 transition-colors disabled:opacity-50"
+            >
+              <Pause className="w-4 h-4" /> <span className="hidden sm:inline">Pause</span>
+            </button>
+            <button
+              onClick={() => setBulkRemove(true)}
+              disabled={bulkBusy}
+              title="Remove selected"
+              className="flex items-center gap-1.5 py-2 px-2.5 rounded-lg text-sm border border-red-500/40 bg-red-500/10 hover:bg-red-500/25 text-red-400 transition-colors disabled:opacity-50"
+            >
+              {bulkBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />} <span className="hidden sm:inline">Remove</span>
+            </button>
+            <button
+              onClick={() => setSelected(new Set())}
+              className="p-1.5 text-slate-400 hover:text-white transition-colors"
+              title="Clear selection"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         )}
       </div>
 
       {error && (
         <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-2.5 text-red-400 text-sm">{error}</div>
-      )}
-
-      {/* Selection toolbar */}
-      {filtered.length > 0 && (
-        <div className="flex h-[52px] items-center gap-2 flex-wrap rounded-lg border border-slate-700/50 bg-slate-800/30 px-3 py-2">
-          <button
-            onClick={toggleSelectAll}
-            className="flex items-center gap-2 text-sm text-slate-300 hover:text-white transition-colors"
-            title={allFilteredSelected ? 'Deselect all' : 'Select all'}
-          >
-            <span className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${
-              allFilteredSelected ? 'bg-purple-500 border-purple-500' : 'border-slate-500'
-            }`}>
-              {allFilteredSelected && <Check className="w-3 h-3 text-white" />}
-            </span>
-            {selectedCount > 0 ? `${selectedCount} selected` : 'Select all'}
-          </button>
-
-          {selectedCount > 0 && (
-            <div className="flex items-center gap-2 ml-auto">
-              <button
-                onClick={() => runBulkAction('start')}
-                disabled={bulkBusy}
-                className="flex items-center gap-1.5 py-1.5 px-2.5 rounded-lg text-sm bg-slate-700/50 hover:bg-slate-600/50 text-slate-200 transition-colors disabled:opacity-50"
-              >
-                <Play className="w-4 h-4" /> Resume
-              </button>
-              <button
-                onClick={() => runBulkAction('stop')}
-                disabled={bulkBusy}
-                className="flex items-center gap-1.5 py-1.5 px-2.5 rounded-lg text-sm bg-slate-700/50 hover:bg-slate-600/50 text-slate-200 transition-colors disabled:opacity-50"
-              >
-                <Pause className="w-4 h-4" /> Pause
-              </button>
-              <button
-                onClick={() => setBulkRemove(true)}
-                disabled={bulkBusy}
-                className="flex items-center gap-1.5 py-1.5 px-2.5 rounded-lg text-sm border border-red-500/40 bg-red-500/10 hover:bg-red-500/25 text-red-400 transition-colors disabled:opacity-50"
-              >
-                {bulkBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />} Remove
-              </button>
-              <button
-                onClick={() => setSelected(new Set())}
-                className="p-1.5 text-slate-400 hover:text-white transition-colors"
-                title="Clear selection"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-          )}
-        </div>
       )}
 
       {!error && torrents.length === 0 && (
@@ -242,39 +284,44 @@ export function TorrentStatusPanel({ onCountChange }: { onCountChange?: (n: numb
         <div className="min-h-[30vh] flex items-center justify-center text-slate-400">
           <div className="text-center">
             <Search className="w-12 h-12 mx-auto mb-4 opacity-50" />
-            <p>No torrents match "{search.trim()}"</p>
-            <button onClick={() => setSearch('')} className="text-sm text-cyan-400 hover:text-cyan-300 mt-1">
-              Clear search
+            <p>No torrents match the current filters</p>
+            <button
+              onClick={() => { setSearch(''); setStatusFilter(''); }}
+              className="text-sm text-cyan-400 hover:text-cyan-300 mt-1"
+            >
+              Clear filters
             </button>
           </div>
         </div>
       )}
 
+      {filtered.length > 0 && (
+      <div className="space-y-2 mt-4">
       {filtered.map(t => {
         const style = STATUS_STYLES[t.status] ?? STATUS_STYLES.unknown;
         const active = t.status === 'downloading';
         const paused = t.status === 'stopped';
-        const isBusy = busy.has(t.id);
+        const isBusy = busy.has(t.hash);
         const done = t.percent_done >= 100;
-        const dlInFlight = dlBusy.has(t.id);
-        const dlDone = dlStarted.has(t.id);
+        const dlInFlight = dlBusy.has(t.hash);
+        const dlDone = dlStarted.has(t.hash);
         return (
           <div
             key={t.hash}
             className={`rounded-xl border bg-slate-800/30 p-3 sm:p-4 transition-colors ${
-              selected.has(t.id) ? 'border-purple-500/60 bg-purple-500/5' : 'border-slate-700/50'
+              selected.has(t.hash) ? 'border-purple-500/60 bg-purple-500/5' : 'border-slate-700/50'
             }`}
           >
             <div className="flex items-center justify-between gap-3">
               <button
-                onClick={() => toggleSelect(t.id)}
+                onClick={() => toggleSelect(t.hash)}
                 className="shrink-0"
-                title={selected.has(t.id) ? 'Deselect' : 'Select'}
+                title={selected.has(t.hash) ? 'Deselect' : 'Select'}
               >
                 <span className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${
-                  selected.has(t.id) ? 'bg-purple-500 border-purple-500' : 'border-slate-500 hover:border-slate-300'
+                  selected.has(t.hash) ? 'bg-purple-500 border-purple-500' : 'border-slate-500 hover:border-slate-300'
                 }`}>
-                  {selected.has(t.id) && <Check className="w-3 h-3 text-white" />}
+                  {selected.has(t.hash) && <Check className="w-3 h-3 text-white" />}
                 </span>
               </button>
               <span className="text-sm sm:text-base text-white font-medium truncate min-w-0 flex-1" title={t.name}>{t.name}</span>
@@ -342,10 +389,25 @@ export function TorrentStatusPanel({ onCountChange }: { onCountChange?: (n: numb
               <span className="truncate max-w-[220px]" title={t.download_dir}>{t.download_dir}</span>
             </div>
 
-            {t.error && <p className="text-xs text-red-400 mt-1">{t.error}</p>}
+            {t.error && (
+              <div className="mt-2 flex items-start justify-between gap-3 rounded-lg bg-red-500/10 border border-red-500/30 p-2">
+                <p className="text-xs text-red-400 min-w-0">{t.error}</p>
+                <button
+                  onClick={() => runAction('verify', t)}
+                  disabled={isBusy}
+                  title="Recheck local data on the VPS, then start"
+                  className="flex items-center gap-1.5 shrink-0 py-1 px-2 rounded-lg text-xs bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 transition-colors disabled:opacity-50"
+                >
+                  {isBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCw className="w-3.5 h-3.5" />}
+                  Verify &amp; start
+                </button>
+              </div>
+            )}
           </div>
         );
       })}
+      </div>
+      )}
 
       <ConfirmDialog
         isOpen={removeTarget !== null}

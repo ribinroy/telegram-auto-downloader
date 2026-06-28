@@ -22,7 +22,9 @@ A self-hosted media downloader with Telegram integration and a modern web dashbo
 - **URL Downloads**: Download videos from YouTube, Twitter, TikTok, Instagram, and 1000+ sites via yt-dlp
 - **VPS / Seedbox Downloads**: Connect to a remote server over SSH/SFTP, browse watched folders, and pull files or whole directories to the home server (with resume support)
 - **autoSync**: Watched VPS folders can auto-download new files on an hourly check
-- **Magnet Link Handoff**: Paste a magnet link to send it to the VPS's Transmission torrent client — optionally into a watched folder so autoSync brings the result home
+- **Torrent Clients (Transmission + qBittorrent)**: Configure either or both clients on the VPS at once, each with its own connection, default download folder, and temp/incomplete folder. The VPS page shows a tab per configured client with a live status panel (search, status filter, sort, multi-select pause/resume/remove, and one-click "Verify & start" recovery for torrents whose data is missing)
+- **Magnet Link Handoff**: Paste a magnet link and pick which client to send it to — optionally into a watched folder so autoSync brings the result home
+- **Per-Channel Magnet Routing**: Each monitored Telegram channel can route its magnets to a chosen client (Settings → Telegram), with a global fallback client (Settings → VPS)
 - **Per-Source Settings**: Each source (telegram, youtube, vps, ...) can have its own destination folder, default quality, and hidden flag (Settings → Sources)
 - **Per-Watchfolder Settings**: Each watched VPS folder can have its own local destination folder and hidden flag
 - **Quality Selection**: Choose video quality/resolution when downloading URLs (preselected from the source's default quality)
@@ -161,10 +163,13 @@ Files sent to the configured Telegram chat/channel are automatically downloaded.
 3. Open the **VPS Files** page to browse watched folders and download files/directories to the home server
 4. Optionally give each watched folder a local destination folder, a hidden flag, and enable **autoSync** to pull new files automatically every hour
 
-### Magnet Links (VPS Torrent Client)
-1. Configure the Transmission web URL + credentials in **Settings → VPS Connection → Torrent Client**
-2. Paste a magnet link on the downloads page — DownLee detects it and offers "Send to torrent client"
+### Magnet Links (VPS Torrent Clients)
+1. Configure **Transmission and/or qBittorrent** in **Settings → VPS Connection → Torrent Clients**. Each client takes a Web/RPC (Transmission) or WebUI (qBittorrent) URL + credentials, plus an optional default download folder and temp (incomplete) folder on the VPS. Test the connection, then Save.
+2. Paste a magnet link on the downloads page — DownLee detects it, lets you **pick the client** (when more than one is configured), and sends it
 3. Optionally pick a watched folder as the torrent's download directory so autoSync fetches the finished files
+4. The **VPS page** has a tab per configured client showing live torrent status — search, filter by status, sort, and select multiple torrents to pause/resume/remove together. If a torrent reports missing data ("No data found"), use **Verify & start** to recheck and resume it.
+
+**Telegram-channel magnets**: a magnet posted in a monitored channel is auto-added to a torrent client. Set a per-channel client in **Settings → Telegram**, or a global fallback in **Settings → VPS → Torrent Clients**. The bot replies to the message with live download progress and, on completion, a "reply *download*" prompt to pull the files to the home server.
 
 ### Per-Source Settings
 Configure each source's destination folder, default quality, and hidden flag in **Settings → Sources**. Hidden sources/folders are filtered from the default view; reveal them with a triple-click on the connection status pill or **Ctrl+X**.
@@ -229,9 +234,13 @@ By default the server binds to `0.0.0.0` and allows all CORS origins (for both t
 | `/api/vps/files` | GET | Live listing of watched VPS folders |
 | `/api/vps/download` | POST | Download a VPS file/directory to the home server |
 | `/api/vps/delete-remote` | POST | Delete a file/directory on the VPS |
-| `/api/settings/torrent` | GET/POST/DELETE | Torrent client (Transmission) config |
-| `/api/settings/torrent/test` | POST | Test the Transmission connection |
-| `/api/torrent/add` | POST | Send a magnet link to the VPS torrent client |
+| `/api/settings/torrent` | GET/POST/DELETE | Torrent client config (both Transmission + qBittorrent; POST/DELETE take a `client`) |
+| `/api/settings/torrent/test` | POST | Test a client connection (`client`) |
+| `/api/settings/torrent/telegram-default` | POST | Set the global fallback client for Telegram magnets |
+| `/api/settings/telegram/channels/<id>` | PATCH | Set a channel's magnet torrent client (`torrent_client`) |
+| `/api/torrent/add` | POST | Send a magnet to a client (`magnet`, `client`, `download_dir?`) |
+| `/api/torrent/list` | GET | Live torrent status for a client (`?client=`) |
+| `/api/torrent/action` | POST | Control torrents (`client`, `action` start/stop/remove/verify, `hashes`) |
 | `/api/analytics` | GET | Get analytics data |
 | `/api/settings/cookies` | GET/POST | Manage yt-dlp cookies |
 | `/api/jobs/ytdlp-version` | GET | Get current yt-dlp version |

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { X, Link, Loader2, AlertCircle, CheckCircle, Download, Folder, Magnet, Send } from 'lucide-react';
-import { checkUrl, downloadUrl, fetchMappings, addTorrent, fetchTorrentConfig, fetchVpsFolders, type VpsWatchFolder } from '../api';
+import { checkUrl, downloadUrl, fetchMappings, addTorrent, fetchTorrentConfig, fetchVpsFolders, type VpsWatchFolder, type TorrentClient } from '../api';
 import type { UrlCheckResult, VideoFormat, SourceMapping } from '../types';
 import { formatBytes } from '../utils/format';
 
@@ -52,9 +52,10 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
   const [error, setError] = useState<string | null>(null);
   const [customFilename, setCustomFilename] = useState('');
   const [sourceMapping, setSourceMapping] = useState<SourceMapping | null>(null);
-  // Magnet -> VPS torrent client (Transmission) state
+  // Magnet -> VPS torrent client state
   const [magnetMode, setMagnetMode] = useState(false);
-  const [torrentConfigured, setTorrentConfigured] = useState(false);
+  const [torrentClients, setTorrentClients] = useState<TorrentClient[]>([]);
+  const [magnetClient, setMagnetClient] = useState<TorrentClient | ''>('');
   const [vpsFolders, setVpsFolders] = useState<VpsWatchFolder[]>([]);
   const [torrentDest, setTorrentDest] = useState('');
   const [sendingMagnet, setSendingMagnet] = useState(false);
@@ -71,23 +72,29 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
     setMagnetResult(null);
     try {
       const [cfg, folders] = await Promise.all([fetchTorrentConfig(), fetchVpsFolders()]);
-      setTorrentConfigured(cfg.configured);
+      const clients: TorrentClient[] = [];
+      if (cfg.transmission.configured) clients.push('transmission');
+      if (cfg.qbittorrent.configured) clients.push('qbittorrent');
+      setTorrentClients(clients);
+      // Default to the Telegram default if configured, else the first client.
+      setMagnetClient((cfg.telegram_default && clients.includes(cfg.telegram_default))
+        ? cfg.telegram_default : (clients[0] ?? ''));
       setVpsFolders(folders.filter(f => f.active));
-      if (!cfg.configured) {
-        setError('Torrent client is not configured — add it under Settings → VPS Connection');
+      if (clients.length === 0) {
+        setError('No torrent client is configured — add one under Settings → VPS Connection');
       }
     } catch {
-      setTorrentConfigured(false);
+      setTorrentClients([]);
       setError('Failed to load torrent client settings');
     }
   };
 
   const handleSendMagnet = async () => {
-    if (!isMagnetLink(url) || !torrentConfigured || sendingMagnet) return;
+    if (!isMagnetLink(url) || !magnetClient || sendingMagnet) return;
     setSendingMagnet(true);
     setError(null);
     try {
-      const res = await addTorrent(url.trim(), torrentDest || null);
+      const res = await addTorrent(url.trim(), magnetClient, torrentDest || null);
       if (res.error) setError(res.error);
       else setMagnetResult(res);
     } catch {
@@ -317,7 +324,7 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
               <div className="flex items-center gap-2">
                 <Magnet className="w-4 h-4 sm:w-5 sm:h-5 text-purple-400" />
                 <span className="text-xs sm:text-sm text-purple-300 font-medium">
-                  Magnet link — sends to the VPS torrent client
+                  Magnet link — sends to a VPS torrent client
                 </span>
               </div>
               {magnetName(url) && (
@@ -332,24 +339,48 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
                   </span>
                 </div>
               ) : (
-                <div>
-                  <p className="text-xs sm:text-sm text-slate-400 mb-1.5">Download to (on the VPS):</p>
-                  <select
-                    value={torrentDest}
-                    onChange={(e) => setTorrentDest(e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-600 rounded-lg py-1.5 px-2.5 text-xs sm:text-sm text-white focus:outline-none focus:border-purple-500 transition-colors"
-                  >
-                    <option value="">Client default folder</option>
-                    {vpsFolders.map(f => (
-                      <option key={f.id} value={f.path}>{f.path}{f.auto_sync ? ' (autoSync)' : ''}</option>
-                    ))}
-                  </select>
-                  {torrentDest && vpsFolders.find(f => f.path === torrentDest)?.auto_sync && (
-                    <p className="text-[11px] text-slate-500 mt-1">
-                      autoSync will pull finished files to the home server on its hourly check.
-                    </p>
+                <>
+                  {/* Torrent client picker (shown when more than one is configured) */}
+                  {torrentClients.length > 0 && (
+                    <div>
+                      <p className="text-xs sm:text-sm text-slate-400 mb-1.5">Torrent client:</p>
+                      <div className="flex gap-2">
+                        {torrentClients.map(c => (
+                          <button
+                            key={c}
+                            type="button"
+                            onClick={() => setMagnetClient(c)}
+                            className={`flex-1 py-1.5 px-2.5 rounded-lg text-xs sm:text-sm font-medium border transition-colors capitalize ${
+                              magnetClient === c
+                                ? 'bg-purple-500/30 border-purple-400/50 text-white'
+                                : 'bg-slate-900 border-slate-600 text-slate-300 hover:border-slate-500'
+                            }`}
+                          >
+                            {c}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                   )}
-                </div>
+                  <div>
+                    <p className="text-xs sm:text-sm text-slate-400 mb-1.5">Download to (on the VPS):</p>
+                    <select
+                      value={torrentDest}
+                      onChange={(e) => setTorrentDest(e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-600 rounded-lg py-1.5 px-2.5 text-xs sm:text-sm text-white focus:outline-none focus:border-purple-500 transition-colors"
+                    >
+                      <option value="">Client default folder</option>
+                      {vpsFolders.map(f => (
+                        <option key={f.id} value={f.path}>{f.path}{f.auto_sync ? ' (autoSync)' : ''}</option>
+                      ))}
+                    </select>
+                    {torrentDest && vpsFolders.find(f => f.path === torrentDest)?.auto_sync && (
+                      <p className="text-[11px] text-slate-500 mt-1">
+                        autoSync will pull finished files to the home server on its hourly check.
+                      </p>
+                    )}
+                  </div>
+                </>
               )}
             </div>
           )}
@@ -455,7 +486,7 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
             ) : (
               <button
                 onClick={handleSendMagnet}
-                disabled={sendingMagnet || !torrentConfigured}
+                disabled={sendingMagnet || !magnetClient}
                 className="flex-1 py-2 sm:py-2.5 px-3 sm:px-4 bg-purple-600 hover:bg-purple-500 disabled:bg-purple-900 disabled:cursor-not-allowed text-white text-sm sm:text-base rounded-lg transition-colors flex items-center justify-center gap-2"
               >
                 {sendingMagnet ? (

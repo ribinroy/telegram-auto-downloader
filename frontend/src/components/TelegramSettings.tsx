@@ -4,8 +4,9 @@ import {
   fetchTelegramStatus, sendTelegramCode, verifyTelegramCode, verifyTelegramPassword,
   telegramBotLogin, telegramLogout, addTelegramChannel, removeTelegramChannel, fetchTelegramDialogs,
   fetchTelegramApiConfig, saveTelegramApiConfig,
+  fetchTorrentConfig, setChannelTorrentClient,
 } from '../api';
-import type { TelegramStatus, TelegramChannel, TelegramDialog, TelegramApiConfig } from '../api';
+import type { TelegramStatus, TelegramChannel, TelegramDialog, TelegramApiConfig, TorrentConfig, TorrentClient } from '../api';
 import { ConfirmDialog } from './ConfirmDialog';
 
 type LoginStep = 'phone' | 'code' | 'password';
@@ -31,6 +32,8 @@ export function TelegramSettings() {
   const [addingChannel, setAddingChannel] = useState(false);
   const [removeTarget, setRemoveTarget] = useState<TelegramChannel | null>(null);
   const [logoutConfirm, setLogoutConfirm] = useState(false);
+  // Configured torrent clients, for the per-channel magnet-target selector.
+  const [torrentConfig, setTorrentConfig] = useState<TorrentConfig | null>(null);
 
   // Dialog picker state
   const [dialogs, setDialogs] = useState<TelegramDialog[] | null>(null);
@@ -52,6 +55,7 @@ export function TelegramSettings() {
       setApiConfig(api);
       setApiId(api.api_id ? String(api.api_id) : '');
       setShowApiForm(!api.configured);
+      fetchTorrentConfig().then(setTorrentConfig).catch(() => {});
       if (s.error) setError(s.error);
     } catch {
       setError('Failed to load Telegram status');
@@ -202,6 +206,19 @@ export function TelegramSettings() {
       }
     } catch {
       setError('Failed to remove channel');
+    }
+  };
+
+  const handleChannelClientChange = async (channel: TelegramChannel, client: TorrentClient | null) => {
+    setError(null);
+    // Optimistic update so the select reflects the choice immediately.
+    setChannels(prev => prev.map(c => (c.id === channel.id ? { ...c, torrent_client: client } : c)));
+    try {
+      const result = await setChannelTorrentClient(channel.id, client);
+      if (result.error) setError(result.error);
+      if (result.channels) setChannels(result.channels);
+    } catch {
+      setError('Failed to update the channel torrent client');
     }
   };
 
@@ -560,21 +577,40 @@ export function TelegramSettings() {
             <p className="text-sm text-slate-500 mb-3">No channels are being monitored yet.</p>
           ) : (
             <ul className="space-y-2 mb-4">
-              {channels.map(c => (
-                <li key={c.id} className="flex items-center justify-between gap-2 bg-slate-800/50 rounded-lg px-3 py-2">
-                  <div className="min-w-0">
-                    <p className="text-sm text-white truncate">{c.title}</p>
-                    <p className="text-xs text-slate-500">{c.id}</p>
-                  </div>
-                  <button
-                    onClick={() => setRemoveTarget(c)}
-                    className="text-slate-500 hover:text-red-400 transition-colors shrink-0"
-                    title="Stop monitoring"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </li>
-              ))}
+              {channels.map(c => {
+                const transmissionOn = !!torrentConfig?.transmission?.configured;
+                const qbittorrentOn = !!torrentConfig?.qbittorrent?.configured;
+                const anyClient = transmissionOn || qbittorrentOn;
+                return (
+                  <li key={c.id} className="flex items-center justify-between gap-2 bg-slate-800/50 rounded-lg px-3 py-2">
+                    <div className="min-w-0">
+                      <p className="text-sm text-white truncate">{c.title}</p>
+                      <p className="text-xs text-slate-500">{c.id}</p>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {anyClient && (
+                        <select
+                          value={c.torrent_client ?? ''}
+                          onChange={(e) => handleChannelClientChange(c, (e.target.value || null) as TorrentClient | null)}
+                          title="Torrent client for magnets posted in this channel"
+                          className="bg-slate-700/50 border border-slate-600 rounded-lg py-1 px-1.5 text-xs text-white focus:outline-none focus:border-cyan-500 transition-colors max-w-[130px]"
+                        >
+                          <option value="">Default magnet client</option>
+                          {transmissionOn && <option value="transmission">Transmission</option>}
+                          {qbittorrentOn && <option value="qbittorrent">qBittorrent</option>}
+                        </select>
+                      )}
+                      <button
+                        onClick={() => setRemoveTarget(c)}
+                        className="text-slate-500 hover:text-red-400 transition-colors"
+                        title="Stop monitoring"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </li>
+                );
+              })}
             </ul>
           )}
 

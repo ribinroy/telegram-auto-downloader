@@ -5,7 +5,8 @@ export const ROUTES = {
   SETTINGS_VPS: '/settings/vps',
   VPS: '/vps',
   VPS_FILES: '/vps/files',
-  VPS_TORRENTS: '/vps/torrents',
+  VPS_TRANSMISSION: '/vps/transmission',
+  VPS_QBITTORRENT: '/vps/qbittorrent',
 } as const;
 
 // Build a settings URL for a specific tab, e.g. settingsTab('vps') => '/settings/vps'

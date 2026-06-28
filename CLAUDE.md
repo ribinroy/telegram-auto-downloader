@@ -64,7 +64,8 @@ Main Thread
 |  |- web_app/                      # Flask app package (split by concern)
 |  |  |- __init__.py                # WebApp class (composes route mixins) + public re-exports
 |  |  |- base.py                    # Shared globals (socketio/web_app), JWT token_required
-|  |  |- torrent.py                 # Transmission RPC helpers (add/list/session/telegram dirs)
+|  |  |- torrent.py                 # Client-agnostic torrent dispatchers + Transmission backend (add/list/session/telegram dirs)
+|  |  |- qbittorrent.py             # qBittorrent WebUI API v2 backend (stdlib urllib + cookiejar)
 |  |  |- vps.py                     # VPS SSH/SFTP connection helpers
 |  |  |- helpers.py                 # Misc helpers (candidate_file_paths)
 |  |  '- routes/                    # Per-domain Flask route mixins (auth, downloads, url,
@@ -178,12 +179,18 @@ Note: legacy `labels`/`source_labels` tables and `downloads.label_id` may still 
 - `POST /api/vps/download` - Download a file/directory to the home server
 - `POST /api/vps/delete-remote` - Delete on the VPS
 
-### Torrent Client (Transmission on the VPS)
-- `GET/POST/DELETE /api/settings/torrent` - Config (URL normalized to the RPC endpoint, password encrypted; `incomplete_dir` = temp folder for in-progress downloads)
-- `POST /api/settings/torrent/test` - session-get connectivity check
-- `POST /api/torrent/add` - Send a magnet link (`{magnet, download_dir?}`); RPC helper `transmission_rpc()` handles the 409 session-id handshake
-- `GET /api/torrent/list` - Live status of all torrents (name, status label, percent, down/up rate, size, ETA, download dir, error)
-- Temp folder: `apply_torrent_session()` pushes `incomplete-dir`/`incomplete-dir-enabled` via `session-set` (applied on config save + re-applied before each add). Transmission downloads into the temp dir, then moves to the torrent's `download-dir` on completion.
+### Torrent Clients (Transmission + qBittorrent on the VPS)
+- **Both clients are configurable and live simultaneously.** Config is a nested `torrent_config` setting: `{transmission:{url,username,password_enc,download_dir,incomplete_dir}, qbittorrent:{...}, telegram_default}`. A legacy flat Transmission config auto-migrates on read (`read_torrent_settings()` in `web_app/torrent.py`).
+- `web_app/torrent.py` provides **client-agnostic dispatchers** (`torrent_test/add_magnet/list/control/get/set_location/telegram_dirs`, `apply_torrent_session`) that take an explicit client and route to the Transmission backend (in the same file) or the qBittorrent backend (`web_app/qbittorrent.py`). Everything keys torrents by **hash** (Transmission RPC accepts hashes as `ids`; qBittorrent is hash-native), so one code path drives both.
+- `GET /api/settings/torrent` - Both clients' config (passwords never exposed) + `telegram_default`
+- `POST /api/settings/torrent` - Save one client (`{client, url, username, password?, download_dir?, incomplete_dir?}`); Transmission URL normalized to the RPC endpoint, qBittorrent uses the base WebUI URL; password encrypted at rest
+- `DELETE /api/settings/torrent?client=...` / `POST /api/settings/torrent/telegram-default` (`{client|null}`)
+- `POST /api/settings/torrent/test` - `{client, ...}` connectivity check (Transmission session-get / qBittorrent version)
+- `POST /api/torrent/add` - Send a magnet (`{magnet, client, download_dir?}`); falls back to the client's configured `download_dir` when none given
+- `GET /api/torrent/list?client=...` - Live status of that client's torrents (normalized shape: name, hash, status label, percent, down/up rate, size, ETA, download dir, error, peers/seeds)
+- `POST /api/torrent/action` - `{client, action:start|stop|remove, hashes:[str], delete_data?}` (legacy `ids` still accepted as hashes)
+- Temp folder: `apply_torrent_session()` pushes the incomplete/temp dir (Transmission `session-set incomplete-dir`; qBittorrent `setPreferences temp_path`), applied on config save + re-applied before each add. The client downloads into the temp dir, then moves to the torrent's download dir on completion.
+- Frontend: Settings → VPS shows a `TorrentClientCard` per client; the VPS page has per-client tabs (Files · Transmission · qBittorrent), each its own `TorrentStatusPanel` (hash-based multi-select). Pasted magnets pick the client in `AddUrlModal`.
 
 ### Video Streaming
 - `GET /api/video/stream/<id>` - Range-request video streaming
@@ -247,11 +254,11 @@ All config via `.env` file at project root (loaded by python-dotenv):
 3. Destination resolved via `resolve_spec('vps', path=remote_path)`: watched folder's `folder` -> 'vps' source mapping -> `DOWNLOAD_DIR/VPS`
 4. autoSync: hourly scan of `auto_sync` folders on the active connection, downloads files that appear after the baseline snapshot
 
-### Magnet Links (Transmission)
-1. AddUrlModal detects `magnet:` input -> `POST /api/torrent/add`
-2. Backend calls the Transmission RPC API (`transmission_rpc()` in `web_app/torrent.py`) with optional `download-dir` (e.g. a watched folder, so autoSync fetches the result)
+### Magnet Links (Transmission / qBittorrent)
+1. AddUrlModal detects `magnet:` input -> user picks the target client -> `POST /api/torrent/add` (`{magnet, client, download_dir?}`)
+2. Backend dispatches via `torrent_add_magnet(client, ...)` (Transmission RPC or qBittorrent WebUI) with optional `download-dir` (e.g. a watched folder, so autoSync fetches the result)
 3. No local download record is created — the torrent lives on the VPS
-4. **Telegram-sourced magnets**: a magnet link posted in a monitored channel is detected in `telegram_handler._handle_new_file()` and handed off via `transmission_add_magnet()`. Routed to `<root>/telegram/downloads` (temp in `<root>/telegram/progress`), where `<root>` is the PARENT of Transmission's default download dir (`transmission_telegram_dirs()` — so a default of `<root>/movies` puts telegram at `<root>/telegram`, a sibling, not nested), auto-started, and the bot replies with the torrent name. The per-torrent temp dir is applied right before the add (Transmission's incomplete-dir is session-wide but only affects active torrents). A background task (`_track_torrent_progress`) then polls Transmission (`transmission_get_torrent()`) every 15s and live-edits that reply (`` `name` download progress: xx% ``) until the torrent completes, errors, or is removed (capped at ~12h). On completion the message becomes a `Reply "download" to this message to download it to DownLee` prompt and the (chat_id, msg_id)→{path,...} is recorded in `_pending_downlee`. Replying "download" to that prompt (`_maybe_handle_downlee_reply`, checked at the top of `_handle_new_file`) starts `vps_downloader.start_download()` to pull the completed files VPS→DownLee. On completion the tracker also issues `torrent-set-location` (move=true) to force files out of the temp dir, and the DownLee trigger resolves the real remote path over SFTP (`_resolve_existing_remote` tries the final dir then the temp dir) so it works whether or not Transmission moved the files. The torrent's live name (`t['name']`) is used, since a magnet's name is a placeholder until metadata arrives. (Replies are used rather than reactions — reaction updates aren't reliably delivered, esp. to bot accounts.) After starting, `_track_downlee_progress` polls the transfer's DB record and live-edits the same Telegram message with `xx%` until done/failed.
+4. **Telegram-sourced magnets**: a magnet link posted in a monitored channel is detected in `telegram_handler._handle_new_file()` and handed off to the client resolved by **`torrent_client_for_chat(event.chat_id)`** — the channel's own `torrent_client` (stored per-channel in the `telegram_channels` settings JSON, set via `PATCH /api/settings/telegram/channels/<id>`) if set, else the global **`telegram_default`** fallback (`get_telegram_default()`); if neither is set the bot replies that no client is configured. Routed via `torrent_telegram_dirs(client)` to `<base>/telegram/downloads` (temp in `<base>/telegram/progress`), where `<base>` is the client's configured `download_dir` (or, if blank, a sibling of the client's own default download dir), auto-started, and the bot replies with the torrent name. The per-torrent temp dir is applied right before the add. A background task (`_track_torrent_progress`, given the client) polls the client (`torrent_get()`) every 15s and live-edits that reply (`` `name` download progress: xx% ``) until the torrent completes, errors, or is removed (capped at ~12h). On completion the message becomes a `Reply "download" to this message to download it to DownLee` prompt and the (chat_id, msg_id)→{candidates,...} is recorded in `_pending_downlee`. Replying "download" to that prompt (`_maybe_handle_downlee_reply`, checked at the top of `_handle_new_file`) starts `vps_downloader.start_download()` to pull the completed files VPS→DownLee. On completion the tracker also issues `torrent_set_location()` (move) to force files out of the temp dir, and the DownLee trigger resolves the real remote path over SFTP (`_resolve_existing_remote` tries the final dir then the temp dir) so it works whether or not the client moved the files. The torrent's live name is used, since a magnet's name is a placeholder until metadata arrives. (Replies are used rather than reactions — reaction updates aren't reliably delivered, esp. to bot accounts.) After starting, `_track_downlee_progress` polls the transfer's DB record and live-edits the same Telegram message with `xx%` until done/failed.
 
 ### Spec Resolution (folder/quality/hidden)
 - `backend/utils.resolve_spec(source, path=None)` reads `download_type_maps` (+ longest-prefix `vps_watch_folders` match for VPS paths)
