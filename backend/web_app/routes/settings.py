@@ -195,6 +195,23 @@ class SettingsRoutesMixin:
             except Exception as e:
                 return jsonify({"error": str(e)}), 400
 
+        @self.app.route("/api/settings/telegram/channels/<chat_id>", methods=["PATCH"])
+        @token_required
+        def telegram_update_channel(chat_id):
+            """Set which torrent client this channel's magnets go to.
+            Body: {torrent_client: 'transmission'|'qbittorrent'|null}."""
+            try:
+                chat_id = int(chat_id)
+            except ValueError:
+                return jsonify({"error": "Invalid chat ID"}), 400
+            if not self.telegram_downloader:
+                return jsonify({"error": "Telegram is not configured"}), 400
+            client = (request.json or {}).get("torrent_client")
+            result = self.telegram_downloader.set_channel_torrent_client(chat_id, client)
+            if result.get("error"):
+                return jsonify(result), 400
+            return jsonify(result)
+
         @self.app.route("/api/settings/telegram/dialogs", methods=["GET"])
         @token_required
         def telegram_dialogs():

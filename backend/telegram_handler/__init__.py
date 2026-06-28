@@ -263,6 +263,34 @@ class TelegramDownloader:
         self._register_handler()
         return {'channels': self.get_channels()}
 
+    def set_channel_torrent_client(self, chat_id, client):
+        """Set (or clear) the torrent client a channel's magnets are sent to.
+        `client` is 'transmission'/'qbittorrent', or None to use the global
+        default. Returns the updated channels or an error dict."""
+        from backend.web_app.torrent import CLIENTS
+        if client in ('', 'none', None):
+            client = None
+        elif client not in CLIENTS:
+            return {'error': 'Unknown torrent client'}
+        match = next((c for c in self.channels if c['id'] == chat_id), None)
+        if not match:
+            return {'error': 'Channel is not monitored'}
+        if client is None:
+            match.pop('torrent_client', None)
+        else:
+            match['torrent_client'] = client
+        self._save_channels()
+        return {'channels': self.get_channels()}
+
+    def torrent_client_for_chat(self, chat_id):
+        """Resolve which torrent client a chat's magnets go to: the channel's
+        own setting, else the global Telegram default. None if neither is set."""
+        from backend.web_app.torrent import get_telegram_default
+        match = next((c for c in self.channels if c['id'] == chat_id), None)
+        if match and match.get('torrent_client'):
+            return match['torrent_client']
+        return get_telegram_default()
+
     async def list_dialogs(self, limit=200):
         """List the account's dialogs (channels/groups first) for the picker UI."""
         if self.client is None:
@@ -803,17 +831,16 @@ class TelegramDownloader:
         telegram/progress) and start automatically. The client calls are sync, so
         they run in an executor to avoid blocking the Telegram event loop."""
         from functools import partial
-        from backend.web_app import (
-            get_telegram_default, torrent_telegram_dirs, torrent_add_magnet,
-        )
+        from backend.web_app import torrent_telegram_dirs, torrent_add_magnet
         loop = asyncio.get_event_loop()
 
-        client = await loop.run_in_executor(None, get_telegram_default)
+        client = self.torrent_client_for_chat(event.chat_id)
         if not client:
             try:
                 await event.reply(
-                    "❌ No default torrent client set for Telegram magnets "
-                    "(configure one under Settings → VPS).", parse_mode=None)
+                    "❌ No torrent client set for this channel's magnets "
+                    "(set one in Settings → Telegram, or a default in Settings → VPS).",
+                    parse_mode=None)
             except Exception:
                 pass
             return

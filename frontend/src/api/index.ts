@@ -292,6 +292,7 @@ export interface TelegramUser {
 export interface TelegramChannel {
   id: number;
   title: string;
+  torrent_client?: TorrentClient | null;
 }
 
 export interface TelegramDialog {
@@ -373,6 +374,10 @@ export function addTelegramChannel(chat: string): Promise<{ channels?: TelegramC
 
 export function removeTelegramChannel(chatId: number): Promise<{ channels?: TelegramChannel[]; error?: string }> {
   return telegramRequest(`/channels/${chatId}`, { method: 'DELETE' });
+}
+
+export function setChannelTorrentClient(chatId: number, client: TorrentClient | null): Promise<{ channels?: TelegramChannel[]; error?: string }> {
+  return telegramRequest(`/channels/${chatId}`, { method: 'PATCH', body: JSON.stringify({ torrent_client: client }) });
 }
 
 export function fetchTelegramDialogs(): Promise<{ dialogs?: TelegramDialog[]; error?: string }> {

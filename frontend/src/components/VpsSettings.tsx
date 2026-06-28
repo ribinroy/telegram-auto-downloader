@@ -395,11 +395,11 @@ export function VpsSettings({ onChange }: { onChange?: () => void }) {
           />
         </div>
 
-        {/* Default client for unattended Telegram-channel magnets */}
+        {/* Fallback client for Telegram magnets (per-channel overrides live in Settings → Telegram) */}
         {(torrentConfig?.transmission?.configured || torrentConfig?.qbittorrent?.configured) && (
           <div className="mt-4 flex flex-wrap items-center gap-2">
             <Send className="w-4 h-4 text-cyan-400 shrink-0" />
-            <label className="text-sm text-slate-300">Default client for Telegram magnets</label>
+            <label className="text-sm text-slate-300">Fallback client for Telegram magnets</label>
             <select
               value={torrentConfig?.telegram_default ?? ''}
               onChange={(e) => handleTelegramDefaultChange((e.target.value || null) as TorrentClient | null)}
@@ -411,6 +411,9 @@ export function VpsSettings({ onChange }: { onChange?: () => void }) {
               {torrentConfig?.qbittorrent?.configured && <option value="qbittorrent">qBittorrent</option>}
             </select>
             {savingTgDefault && <Loader2 className="w-4 h-4 animate-spin text-slate-400" />}
+            <p className="w-full text-xs text-slate-500">
+              Used when a monitored channel has no client of its own. Set per-channel targets under Settings → Telegram.
+            </p>
           </div>
         )}
       </div>
