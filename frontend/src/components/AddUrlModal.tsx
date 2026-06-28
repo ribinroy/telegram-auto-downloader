@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { X, Link, Loader2, AlertCircle, CheckCircle, Download, Folder, Magnet, Send } from 'lucide-react';
-import { checkUrl, downloadUrl, fetchMappings, addTorrent, fetchTorrentConfig, fetchVpsFolders, type VpsWatchFolder, type TorrentClient } from '../api';
+import { X, Link, Loader2, AlertCircle, CheckCircle, Download, Folder, Magnet, Send, Upload } from 'lucide-react';
+import { checkUrl, downloadUrl, fetchMappings, addTorrent, addTorrentFile, fetchTorrentConfig, fetchVpsFolders, type VpsWatchFolder, type TorrentClient } from '../api';
 import type { UrlCheckResult, VideoFormat, SourceMapping } from '../types';
 import { formatBytes } from '../utils/format';
 
@@ -60,16 +60,17 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
   const [torrentDest, setTorrentDest] = useState('');
   const [sendingMagnet, setSendingMagnet] = useState(false);
   const [magnetResult, setMagnetResult] = useState<{ status?: 'added' | 'duplicate'; name?: string } | null>(null);
+  // Uploaded .torrent file (alternative to a magnet link).
+  const [torrentFile, setTorrentFile] = useState<File | null>(null);
   const hasAutoChecked = useRef(false);
   const filenameInputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const enterMagnetMode = async (magnet: string) => {
-    setUrl(magnet);
-    setMagnetMode(true);
-    setError(null);
-    setCheckResult(null);
-    setSelectedFormat(null);
-    setMagnetResult(null);
+  // Files (uploaded torrent) and magnets share the same submit UI.
+  const inTorrentMode = magnetMode || !!torrentFile;
+
+  // Load the configured clients + watched folders for the torrent submit UI.
+  const loadTorrentTargets = async () => {
     try {
       const [cfg, folders] = await Promise.all([fetchTorrentConfig(), fetchVpsFolders()]);
       const clients: TorrentClient[] = [];
@@ -89,6 +90,27 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
     }
   };
 
+  const enterMagnetMode = async (magnet: string) => {
+    setUrl(magnet);
+    setMagnetMode(true);
+    setTorrentFile(null);
+    setError(null);
+    setCheckResult(null);
+    setSelectedFormat(null);
+    setMagnetResult(null);
+    await loadTorrentTargets();
+  };
+
+  const enterTorrentFileMode = async (file: File) => {
+    setTorrentFile(file);
+    setMagnetMode(false);
+    setError(null);
+    setCheckResult(null);
+    setSelectedFormat(null);
+    setMagnetResult(null);
+    await loadTorrentTargets();
+  };
+
   const handleSendMagnet = async () => {
     if (!isMagnetLink(url) || !magnetClient || sendingMagnet) return;
     setSendingMagnet(true);
@@ -99,6 +121,21 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
       else setMagnetResult(res);
     } catch {
       setError('Failed to send the magnet link');
+    } finally {
+      setSendingMagnet(false);
+    }
+  };
+
+  const handleSendTorrentFile = async () => {
+    if (!torrentFile || !magnetClient || sendingMagnet) return;
+    setSendingMagnet(true);
+    setError(null);
+    try {
+      const res = await addTorrentFile(torrentFile, magnetClient, torrentDest || null);
+      if (res.error) setError(res.error);
+      else setMagnetResult(res);
+    } catch {
+      setError('Failed to upload the torrent file');
     } finally {
       setSendingMagnet(false);
     }
@@ -229,6 +266,7 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
     setDownloading(false);
     setSourceMapping(null);
     setMagnetMode(false);
+    setTorrentFile(null);
     setTorrentDest('');
     setSendingMagnet(false);
     setMagnetResult(null);
@@ -251,11 +289,11 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !checking && !downloading && !sendingMagnet) {
-      if (magnetMode && !magnetResult) {
-        handleSendMagnet();
+      if (inTorrentMode && !magnetResult) {
+        if (torrentFile) handleSendTorrentFile(); else handleSendMagnet();
       } else if (checkResult?.supported) {
         handleDownload();
-      } else if (!magnetMode) {
+      } else if (!inTorrentMode) {
         handleCheckClick();
       }
     }
@@ -308,6 +346,28 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
               className="w-full bg-slate-900 border border-slate-600 rounded-lg py-2 sm:py-2.5 px-3 text-sm sm:text-base text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 transition-colors"
               autoFocus
             />
+            {!inTorrentMode && !checkResult && (
+              <>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".torrent,application/x-bittorrent"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) enterTorrentFileMode(f);
+                    e.target.value = '';  // allow re-selecting the same file
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="mt-2 inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-purple-300 transition-colors"
+                >
+                  <Upload className="w-3.5 h-3.5" /> or upload a .torrent file
+                </button>
+              </>
+            )}
           </div>
 
           {/* Error Message */}
@@ -318,17 +378,17 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
             </div>
           )}
 
-          {/* Magnet link -> VPS torrent client */}
-          {magnetMode && (
+          {/* Magnet link / .torrent file -> VPS torrent client */}
+          {inTorrentMode && (
             <div className="p-2.5 sm:p-3 bg-purple-500/10 border border-purple-500/30 rounded-lg space-y-2 sm:space-y-3">
               <div className="flex items-center gap-2">
-                <Magnet className="w-4 h-4 sm:w-5 sm:h-5 text-purple-400" />
+                {torrentFile ? <Upload className="w-4 h-4 sm:w-5 sm:h-5 text-purple-400" /> : <Magnet className="w-4 h-4 sm:w-5 sm:h-5 text-purple-400" />}
                 <span className="text-xs sm:text-sm text-purple-300 font-medium">
-                  Magnet link — sends to a VPS torrent client
+                  {torrentFile ? '.torrent file — sends to a VPS torrent client' : 'Magnet link — sends to a VPS torrent client'}
                 </span>
               </div>
-              {magnetName(url) && (
-                <p className="text-xs sm:text-sm text-white font-medium break-all">{magnetName(url)}</p>
+              {(torrentFile ? torrentFile.name : magnetName(url)) && (
+                <p className="text-xs sm:text-sm text-white font-medium break-all">{torrentFile ? torrentFile.name : magnetName(url)}</p>
               )}
               {magnetResult ? (
                 <div className="flex items-center gap-2 p-2 bg-green-500/10 border border-green-500/30 rounded-lg">
@@ -474,7 +534,7 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
           >
             Cancel
           </button>
-          {magnetMode ? (
+          {inTorrentMode ? (
             magnetResult ? (
               <button
                 onClick={handleClose}
@@ -485,7 +545,7 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
               </button>
             ) : (
               <button
-                onClick={handleSendMagnet}
+                onClick={torrentFile ? handleSendTorrentFile : handleSendMagnet}
                 disabled={sendingMagnet || !magnetClient}
                 className="flex-1 py-2 sm:py-2.5 px-3 sm:px-4 bg-purple-600 hover:bg-purple-500 disabled:bg-purple-900 disabled:cursor-not-allowed text-white text-sm sm:text-base rounded-lg transition-colors flex items-center justify-center gap-2"
               >
