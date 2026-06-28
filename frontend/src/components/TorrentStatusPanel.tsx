@@ -30,6 +30,8 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
   const [busy, setBusy] = useState<Set<string>>(new Set());
   const [removeTarget, setRemoveTarget] = useState<TorrentStatus | null>(null);
   const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [sortBy, setSortBy] = useState<'created' | 'name' | 'status'>('created');
   // DownLee transfer state: torrents with a transfer being started / already started.
   const [dlBusy, setDlBusy] = useState<Set<string>>(new Set());
   const [dlStarted, setDlStarted] = useState<Set<string>>(new Set());
@@ -139,8 +141,17 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
   }
 
   const query = search.trim().toLowerCase();
-  const sorted = [...torrents].sort((a, b) => b.added_date - a.added_date);
-  const filtered = query ? sorted.filter(t => t.name.toLowerCase().includes(query)) : sorted;
+  // Distinct statuses present, for the status filter dropdown.
+  const statusesPresent = [...new Set(torrents.map(t => t.status))].sort();
+  const comparators: Record<typeof sortBy, (a: TorrentStatus, b: TorrentStatus) => number> = {
+    created: (a, b) => b.added_date - a.added_date,
+    name: (a, b) => (a.name || '').localeCompare(b.name || ''),
+    status: (a, b) => a.status.localeCompare(b.status) || b.added_date - a.added_date,
+  };
+  const filtered = torrents
+    .filter(t => (query ? t.name.toLowerCase().includes(query) : true))
+    .filter(t => (statusFilter ? t.status === statusFilter : true))
+    .sort(comparators[sortBy]);
 
   const selectedCount = torrents.filter(t => selected.has(t.hash)).length;
   const allFilteredSelected = filtered.length > 0 && filtered.every(t => selected.has(t.hash));
@@ -192,6 +203,31 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
             </button>
           )}
         </div>
+
+        {/* Status filter */}
+        <select
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value)}
+          title="Filter by status"
+          className="shrink-0 bg-slate-800/50 border border-slate-700 rounded-lg py-2 px-2 text-sm text-white focus:outline-none focus:border-purple-500 transition-colors cursor-pointer max-w-[130px]"
+        >
+          <option value="">All statuses</option>
+          {statusesPresent.map(s => (
+            <option key={s} value={s}>{(STATUS_STYLES[s] ?? STATUS_STYLES.unknown).label}</option>
+          ))}
+        </select>
+
+        {/* Sort field */}
+        <select
+          value={sortBy}
+          onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
+          title="Sort by"
+          className="shrink-0 bg-slate-800/50 border border-slate-700 rounded-lg py-2 px-2 text-sm text-white focus:outline-none focus:border-purple-500 transition-colors cursor-pointer"
+        >
+          <option value="created">Created</option>
+          <option value="name">Name</option>
+          <option value="status">Status</option>
+        </select>
 
         {selectedCount > 0 && (
           <div className="flex items-center gap-2 shrink-0">
@@ -248,14 +284,19 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
         <div className="min-h-[30vh] flex items-center justify-center text-slate-400">
           <div className="text-center">
             <Search className="w-12 h-12 mx-auto mb-4 opacity-50" />
-            <p>No torrents match "{search.trim()}"</p>
-            <button onClick={() => setSearch('')} className="text-sm text-cyan-400 hover:text-cyan-300 mt-1">
-              Clear search
+            <p>No torrents match the current filters</p>
+            <button
+              onClick={() => { setSearch(''); setStatusFilter(''); }}
+              className="text-sm text-cyan-400 hover:text-cyan-300 mt-1"
+            >
+              Clear filters
             </button>
           </div>
         </div>
       )}
 
+      {filtered.length > 0 && (
+      <div className="space-y-2 mt-4">
       {filtered.map(t => {
         const style = STATUS_STYLES[t.status] ?? STATUS_STYLES.unknown;
         const active = t.status === 'downloading';
@@ -352,6 +393,8 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
           </div>
         );
       })}
+      </div>
+      )}
 
       <ConfirmDialog
         isOpen={removeTarget !== null}
