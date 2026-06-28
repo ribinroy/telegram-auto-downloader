@@ -214,8 +214,16 @@ def qbit_add_magnet(cfg, magnet, download_dir=None, incomplete_dir=None, paused=
     return {"name": None, "hash": info_hash, "duplicate": duplicate}
 
 
+def _qbit_start(cfg, joined, opener, base):
+    """Start torrents, tolerating the v4 (resume) / v5 (start) endpoint rename."""
+    res = _qbit_request(cfg, "/api/v2/torrents/start", data={"hashes": joined},
+                        opener=opener, base=base, allow_404=True)
+    if res is None:
+        _qbit_request(cfg, "/api/v2/torrents/resume", data={"hashes": joined}, opener=opener, base=base)
+
+
 def qbit_control(cfg, action, hashes, delete_data=False):
-    """start | stop | remove one or more torrents (by hash)."""
+    """start | stop | remove | verify one or more torrents (by hash)."""
     joined = "|".join(hashes)
     opener, base = qbit_login(cfg)
     if action == "remove":
@@ -223,14 +231,19 @@ def qbit_control(cfg, action, hashes, delete_data=False):
                       data={"hashes": joined, "deleteFiles": "true" if delete_data else "false"},
                       opener=opener, base=base)
         return
-    # qBittorrent 5.x renamed pause/resume -> stop/start; try the new path first
-    # and fall back to the legacy one on 404 for older servers.
-    new_path = {"start": "/api/v2/torrents/start", "stop": "/api/v2/torrents/stop"}[action]
-    old_path = {"start": "/api/v2/torrents/resume", "stop": "/api/v2/torrents/pause"}[action]
-    res = _qbit_request(cfg, new_path, data={"hashes": joined},
+    if action == "verify":
+        # Recheck local data, then start — recovers a torrent with missing files.
+        _qbit_request(cfg, "/api/v2/torrents/recheck", data={"hashes": joined}, opener=opener, base=base)
+        _qbit_start(cfg, joined, opener, base)
+        return
+    if action == "start":
+        _qbit_start(cfg, joined, opener, base)
+        return
+    # stop: qBittorrent 5.x renamed pause -> stop; try new path then legacy on 404.
+    res = _qbit_request(cfg, "/api/v2/torrents/stop", data={"hashes": joined},
                         opener=opener, base=base, allow_404=True)
     if res is None:
-        _qbit_request(cfg, old_path, data={"hashes": joined}, opener=opener, base=base)
+        _qbit_request(cfg, "/api/v2/torrents/pause", data={"hashes": joined}, opener=opener, base=base)
 
 
 def qbit_set_location(cfg, hashes, location):

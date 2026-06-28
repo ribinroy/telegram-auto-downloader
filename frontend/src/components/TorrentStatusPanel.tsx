@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Magnet, ArrowDown, ArrowUp, Play, Pause, Trash2, Loader2, Search, X, Check, Sprout, Users,
+  Magnet, ArrowDown, ArrowUp, Play, Pause, Trash2, Loader2, Search, X, Check, Sprout, Users, RotateCw,
 } from 'lucide-react';
 import { fetchTorrentList, torrentAction, downloadVpsFile, type TorrentStatus, type TorrentClient } from '../api';
 import { formatBytes, formatTime } from '../utils/format';
@@ -70,7 +70,7 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
   onCountChangeRef.current = onCountChange;
   useEffect(() => { onCountChangeRef.current?.(torrents.length); }, [torrents.length]);
 
-  const runAction = async (action: 'start' | 'stop' | 'remove', t: TorrentStatus, deleteData = false) => {
+  const runAction = async (action: 'start' | 'stop' | 'remove' | 'verify', t: TorrentStatus, deleteData = false) => {
     setBusy(prev => new Set(prev).add(t.hash));
     try {
       const res = await torrentAction(client, action, [t.hash], deleteData);
@@ -389,7 +389,20 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
               <span className="truncate max-w-[220px]" title={t.download_dir}>{t.download_dir}</span>
             </div>
 
-            {t.error && <p className="text-xs text-red-400 mt-1">{t.error}</p>}
+            {t.error && (
+              <div className="mt-2 flex items-start justify-between gap-3 rounded-lg bg-red-500/10 border border-red-500/30 p-2">
+                <p className="text-xs text-red-400 min-w-0">{t.error}</p>
+                <button
+                  onClick={() => runAction('verify', t)}
+                  disabled={isBusy}
+                  title="Recheck local data on the VPS, then start"
+                  className="flex items-center gap-1.5 shrink-0 py-1 px-2 rounded-lg text-xs bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 transition-colors disabled:opacity-50"
+                >
+                  {isBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCw className="w-3.5 h-3.5" />}
+                  Verify &amp; start
+                </button>
+              </div>
+            )}
           </div>
         );
       })}

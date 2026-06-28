@@ -628,7 +628,7 @@ export async function fetchTorrentList(client: TorrentClient): Promise<{ configu
 }
 
 export async function torrentAction(
-  client: TorrentClient, action: 'start' | 'stop' | 'remove', hashes: string[], deleteData = false
+  client: TorrentClient, action: 'start' | 'stop' | 'remove' | 'verify', hashes: string[], deleteData = false
 ): Promise<{ status?: string; error?: string }> {
   const response = await fetch(`${API_BASE}/api/torrent/action`, {
     method: 'POST',

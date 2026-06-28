@@ -236,6 +236,12 @@ def transmission_get(cfg, torrent_hash):
 
 
 def transmission_control(cfg, action, hashes, delete_data=False):
+    if action == "verify":
+        # Recheck local data, then start — recovers a torrent whose files
+        # Transmission reports as missing ("No data found").
+        transmission_rpc("torrent-verify", {"ids": hashes}, config=cfg)
+        transmission_rpc("torrent-start", {"ids": hashes}, config=cfg)
+        return
     method = {"start": "torrent-start", "stop": "torrent-stop", "remove": "torrent-remove"}[action]
     args = {"ids": hashes}  # Transmission accepts hash strings as ids
     if action == "remove" and delete_data:

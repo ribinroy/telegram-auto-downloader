@@ -208,15 +208,16 @@ class TorrentRoutesMixin:
         @token_required
         def torrent_action():
             """Control torrents on a VPS client.
-            Body: {client, action: start|stop|remove, hashes: [str], delete_data?}.
+            Body: {client, action: start|stop|remove|verify, hashes: [str], delete_data?}.
             'stop' covers pause; 'remove' deletes the torrent (and its data on the
-            VPS when delete_data is true). Legacy `ids` is accepted as hashes."""
+            VPS when delete_data is true); 'verify' rechecks local data then starts
+            (recovers "No data found"). Legacy `ids` is accepted as hashes."""
             data = request.json or {}
             client = (data.get("client") or "transmission").strip()
             if client not in CLIENTS:
                 return jsonify({"error": "Unknown torrent client"}), 400
             action = (data.get("action") or "").strip()
-            if action not in ("start", "stop", "remove"):
+            if action not in ("start", "stop", "remove", "verify"):
                 return jsonify({"error": f"Unknown action: {action}"}), 400
             hashes = data.get("hashes") or data.get("ids")
             if not isinstance(hashes, list) or not hashes:
