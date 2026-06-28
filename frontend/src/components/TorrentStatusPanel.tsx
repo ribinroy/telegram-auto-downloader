@@ -33,6 +33,9 @@ export function TorrentStatusPanel() {
   // DownLee transfer state: torrents with a transfer being started / already started.
   const [dlBusy, setDlBusy] = useState<Set<number>>(new Set());
   const [dlStarted, setDlStarted] = useState<Set<number>>(new Set());
+  // Multi-select: chosen torrent ids + whether the bulk remove dialog is open.
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [bulkRemove, setBulkRemove] = useState(false);
   // Guard against overlapping polls when a request runs longer than the interval.
   const inFlight = useRef(false);
 
@@ -68,6 +71,27 @@ export function TorrentStatusPanel() {
       setBusy(prev => { const next = new Set(prev); next.delete(t.id); return next; });
     }
   };
+
+  // Run an action across all currently-selected torrents in one RPC call.
+  const runBulkAction = async (action: 'start' | 'stop' | 'remove', deleteData = false) => {
+    const ids = torrents.filter(t => selected.has(t.id)).map(t => t.id);
+    if (ids.length === 0) return;
+    setBusy(prev => { const next = new Set(prev); ids.forEach(i => next.add(i)); return next; });
+    try {
+      const res = await torrentAction(action, ids, deleteData);
+      if (res.error) setError(res.error);
+      await load();
+    } finally {
+      setBusy(prev => { const next = new Set(prev); ids.forEach(i => next.delete(i)); return next; });
+      if (action === 'remove') setSelected(new Set());
+    }
+  };
+
+  const toggleSelect = (id: number) => setSelected(prev => {
+    const next = new Set(prev);
+    next.has(id) ? next.delete(id) : next.add(id);
+    return next;
+  });
 
   // Pull a finished torrent's files from the VPS down to DownLee (home server).
   const downloadToDownlee = async (t: TorrentStatus) => {
@@ -111,6 +135,18 @@ export function TorrentStatusPanel() {
   const sorted = [...torrents].sort((a, b) => b.added_date - a.added_date);
   const filtered = query ? sorted.filter(t => t.name.toLowerCase().includes(query)) : sorted;
 
+  const selectedCount = torrents.filter(t => selected.has(t.id)).length;
+  const allFilteredSelected = filtered.length > 0 && filtered.every(t => selected.has(t.id));
+  const toggleSelectAll = () => setSelected(prev => {
+    if (allFilteredSelected) {
+      const next = new Set(prev);
+      filtered.forEach(t => next.delete(t.id));
+      return next;
+    }
+    return new Set([...prev, ...filtered.map(t => t.id)]);
+  });
+  const bulkBusy = torrents.some(t => selected.has(t.id) && busy.has(t.id));
+
   return (
     <div className="space-y-2">
       {/* Search */}
@@ -136,6 +172,57 @@ export function TorrentStatusPanel() {
 
       {error && (
         <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-2.5 text-red-400 text-sm">{error}</div>
+      )}
+
+      {/* Selection toolbar */}
+      {filtered.length > 0 && (
+        <div className="flex items-center gap-2 flex-wrap rounded-lg border border-slate-700/50 bg-slate-800/30 px-3 py-2">
+          <button
+            onClick={toggleSelectAll}
+            className="flex items-center gap-2 text-sm text-slate-300 hover:text-white transition-colors"
+            title={allFilteredSelected ? 'Deselect all' : 'Select all'}
+          >
+            <span className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${
+              allFilteredSelected ? 'bg-purple-500 border-purple-500' : 'border-slate-500'
+            }`}>
+              {allFilteredSelected && <Check className="w-3 h-3 text-white" />}
+            </span>
+            {selectedCount > 0 ? `${selectedCount} selected` : 'Select all'}
+          </button>
+
+          {selectedCount > 0 && (
+            <div className="flex items-center gap-2 ml-auto">
+              <button
+                onClick={() => runBulkAction('start')}
+                disabled={bulkBusy}
+                className="flex items-center gap-1.5 py-1.5 px-2.5 rounded-lg text-sm bg-slate-700/50 hover:bg-slate-600/50 text-slate-200 transition-colors disabled:opacity-50"
+              >
+                <Play className="w-4 h-4" /> Resume
+              </button>
+              <button
+                onClick={() => runBulkAction('stop')}
+                disabled={bulkBusy}
+                className="flex items-center gap-1.5 py-1.5 px-2.5 rounded-lg text-sm bg-slate-700/50 hover:bg-slate-600/50 text-slate-200 transition-colors disabled:opacity-50"
+              >
+                <Pause className="w-4 h-4" /> Pause
+              </button>
+              <button
+                onClick={() => setBulkRemove(true)}
+                disabled={bulkBusy}
+                className="flex items-center gap-1.5 py-1.5 px-2.5 rounded-lg text-sm border border-red-500/40 bg-red-500/10 hover:bg-red-500/25 text-red-400 transition-colors disabled:opacity-50"
+              >
+                {bulkBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />} Remove
+              </button>
+              <button
+                onClick={() => setSelected(new Set())}
+                className="p-1.5 text-slate-400 hover:text-white transition-colors"
+                title="Clear selection"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+        </div>
       )}
 
       {!error && torrents.length === 0 && (
@@ -169,9 +256,25 @@ export function TorrentStatusPanel() {
         const dlInFlight = dlBusy.has(t.id);
         const dlDone = dlStarted.has(t.id);
         return (
-          <div key={t.hash} className="rounded-xl border border-slate-700/50 bg-slate-800/30 p-3 sm:p-4">
+          <div
+            key={t.hash}
+            className={`rounded-xl border bg-slate-800/30 p-3 sm:p-4 transition-colors ${
+              selected.has(t.id) ? 'border-purple-500/60 bg-purple-500/5' : 'border-slate-700/50'
+            }`}
+          >
             <div className="flex items-center justify-between gap-3">
-              <span className="text-sm sm:text-base text-white font-medium truncate min-w-0" title={t.name}>{t.name}</span>
+              <button
+                onClick={() => toggleSelect(t.id)}
+                className="shrink-0"
+                title={selected.has(t.id) ? 'Deselect' : 'Select'}
+              >
+                <span className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${
+                  selected.has(t.id) ? 'bg-purple-500 border-purple-500' : 'border-slate-500 hover:border-slate-300'
+                }`}>
+                  {selected.has(t.id) && <Check className="w-3 h-3 text-white" />}
+                </span>
+              </button>
+              <span className="text-sm sm:text-base text-white font-medium truncate min-w-0 flex-1" title={t.name}>{t.name}</span>
               <div className="flex items-center gap-2 shrink-0">
                 <span className={`text-xs border rounded-full px-2 py-0.5 ${style.cls}`}>{style.label}</span>
                 {done && (
@@ -251,6 +354,18 @@ export function TorrentStatusPanel() {
         onConfirm={() => { const t = removeTarget; setRemoveTarget(null); if (t) runAction('remove', t, false); }}
         onExtraAction={() => { const t = removeTarget; setRemoveTarget(null); if (t) runAction('remove', t, true); }}
         onCancel={() => setRemoveTarget(null)}
+      />
+
+      <ConfirmDialog
+        isOpen={bulkRemove}
+        title={`Remove ${selectedCount} torrent${selectedCount !== 1 ? 's' : ''}?`}
+        message={`Remove ${selectedCount} selected torrent${selectedCount !== 1 ? 's' : ''} from the torrent client. "Remove" keeps the downloaded files on the VPS; "Remove with data" also deletes them from the VPS (cannot be undone).`}
+        confirmText="Remove"
+        extraActionText="Remove with data"
+        variant="danger"
+        onConfirm={() => { setBulkRemove(false); runBulkAction('remove', false); }}
+        onExtraAction={() => { setBulkRemove(false); runBulkAction('remove', true); }}
+        onCancel={() => setBulkRemove(false)}
       />
     </div>
   );
