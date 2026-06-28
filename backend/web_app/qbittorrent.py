@@ -54,9 +54,22 @@ def magnet_btih(magnet: str):
     return raw.lower() or None
 
 
+def _auth_header(cfg):
+    """HTTP Basic auth header for a reverse proxy guarding the WebUI (e.g.
+    seedhost). Empty when no credentials are configured."""
+    if cfg.get("username") or cfg.get("password"):
+        token = base64.b64encode(
+            f"{cfg.get('username', '')}:{cfg.get('password', '')}".encode()).decode()
+        return {"Authorization": f"Basic {token}"}
+    return {}
+
+
 def qbit_login(cfg, timeout: int = 20):
     """Authenticate and return (opener, base_url). Raises ValueError on failure.
-    The opener carries the SID cookie for subsequent calls."""
+    Sends HTTP Basic auth (for a reverse proxy) plus the WebUI form login; the
+    opener carries the SID cookie for subsequent calls. If the form login does
+    not return 'Ok.' (e.g. the WebUI bypasses auth for the proxied/localhost
+    connection) we proceed on Basic auth, which is sent on every request."""
     base = (cfg.get("url") or "").strip().rstrip("/")
     if not base:
         raise ValueError("qBittorrent URL is not set")
@@ -68,20 +81,19 @@ def qbit_login(cfg, timeout: int = 20):
     }).encode()
     req = urllib.request.Request(
         f"{base}/api/v2/auth/login", data=data,
-        headers={"Referer": base, "Content-Type": "application/x-www-form-urlencoded"},
+        headers={"Referer": base, "Content-Type": "application/x-www-form-urlencoded",
+                 **_auth_header(cfg)},
         method="POST",
     )
     try:
         with opener.open(req, timeout=timeout) as resp:
-            body = resp.read().decode().strip()
+            resp.read()  # body unused; success is the cookie + 200
     except urllib.error.HTTPError as e:
-        if e.code == 403:
-            raise ValueError("qBittorrent authentication failed (IP may be banned — check WebUI)")
+        if e.code in (401, 403):
+            raise ValueError("qBittorrent authentication failed — check username/password")
         raise ValueError(f"qBittorrent returned HTTP {e.code}")
     except urllib.error.URLError as e:
         raise ValueError(f"Cannot reach qBittorrent: {getattr(e, 'reason', e)}")
-    if body != "Ok.":
-        raise ValueError("qBittorrent authentication failed — check username/password")
     return opener, base
 
 
@@ -92,7 +104,7 @@ def _qbit_request(cfg, path, data=None, expect_json=False, timeout: int = 20,
     if opener is None or base is None:
         opener, base = qbit_login(cfg, timeout=timeout)
     url = f"{base}{path}"
-    headers = {"Referer": base}
+    headers = {"Referer": base, **_auth_header(cfg)}
     if data is not None:
         body = urllib.parse.urlencode(data).encode()
         headers["Content-Type"] = "application/x-www-form-urlencoded"
@@ -105,6 +117,8 @@ def _qbit_request(cfg, path, data=None, expect_json=False, timeout: int = 20,
     except urllib.error.HTTPError as e:
         if e.code == 404 and allow_404:
             return None
+        if e.code in (401, 403):
+            raise ValueError("qBittorrent authentication failed — check username/password")
         raise ValueError(f"qBittorrent error: HTTP {e.code}")
     except urllib.error.URLError as e:
         raise ValueError(f"Cannot reach qBittorrent: {getattr(e, 'reason', e)}")
