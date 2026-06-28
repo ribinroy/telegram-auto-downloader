@@ -156,80 +156,82 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
 
   return (
     <div className="space-y-2">
-      {/* Search */}
-      <div className="relative mb-2">
-        <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-        <input
-          type="text"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search torrents..."
-          className="w-full bg-slate-800/50 border border-slate-700 rounded-lg py-2 pl-9 pr-9 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 transition-colors"
-        />
-        {search && (
+      {/* Toolbar: select-all · search · bulk actions (single row) */}
+      <div className="flex items-center gap-2">
+        {filtered.length > 0 && (
           <button
-            onClick={() => setSearch('')}
-            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white transition-colors"
-            title="Clear search"
+            onClick={toggleSelectAll}
+            className="flex items-center gap-1.5 shrink-0 text-sm text-slate-300 hover:text-white transition-colors"
+            title={allFilteredSelected ? 'Deselect all' : 'Select all'}
           >
-            <X className="w-4 h-4" />
+            <span className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${
+              allFilteredSelected ? 'bg-purple-500 border-purple-500' : 'border-slate-500'
+            }`}>
+              {allFilteredSelected && <Check className="w-3.5 h-3.5 text-white" />}
+            </span>
+            {selectedCount > 0 && <span className="hidden sm:inline">{selectedCount}</span>}
           </button>
+        )}
+
+        <div className="relative flex-1 min-w-0">
+          <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search torrents..."
+            className="w-full bg-slate-800/50 border border-slate-700 rounded-lg py-2 pl-9 pr-9 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 transition-colors"
+          />
+          {search && (
+            <button
+              onClick={() => setSearch('')}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white transition-colors"
+              title="Clear search"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+
+        {selectedCount > 0 && (
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={() => runBulkAction('start')}
+              disabled={bulkBusy}
+              title="Resume selected"
+              className="flex items-center gap-1.5 py-2 px-2.5 rounded-lg text-sm bg-slate-700/50 hover:bg-slate-600/50 text-slate-200 transition-colors disabled:opacity-50"
+            >
+              <Play className="w-4 h-4" /> <span className="hidden sm:inline">Resume</span>
+            </button>
+            <button
+              onClick={() => runBulkAction('stop')}
+              disabled={bulkBusy}
+              title="Pause selected"
+              className="flex items-center gap-1.5 py-2 px-2.5 rounded-lg text-sm bg-slate-700/50 hover:bg-slate-600/50 text-slate-200 transition-colors disabled:opacity-50"
+            >
+              <Pause className="w-4 h-4" /> <span className="hidden sm:inline">Pause</span>
+            </button>
+            <button
+              onClick={() => setBulkRemove(true)}
+              disabled={bulkBusy}
+              title="Remove selected"
+              className="flex items-center gap-1.5 py-2 px-2.5 rounded-lg text-sm border border-red-500/40 bg-red-500/10 hover:bg-red-500/25 text-red-400 transition-colors disabled:opacity-50"
+            >
+              {bulkBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />} <span className="hidden sm:inline">Remove</span>
+            </button>
+            <button
+              onClick={() => setSelected(new Set())}
+              className="p-1.5 text-slate-400 hover:text-white transition-colors"
+              title="Clear selection"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         )}
       </div>
 
       {error && (
         <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-2.5 text-red-400 text-sm">{error}</div>
-      )}
-
-      {/* Selection toolbar */}
-      {filtered.length > 0 && (
-        <div className="flex h-[52px] items-center gap-2 flex-wrap rounded-lg border border-slate-700/50 bg-slate-800/30 px-3 py-2">
-          <button
-            onClick={toggleSelectAll}
-            className="flex items-center gap-2 text-sm text-slate-300 hover:text-white transition-colors"
-            title={allFilteredSelected ? 'Deselect all' : 'Select all'}
-          >
-            <span className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${
-              allFilteredSelected ? 'bg-purple-500 border-purple-500' : 'border-slate-500'
-            }`}>
-              {allFilteredSelected && <Check className="w-3 h-3 text-white" />}
-            </span>
-            {selectedCount > 0 ? `${selectedCount} selected` : 'Select all'}
-          </button>
-
-          {selectedCount > 0 && (
-            <div className="flex items-center gap-2 ml-auto">
-              <button
-                onClick={() => runBulkAction('start')}
-                disabled={bulkBusy}
-                className="flex items-center gap-1.5 py-1.5 px-2.5 rounded-lg text-sm bg-slate-700/50 hover:bg-slate-600/50 text-slate-200 transition-colors disabled:opacity-50"
-              >
-                <Play className="w-4 h-4" /> Resume
-              </button>
-              <button
-                onClick={() => runBulkAction('stop')}
-                disabled={bulkBusy}
-                className="flex items-center gap-1.5 py-1.5 px-2.5 rounded-lg text-sm bg-slate-700/50 hover:bg-slate-600/50 text-slate-200 transition-colors disabled:opacity-50"
-              >
-                <Pause className="w-4 h-4" /> Pause
-              </button>
-              <button
-                onClick={() => setBulkRemove(true)}
-                disabled={bulkBusy}
-                className="flex items-center gap-1.5 py-1.5 px-2.5 rounded-lg text-sm border border-red-500/40 bg-red-500/10 hover:bg-red-500/25 text-red-400 transition-colors disabled:opacity-50"
-              >
-                {bulkBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />} Remove
-              </button>
-              <button
-                onClick={() => setSelected(new Set())}
-                className="p-1.5 text-slate-400 hover:text-white transition-colors"
-                title="Clear selection"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-          )}
-        </div>
       )}
 
       {!error && torrents.length === 0 && (
