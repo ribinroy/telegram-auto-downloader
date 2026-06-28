@@ -179,7 +179,7 @@ export function TorrentStatusPanel({ onCountChange }: { onCountChange?: (n: numb
 
       {/* Selection toolbar */}
       {filtered.length > 0 && (
-        <div className="flex h-5 items-center gap-2 flex-wrap rounded-lg border border-slate-700/50 bg-slate-800/30 px-3 py-2">
+        <div className="flex h-[52px] items-center gap-2 flex-wrap rounded-lg border border-slate-700/50 bg-slate-800/30 px-3 py-2">
           <button
             onClick={toggleSelectAll}
             className="flex items-center gap-2 text-sm text-slate-300 hover:text-white transition-colors"
