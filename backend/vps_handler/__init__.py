@@ -96,11 +96,12 @@ class VpsDownloader:
                 web_app.emit_stats()
 
     # --- Download ---------------------------------------------------------
-    def start_download(self, remote_path: str, size: int = 0) -> dict:
+    def start_download(self, remote_path: str, size: int = 0, dest: str = None) -> dict:
         """Create a download record and kick off the SFTP transfer in a thread.
 
         Works for both files and directories (directories are downloaded
-        recursively, preserving structure)."""
+        recursively, preserving structure). `dest` overrides the local
+        destination base folder (else it's resolved from the 'vps' spec)."""
         db = get_db()
         remote_path = (remote_path or "").strip()
         if not remote_path:
@@ -127,7 +128,7 @@ class VpsDownloader:
         )
         metrics.record_download_started('vps')
         self.emit_new_download(new_download)
-        self._spawn(remote_path, message_id)
+        self._spawn(remote_path, message_id, dest)
         return new_download
 
     def resume_download(self, message_id: str) -> bool:
@@ -147,9 +148,9 @@ class VpsDownloader:
         self._spawn(dl['url'], message_id)
         return True
 
-    def _spawn(self, remote_path: str, message_id: str):
+    def _spawn(self, remote_path: str, message_id: str, dest: str = None):
         thread = threading.Thread(
-            target=self._download, args=(remote_path, message_id), daemon=True
+            target=self._download, args=(remote_path, message_id, dest), daemon=True
         )
         self.threads[message_id] = thread
         self.download_tasks[message_id] = thread
@@ -180,16 +181,20 @@ class VpsDownloader:
             else:
                 out.append((full, attr.st_size or 0))
 
-    def _download(self, remote_path: str, message_id: str):
+    def _download(self, remote_path: str, message_id: str, dest: str = None):
         from backend.utils import resolve_spec, spec_folder
         db = get_db()
         start_time = datetime.now()
         client = None
         try:
-            # Destination base: the watched folder's configured destination
+            # Destination base: an explicit `dest` (e.g. a torrent client's
+            # configured local folder), else the watched folder's destination
             # (or the 'vps' source mapping), else DOWNLOAD_DIR/VPS
-            spec = resolve_spec('vps', path=remote_path)
-            base = spec_folder(spec, DOWNLOAD_DIR / "VPS")
+            if dest:
+                base = Path(dest)
+            else:
+                spec = resolve_spec('vps', path=remote_path)
+                base = spec_folder(spec, DOWNLOAD_DIR / "VPS")
 
             # Place files relative to the requested item's parent dir, so a file
             # /home/user/xyz lands at <base>/xyz and a folder /home/user/dir at

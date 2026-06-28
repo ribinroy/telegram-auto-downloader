@@ -542,6 +542,7 @@ export interface TorrentClientConfig {
   has_password: boolean;
   download_dir: string;
   incomplete_dir: string;
+  local_dir: string;
 }
 
 export interface TorrentConfig {
@@ -558,8 +559,8 @@ export async function fetchTorrentConfig(): Promise<TorrentConfig> {
 
 export async function saveTorrentConfig(
   client: TorrentClient,
-  config: { url: string; username: string; password?: string; download_dir?: string; incomplete_dir?: string }
-): Promise<{ status?: string; configured?: boolean; url?: string; has_password?: boolean; download_dir?: string; incomplete_dir?: string; warning?: string | null; error?: string }> {
+  config: { url: string; username: string; password?: string; download_dir?: string; incomplete_dir?: string; local_dir?: string }
+): Promise<{ status?: string; configured?: boolean; url?: string; has_password?: boolean; download_dir?: string; incomplete_dir?: string; local_dir?: string; warning?: string | null; error?: string }> {
   const response = await fetch(`${API_BASE}/api/settings/torrent`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
@@ -795,11 +796,11 @@ export async function fetchVpsFiles(includeHidden = false): Promise<VpsFolderGro
   return data.folders || [];
 }
 
-export async function downloadVpsFile(path: string, size?: number): Promise<{ error?: string; id?: number; message_id?: string }> {
+export async function downloadVpsFile(path: string, size?: number, client?: TorrentClient): Promise<{ error?: string; id?: number; message_id?: string }> {
   const response = await fetch(`${API_BASE}/api/vps/download`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-    body: JSON.stringify({ path, size: size ?? 0 }),
+    body: JSON.stringify({ path, size: size ?? 0, ...(client ? { client } : {}) }),
   });
   if (response.status === 401) {
     clearToken();

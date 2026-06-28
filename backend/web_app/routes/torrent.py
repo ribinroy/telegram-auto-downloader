@@ -34,6 +34,7 @@ class TorrentRoutesMixin:
                 "has_password": bool(decrypt_secret(sub.get("password_enc", ""))),
                 "download_dir": sub.get("download_dir", ""),
                 "incomplete_dir": sub.get("incomplete_dir", ""),
+                "local_dir": sub.get("local_dir", ""),
             }
 
         @self.app.route("/api/settings/torrent", methods=["GET"])
@@ -74,12 +75,14 @@ class TorrentRoutesMixin:
 
             download_dir = (data.get("download_dir") or "").strip()
             incomplete_dir = (data.get("incomplete_dir") or "").strip()
+            local_dir = (data.get("local_dir") or "").strip()
             settings[client] = {
                 "url": url,
                 "username": (data.get("username") or "").strip(),
                 "password_enc": password_enc,
                 "download_dir": download_dir,
                 "incomplete_dir": incomplete_dir,
+                "local_dir": local_dir,
             }
             # If this is the only configured client and no Telegram default is
             # set yet, make it the default so Telegram magnets work out of the box.

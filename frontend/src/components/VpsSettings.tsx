@@ -579,14 +579,15 @@ function TorrentClientCard({
   const [password, setPassword] = useState('');
   const [downloadDir, setDownloadDir] = useState('');
   const [incompleteDir, setIncompleteDir] = useState('');
+  const [localDir, setLocalDir] = useState('');
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<{ success: boolean; message?: string; error?: string } | null>(null);
-  // Which folder field is currently picking a remote path.
-  const [picking, setPicking] = useState<null | 'download_dir' | 'incomplete_dir'>(null);
+  // Which folder field is currently picking a path (local_dir browses the home server).
+  const [picking, setPicking] = useState<null | 'download_dir' | 'incomplete_dir' | 'local_dir'>(null);
 
   const configured = !!data?.configured;
   const hasPassword = !!data?.has_password;
@@ -599,6 +600,7 @@ function TorrentClientCard({
     setPassword('');
     setDownloadDir(data?.download_dir || '');
     setIncompleteDir(data?.incomplete_dir || '');
+    setLocalDir(data?.local_dir || '');
   }, [data]);
 
   const input = () => ({
@@ -606,6 +608,7 @@ function TorrentClientCard({
     username: username.trim(),
     download_dir: downloadDir.trim(),
     incomplete_dir: incompleteDir.trim(),
+    local_dir: localDir.trim(),
     ...(password ? { password } : {}),
   });
 
@@ -661,32 +664,39 @@ function TorrentClientCard({
   };
 
   const folderField = (
-    field: 'download_dir' | 'incomplete_dir', value: string,
+    field: 'download_dir' | 'incomplete_dir' | 'local_dir', value: string,
     setValue: (v: string) => void, title: string, placeholder: string, help: string,
-  ) => (
-    <div>
-      <label className="block text-sm text-slate-400 mb-1">{title}</label>
-      <div className="flex gap-2">
-        <input
-          type="text"
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          placeholder={placeholder}
-          className="flex-1 bg-slate-700/50 border border-slate-600 rounded-lg py-2 px-3 text-white placeholder-slate-400 focus:outline-none focus:border-purple-500 transition-colors"
-        />
-        <button
-          type="button"
-          onClick={() => setPicking(field)}
-          disabled={!canBrowse}
-          title={canBrowse ? 'Browse remote folders' : 'Save the VPS connection (with password) above to browse'}
-          className="px-3 bg-slate-600 hover:bg-slate-500 disabled:bg-slate-700 disabled:text-slate-500 disabled:cursor-not-allowed text-white rounded-lg transition-colors flex items-center"
-        >
-          <FolderOpen className="w-4 h-4" />
-        </button>
+  ) => {
+    // local_dir browses the home server (always available); the VPS-side
+    // folders need a saved connection to browse.
+    const isLocal = field === 'local_dir';
+    const canPick = isLocal || canBrowse;
+    return (
+      <div>
+        <label className="block text-sm text-slate-400 mb-1">{title}</label>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            placeholder={placeholder}
+            className="flex-1 bg-slate-700/50 border border-slate-600 rounded-lg py-2 px-3 text-white placeholder-slate-400 focus:outline-none focus:border-purple-500 transition-colors"
+          />
+          <button
+            type="button"
+            onClick={() => setPicking(field)}
+            disabled={!canPick}
+            title={canPick ? (isLocal ? 'Browse home-server folders' : 'Browse remote folders')
+              : 'Save the VPS connection (with password) above to browse'}
+            className="px-3 bg-slate-600 hover:bg-slate-500 disabled:bg-slate-700 disabled:text-slate-500 disabled:cursor-not-allowed text-white rounded-lg transition-colors flex items-center"
+          >
+            <FolderOpen className="w-4 h-4" />
+          </button>
+        </div>
+        <p className="text-xs text-slate-500 mt-1">{help}</p>
       </div>
-      <p className="text-xs text-slate-500 mt-1">{help}</p>
-    </div>
-  );
+    );
+  };
 
   return (
     <div className="rounded-xl border border-slate-700/60 bg-slate-800/30 p-3 sm:p-4">
@@ -765,6 +775,11 @@ function TorrentClientCard({
           'e.g., /home/user/downloads/.incomplete (leave blank to disable)',
           'Active torrents download here, then move to the destination folder when complete.')}
 
+        {folderField('local_dir', localDir, setLocalDir,
+          'Default local folder (home server)',
+          'e.g., /mnt/media/torrents (leave blank for the VPS source default)',
+          'Where this client’s torrents land on the home server when pulled to DownLee.')}
+
         {testResult && (
           <div className={`flex items-center gap-2 border rounded-lg p-3 text-sm ${
             testResult.success
@@ -813,11 +828,17 @@ function TorrentClientCard({
         isOpen={picking !== null}
         onClose={() => setPicking(null)}
         singleSelect
-        title={picking === 'incomplete_dir' ? 'Temp folder on the VPS' : 'Default download folder on the VPS'}
-        initialPath={(picking === 'incomplete_dir' ? incompleteDir : downloadDir) || null}
+        {...(picking === 'local_dir' ? { browseFn: browseLocal } : {})}
+        title={
+          picking === 'local_dir' ? 'Local folder on the home server'
+            : picking === 'incomplete_dir' ? 'Temp folder on the VPS'
+              : 'Default download folder on the VPS'
+        }
+        initialPath={(picking === 'local_dir' ? localDir : picking === 'incomplete_dir' ? incompleteDir : downloadDir) || null}
         onConfirm={(paths) => {
           const p = paths[0] || '';
-          if (picking === 'incomplete_dir') setIncompleteDir(p);
+          if (picking === 'local_dir') setLocalDir(p);
+          else if (picking === 'incomplete_dir') setIncompleteDir(p);
           else if (picking === 'download_dir') setDownloadDir(p);
           setPicking(null);
         }}

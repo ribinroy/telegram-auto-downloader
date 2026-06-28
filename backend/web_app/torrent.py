@@ -102,6 +102,7 @@ def load_torrent_config(client):
         "password": decrypt_secret(sub.get("password_enc", "")),
         "download_dir": sub.get("download_dir", ""),
         "incomplete_dir": sub.get("incomplete_dir", ""),
+        "local_dir": sub.get("local_dir", ""),
     }
 
 
