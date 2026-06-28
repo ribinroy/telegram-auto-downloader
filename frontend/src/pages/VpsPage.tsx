@@ -182,6 +182,12 @@ export function VpsPage() {
   const [torrentConfig, setTorrentConfig] = useState<TorrentConfig | null>(null);
   const [counts, setCounts] = useState<{ transmission: number | null; qbittorrent: number | null }>(
     { transmission: null, qbittorrent: null });
+  // Stable callbacks with a no-op guard — the panel's count effect depends on
+  // this identity, so an inline arrow + always-new object would loop forever.
+  const onTransmissionCount = useCallback(
+    (n: number) => setCounts(c => (c.transmission === n ? c : { ...c, transmission: n })), []);
+  const onQbittorrentCount = useCallback(
+    (n: number) => setCounts(c => (c.qbittorrent === n ? c : { ...c, qbittorrent: n })), []);
 
   const loadFiles = useCallback(async () => {
     setLoading(true);
@@ -336,12 +342,12 @@ export function VpsPage() {
       {/* Torrent panels stay mounted so their counts keep refreshing for the tab badges */}
       {transmissionConfigured && (
         <div className={tab === 'transmission' ? '' : 'hidden'}>
-          <TorrentStatusPanel client="transmission" onCountChange={(n) => setCounts(c => ({ ...c, transmission: n }))} />
+          <TorrentStatusPanel client="transmission" onCountChange={onTransmissionCount} />
         </div>
       )}
       {qbittorrentConfigured && (
         <div className={tab === 'qbittorrent' ? '' : 'hidden'}>
-          <TorrentStatusPanel client="qbittorrent" onCountChange={(n) => setCounts(c => ({ ...c, qbittorrent: n }))} />
+          <TorrentStatusPanel client="qbittorrent" onCountChange={onQbittorrentCount} />
         </div>
       )}
 

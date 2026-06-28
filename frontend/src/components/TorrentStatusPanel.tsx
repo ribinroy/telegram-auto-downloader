@@ -62,7 +62,11 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
   }, [load]);
 
   // Report the torrent count up so the parent can show it in the tab label.
-  useEffect(() => { onCountChange?.(torrents.length); }, [torrents.length, onCountChange]);
+  // Route through a ref and depend only on the count, so an unstable callback
+  // from the parent can never turn this into a render loop.
+  const onCountChangeRef = useRef(onCountChange);
+  onCountChangeRef.current = onCountChange;
+  useEffect(() => { onCountChangeRef.current?.(torrents.length); }, [torrents.length]);
 
   const runAction = async (action: 'start' | 'stop' | 'remove', t: TorrentStatus, deleteData = false) => {
     setBusy(prev => new Set(prev).add(t.hash));
