@@ -53,6 +53,7 @@ function App() {
         <Route path={ROUTES.SETTINGS} element={<SettingsPage />} />
         <Route path="/settings/:tab" element={<SettingsPage />} />
         <Route path={ROUTES.VPS} element={<VpsPage />} />
+        <Route path="/vps/:tab" element={<VpsPage />} />
       </Route>
     </Routes>
   );

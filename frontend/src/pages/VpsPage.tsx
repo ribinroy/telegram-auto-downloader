@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import {
   HardDrive, Folder, File as FileIcon, Download as DownloadIcon, RefreshCw, Loader2,
   CheckCircle, XCircle, StopCircle, Calendar, Square, Play, Settings, Trash2, Search, X, Magnet,
@@ -27,7 +27,7 @@ function VpsFileRow({
 }: {
   entry: VpsFileEntry;
   live: Download | undefined;
-  onDownload: (entry: VpsFileEntry) => void;
+  onDownload: (entry: VpsFileEntry) => void | Promise<void>;
   onStop: (messageId: string) => void;
   onRetry: (id: number) => void;
   onDeleteRemote: (entry: VpsFileEntry) => Promise<void>;
@@ -171,12 +171,14 @@ function VpsFileRow({
 export function VpsPage() {
   const { downloads, onStop, onRetry, vpsReady, showSecured } = useLayoutContext();
   const navigate = useNavigate();
+  const { tab: tabParam } = useParams<{ tab?: string }>();
+  const tab: 'files' | 'torrents' = tabParam === 'torrents' ? 'torrents' : 'files';
   const [groups, setGroups] = useState<VpsFolderGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [folderFilter, setFolderFilter] = useState('');
   const [search, setSearch] = useState('');
-  const [tab, setTab] = useState<'files' | 'torrents'>('files');
+  const [torrentCount, setTorrentCount] = useState<number | null>(null);
 
   const loadFiles = useCallback(async () => {
     setLoading(true);
@@ -283,31 +285,33 @@ export function VpsPage() {
       {/* Tabs */}
       <div className="flex items-center gap-1 mb-4 border-b border-slate-700/60">
         <button
-          onClick={() => setTab('files')}
+          onClick={() => navigate(ROUTES.VPS_FILES)}
           className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
             tab === 'files'
               ? 'border-cyan-500 text-white'
               : 'border-transparent text-slate-400 hover:text-slate-200'
           }`}
         >
-          <Folder className="w-4 h-4" /> Files
+          <Folder className="w-4 h-4" /> Files{allEntries.length > 0 ? ` (${allEntries.length})` : ''}
         </button>
         <button
-          onClick={() => setTab('torrents')}
+          onClick={() => navigate(ROUTES.VPS_TORRENTS)}
           className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
             tab === 'torrents'
               ? 'border-purple-500 text-white'
               : 'border-transparent text-slate-400 hover:text-slate-200'
           }`}
         >
-          <Magnet className="w-4 h-4" /> Torrents
+          <Magnet className="w-4 h-4" /> Torrents{torrentCount != null && torrentCount > 0 ? ` (${torrentCount})` : ''}
         </button>
       </div>
 
-      {tab === 'torrents' ? (
-        <TorrentStatusPanel />
-      ) : (
-      <>
+      {/* Torrent panel stays mounted so its count keeps refreshing for the tab badge */}
+      <div className={tab === 'torrents' ? '' : 'hidden'}>
+        <TorrentStatusPanel onCountChange={setTorrentCount} />
+      </div>
+
+      <div className={tab === 'files' ? '' : 'hidden'}>
       {/* Search */}
       <div className="relative mb-4">
         <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
@@ -342,7 +346,7 @@ export function VpsPage() {
         </div>
       ))}
 
-      {loading ? (
+      {loading && groups.length === 0 ? (
         <div className="min-h-[50vh] flex items-center justify-center text-slate-400">
           <div className="text-center">
             <Loader2 className="w-12 h-12 mx-auto mb-4 animate-spin text-cyan-500" />
@@ -400,8 +404,7 @@ export function VpsPage() {
           {inactiveCount} folder{inactiveCount !== 1 ? 's' : ''} on other VPS connections hidden.
         </p>
       )}
-      </>
-      )}
+      </div>
     </div>
   );
 }
