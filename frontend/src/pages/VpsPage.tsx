@@ -178,6 +178,7 @@ export function VpsPage() {
   const [error, setError] = useState<string | null>(null);
   const [folderFilter, setFolderFilter] = useState('');
   const [search, setSearch] = useState('');
+  const [torrentCount, setTorrentCount] = useState<number | null>(null);
 
   const loadFiles = useCallback(async () => {
     setLoading(true);
@@ -291,7 +292,7 @@ export function VpsPage() {
               : 'border-transparent text-slate-400 hover:text-slate-200'
           }`}
         >
-          <Folder className="w-4 h-4" /> Files
+          <Folder className="w-4 h-4" /> Files{allEntries.length > 0 ? ` (${allEntries.length})` : ''}
         </button>
         <button
           onClick={() => navigate(ROUTES.VPS_TORRENTS)}
@@ -301,14 +302,16 @@ export function VpsPage() {
               : 'border-transparent text-slate-400 hover:text-slate-200'
           }`}
         >
-          <Magnet className="w-4 h-4" /> Torrents
+          <Magnet className="w-4 h-4" /> Torrents{torrentCount != null && torrentCount > 0 ? ` (${torrentCount})` : ''}
         </button>
       </div>
 
-      {tab === 'torrents' ? (
-        <TorrentStatusPanel />
-      ) : (
-      <>
+      {/* Torrent panel stays mounted so its count keeps refreshing for the tab badge */}
+      <div className={tab === 'torrents' ? '' : 'hidden'}>
+        <TorrentStatusPanel onCountChange={setTorrentCount} />
+      </div>
+
+      <div className={tab === 'files' ? '' : 'hidden'}>
       {/* Search */}
       <div className="relative mb-4">
         <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
@@ -401,8 +404,7 @@ export function VpsPage() {
           {inactiveCount} folder{inactiveCount !== 1 ? 's' : ''} on other VPS connections hidden.
         </p>
       )}
-      </>
-      )}
+      </div>
     </div>
   );
 }

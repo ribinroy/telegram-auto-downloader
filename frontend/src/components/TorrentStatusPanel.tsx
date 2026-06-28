@@ -20,7 +20,7 @@ const STATUS_STYLES: Record<TorrentStatus['status'], { label: string; cls: strin
   unknown: { label: 'Unknown', cls: 'bg-slate-500/15 text-slate-300 border-slate-500/30' },
 };
 
-export function TorrentStatusPanel() {
+export function TorrentStatusPanel({ onCountChange }: { onCountChange?: (n: number) => void } = {}) {
   const navigate = useNavigate();
   const [torrents, setTorrents] = useState<TorrentStatus[]>([]);
   const [configured, setConfigured] = useState(false);
@@ -60,6 +60,9 @@ export function TorrentStatusPanel() {
     const timer = setInterval(load, 20000);
     return () => clearInterval(timer);
   }, [load]);
+
+  // Report the torrent count up so the parent can show it in the tab label.
+  useEffect(() => { onCountChange?.(torrents.length); }, [torrents.length, onCountChange]);
 
   const runAction = async (action: 'start' | 'stop' | 'remove', t: TorrentStatus, deleteData = false) => {
     setBusy(prev => new Set(prev).add(t.id));
@@ -176,7 +179,7 @@ export function TorrentStatusPanel() {
 
       {/* Selection toolbar */}
       {filtered.length > 0 && (
-        <div className="flex items-center gap-2 flex-wrap rounded-lg border border-slate-700/50 bg-slate-800/30 px-3 py-2">
+        <div className="flex h-5 items-center gap-2 flex-wrap rounded-lg border border-slate-700/50 bg-slate-800/30 px-3 py-2">
           <button
             onClick={toggleSelectAll}
             className="flex items-center gap-2 text-sm text-slate-300 hover:text-white transition-colors"
