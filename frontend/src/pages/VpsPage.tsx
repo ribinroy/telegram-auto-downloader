@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import {
   HardDrive, Folder, File as FileIcon, Download as DownloadIcon, RefreshCw, Loader2,
   CheckCircle, XCircle, StopCircle, Calendar, Square, Play, Settings, Trash2, Search, X, Magnet,
@@ -27,7 +27,7 @@ function VpsFileRow({
 }: {
   entry: VpsFileEntry;
   live: Download | undefined;
-  onDownload: (entry: VpsFileEntry) => void;
+  onDownload: (entry: VpsFileEntry) => void | Promise<void>;
   onStop: (messageId: string) => void;
   onRetry: (id: number) => void;
   onDeleteRemote: (entry: VpsFileEntry) => Promise<void>;
@@ -171,12 +171,13 @@ function VpsFileRow({
 export function VpsPage() {
   const { downloads, onStop, onRetry, vpsReady, showSecured } = useLayoutContext();
   const navigate = useNavigate();
+  const { tab: tabParam } = useParams<{ tab?: string }>();
+  const tab: 'files' | 'torrents' = tabParam === 'torrents' ? 'torrents' : 'files';
   const [groups, setGroups] = useState<VpsFolderGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [folderFilter, setFolderFilter] = useState('');
   const [search, setSearch] = useState('');
-  const [tab, setTab] = useState<'files' | 'torrents'>('files');
 
   const loadFiles = useCallback(async () => {
     setLoading(true);
@@ -283,7 +284,7 @@ export function VpsPage() {
       {/* Tabs */}
       <div className="flex items-center gap-1 mb-4 border-b border-slate-700/60">
         <button
-          onClick={() => setTab('files')}
+          onClick={() => navigate(ROUTES.VPS_FILES)}
           className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
             tab === 'files'
               ? 'border-cyan-500 text-white'
@@ -293,7 +294,7 @@ export function VpsPage() {
           <Folder className="w-4 h-4" /> Files
         </button>
         <button
-          onClick={() => setTab('torrents')}
+          onClick={() => navigate(ROUTES.VPS_TORRENTS)}
           className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
             tab === 'torrents'
               ? 'border-purple-500 text-white'

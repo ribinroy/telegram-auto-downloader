@@ -338,8 +338,8 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
               {vpsReady && (
                 <div className="group relative">
                   <button
-                    onClick={() => navigate(ROUTES.VPS)}
-                    className={`p-2 hover:bg-slate-600/50 text-slate-400 hover:text-white rounded-lg transition-colors ${location.pathname === ROUTES.VPS ? 'bg-slate-600/50 text-white' : 'bg-slate-700/50'}`}
+                    onClick={() => navigate(ROUTES.VPS_FILES)}
+                    className={`p-2 hover:bg-slate-600/50 text-slate-400 hover:text-white rounded-lg transition-colors ${location.pathname.startsWith(ROUTES.VPS) ? 'bg-slate-600/50 text-white' : 'bg-slate-700/50'}`}
                   >
                     <HardDrive className="w-4 h-4" />
                   </button>
