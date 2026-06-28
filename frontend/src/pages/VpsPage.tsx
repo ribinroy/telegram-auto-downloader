@@ -243,9 +243,11 @@ export function VpsPage() {
 
   // A client tab is only "active" when that client is configured; otherwise we
   // fall back to the Files view (covers stale/bookmarked client URLs).
+  const transmissionConfigured = !!torrentConfig?.transmission?.configured;
+  const qbittorrentConfigured = !!torrentConfig?.qbittorrent?.configured;
   const torrentTabActive =
-    (tab === 'transmission' && !!torrentConfig?.transmission.configured) ||
-    (tab === 'qbittorrent' && !!torrentConfig?.qbittorrent.configured);
+    (tab === 'transmission' && transmissionConfigured) ||
+    (tab === 'qbittorrent' && qbittorrentConfigured);
   const filesVisible = !torrentTabActive;
 
   return (
@@ -305,7 +307,7 @@ export function VpsPage() {
         >
           <Folder className="w-4 h-4" /> Files{allEntries.length > 0 ? ` (${allEntries.length})` : ''}
         </button>
-        {torrentConfig?.transmission.configured && (
+        {transmissionConfigured && (
           <button
             onClick={() => navigate(ROUTES.VPS_TRANSMISSION)}
             className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
@@ -317,7 +319,7 @@ export function VpsPage() {
             <Magnet className="w-4 h-4" /> Transmission{counts.transmission ? ` (${counts.transmission})` : ''}
           </button>
         )}
-        {torrentConfig?.qbittorrent.configured && (
+        {qbittorrentConfigured && (
           <button
             onClick={() => navigate(ROUTES.VPS_QBITTORRENT)}
             className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
@@ -332,12 +334,12 @@ export function VpsPage() {
       </div>
 
       {/* Torrent panels stay mounted so their counts keep refreshing for the tab badges */}
-      {torrentConfig?.transmission.configured && (
+      {transmissionConfigured && (
         <div className={tab === 'transmission' ? '' : 'hidden'}>
           <TorrentStatusPanel client="transmission" onCountChange={(n) => setCounts(c => ({ ...c, transmission: n }))} />
         </div>
       )}
-      {torrentConfig?.qbittorrent.configured && (
+      {qbittorrentConfigured && (
         <div className={tab === 'qbittorrent' ? '' : 'hidden'}>
           <TorrentStatusPanel client="qbittorrent" onCountChange={(n) => setCounts(c => ({ ...c, qbittorrent: n }))} />
         </div>

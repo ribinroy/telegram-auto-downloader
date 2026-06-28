@@ -396,7 +396,7 @@ export function VpsSettings({ onChange }: { onChange?: () => void }) {
         </div>
 
         {/* Default client for unattended Telegram-channel magnets */}
-        {(torrentConfig?.transmission.configured || torrentConfig?.qbittorrent.configured) && (
+        {(torrentConfig?.transmission?.configured || torrentConfig?.qbittorrent?.configured) && (
           <div className="mt-4 flex flex-wrap items-center gap-2">
             <Send className="w-4 h-4 text-cyan-400 shrink-0" />
             <label className="text-sm text-slate-300">Default client for Telegram magnets</label>
@@ -407,8 +407,8 @@ export function VpsSettings({ onChange }: { onChange?: () => void }) {
               className="bg-slate-700/50 border border-slate-600 rounded-lg py-1.5 px-2 text-sm text-white focus:outline-none focus:border-cyan-500 transition-colors disabled:opacity-50"
             >
               <option value="">None</option>
-              {torrentConfig?.transmission.configured && <option value="transmission">Transmission</option>}
-              {torrentConfig?.qbittorrent.configured && <option value="qbittorrent">qBittorrent</option>}
+              {torrentConfig?.transmission?.configured && <option value="transmission">Transmission</option>}
+              {torrentConfig?.qbittorrent?.configured && <option value="qbittorrent">qBittorrent</option>}
             </select>
             {savingTgDefault && <Loader2 className="w-4 h-4 animate-spin text-slate-400" />}
           </div>
