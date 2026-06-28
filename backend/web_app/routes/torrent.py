@@ -172,7 +172,7 @@ class TorrentRoutesMixin:
             fields = [
                 "id", "name", "hashString", "status", "percentDone",
                 "rateDownload", "rateUpload", "totalSize", "eta",
-                "downloadDir", "errorString",
+                "downloadDir", "errorString", "addedDate",
                 "peersConnected", "peersSendingToUs", "peersGettingFromUs",
                 "trackerStats",
             ]
@@ -204,6 +204,8 @@ class TorrentRoutesMixin:
                     "eta": eta if isinstance(eta, int) and eta >= 0 else None,
                     "download_dir": t.get("downloadDir"),
                     "error": t.get("errorString") or None,
+                    # Unix epoch seconds the torrent was added to Transmission
+                    "added_date": t.get("addedDate") or 0,
                     # Connected peers we're exchanging with
                     "peers_connected": t.get("peersConnected") or 0,
                     "seeds_connected": t.get("peersSendingToUs") or 0,
