@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
-import { Loader2, AlertCircle, CheckCircle, Check, Plug, FolderPlus, Folder, FolderOpen, Eye, EyeOff, Trash2, Unplug, Server, Magnet } from 'lucide-react';
+import { Loader2, AlertCircle, CheckCircle, Check, Plug, FolderPlus, Folder, FolderOpen, Eye, EyeOff, Trash2, Unplug, Server, Magnet, Send } from 'lucide-react';
 import {
   fetchVpsConfig, saveVpsConfig, testVpsConnection, deleteVpsConfig,
   fetchVpsFolders, addVpsFolders, deleteVpsFolder, updateVpsFolder, browseLocal,
   fetchTorrentConfig, saveTorrentConfig, deleteTorrentConfig, testTorrentConnection,
-  type VpsConfig, type VpsWatchFolder, type TorrentConfig,
+  setTelegramDefault,
+  type VpsConfig, type VpsWatchFolder, type TorrentConfig, type TorrentClient, type TorrentClientConfig,
 } from '../api';
 import { FolderBrowser } from './FolderBrowser';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -33,18 +34,9 @@ export function VpsSettings({ onChange }: { onChange?: () => void }) {
   // Watched folder currently picking a local destination folder
   const [destTarget, setDestTarget] = useState<VpsWatchFolder | null>(null);
 
-  // Torrent client (Transmission) config
+  // Torrent client config (both Transmission + qBittorrent)
   const [torrentConfig, setTorrentConfig] = useState<TorrentConfig | null>(null);
-  const [tUrl, setTUrl] = useState('');
-  const [tUsername, setTUsername] = useState('');
-  const [tPassword, setTPassword] = useState('');
-  const [tIncompleteDir, setTIncompleteDir] = useState('');
-  const [tSaving, setTSaving] = useState(false);
-  const [tTesting, setTTesting] = useState(false);
-  const [tRemoving, setTRemoving] = useState(false);
-  const [tError, setTError] = useState<string | null>(null);
-  const [tSuccess, setTSuccess] = useState<string | null>(null);
-  const [tTestResult, setTTestResult] = useState<{ success: boolean; message?: string; error?: string } | null>(null);
+  const [savingTgDefault, setSavingTgDefault] = useState(false);
 
   useEffect(() => {
     loadConfig();
@@ -54,70 +46,19 @@ export function VpsSettings({ onChange }: { onChange?: () => void }) {
 
   const loadTorrentConfig = async () => {
     try {
-      const cfg = await fetchTorrentConfig();
-      setTorrentConfig(cfg);
-      setTUrl(cfg.url || '');
-      setTUsername(cfg.username || '');
-      setTPassword('');
-      setTIncompleteDir(cfg.incomplete_dir || '');
+      setTorrentConfig(await fetchTorrentConfig());
     } catch { /* section stays unconfigured */ }
   };
 
-  const torrentInput = () => ({
-    url: tUrl.trim(),
-    username: tUsername.trim(),
-    incomplete_dir: tIncompleteDir.trim(),
-    ...(tPassword ? { password: tPassword } : {}),
-  });
-
-  const handleTorrentTest = async () => {
-    setTTesting(true);
-    setTError(null);
-    setTTestResult(null);
+  const handleTelegramDefaultChange = async (client: TorrentClient | null) => {
+    setSavingTgDefault(true);
     try {
-      setTTestResult(await testTorrentConnection(torrentInput()));
-    } catch {
-      setTTestResult({ success: false, error: 'Failed to run connection test' });
-    } finally {
-      setTTesting(false);
-    }
-  };
-
-  const handleTorrentSave = async () => {
-    setTSaving(true);
-    setTError(null);
-    setTSuccess(null);
-    try {
-      const result = await saveTorrentConfig(torrentInput());
-      if (result.error) {
-        setTError(result.error);
-      } else if (result.warning) {
-        setTError(result.warning);
-        await loadTorrentConfig();
-      } else {
-        setTSuccess('Torrent client saved');
-        await loadTorrentConfig();
-        setTimeout(() => setTSuccess(null), 3000);
-      }
-    } catch {
-      setTError('Failed to save torrent client');
-    } finally {
-      setTSaving(false);
-    }
-  };
-
-  const handleTorrentRemove = async () => {
-    setTRemoving(true);
-    setTError(null);
-    setTTestResult(null);
-    try {
-      await deleteTorrentConfig();
-      setTPassword('');
+      await setTelegramDefault(client);
       await loadTorrentConfig();
     } catch {
-      setTError('Failed to remove torrent client');
+      /* ignore — selector reflects last loaded value */
     } finally {
-      setTRemoving(false);
+      setSavingTgDefault(false);
     }
   };
 
@@ -426,133 +367,52 @@ export function VpsSettings({ onChange }: { onChange?: () => void }) {
         </form>
       )}
 
-      {/* Torrent client (Transmission) */}
+      {/* Torrent clients (Transmission + qBittorrent) */}
       <div className="mt-6 pt-5 border-t border-slate-700/60">
-        <div className="flex items-center justify-between mb-3">
-          <div>
-            <h3 className="text-sm font-semibold text-white flex items-center gap-2">
-              <Magnet className="w-4 h-4 text-purple-400" /> Torrent Client (Transmission)
-            </h3>
-            <p className="text-xs text-slate-400">
-              Paste a magnet link on the downloads page to send it to the VPS torrent client.
-            </p>
-          </div>
-          {torrentConfig?.configured && (
-            <span className="flex items-center gap-1.5 text-xs bg-green-500/15 text-green-400 border border-green-500/30 rounded-full px-2.5 py-1 shrink-0">
-              <span className="w-1.5 h-1.5 rounded-full bg-green-400" />
-              Configured
-            </span>
-          )}
+        <div className="mb-3">
+          <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+            <Magnet className="w-4 h-4 text-purple-400" /> Torrent Clients
+          </h3>
+          <p className="text-xs text-slate-400">
+            Configure either or both. Paste a magnet on the downloads page and pick the client to send it to.
+          </p>
         </div>
 
-        {tSuccess && (
-          <div className="flex items-center gap-2 bg-green-500/20 border border-green-500/50 rounded-lg p-3 mb-3 text-green-400 text-sm">
-            <CheckCircle className="w-4 h-4 shrink-0" />
-            <span>{tSuccess}</span>
-          </div>
-        )}
-        {tError && (
-          <div className="flex items-center gap-2 bg-red-500/20 border border-red-500/50 rounded-lg p-3 mb-3 text-red-400 text-sm">
-            <AlertCircle className="w-4 h-4 shrink-0" />
-            <span>{tError}</span>
-          </div>
-        )}
-
-        <div className="space-y-3">
-          <div>
-            <label className="block text-sm text-slate-400 mb-1">Web/RPC URL</label>
-            <input
-              type="text"
-              value={tUrl}
-              onChange={(e) => setTUrl(e.target.value)}
-              placeholder="e.g., https://your-box.seedhost.eu/user/transmission/web/"
-              className="w-full bg-slate-700/50 border border-slate-600 rounded-lg py-2 px-3 text-white placeholder-slate-400 focus:outline-none focus:border-purple-500 transition-colors"
-            />
-            <p className="text-xs text-slate-500 mt-1">
-              The Transmission web UI URL works — it is normalized to the RPC endpoint on save.
-            </p>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-sm text-slate-400 mb-1">Username</label>
-              <input
-                type="text"
-                value={tUsername}
-                onChange={(e) => setTUsername(e.target.value)}
-                autoComplete="off"
-                className="w-full bg-slate-700/50 border border-slate-600 rounded-lg py-2 px-3 text-white placeholder-slate-400 focus:outline-none focus:border-purple-500 transition-colors"
-              />
-            </div>
-            <div>
-              <label className="block text-sm text-slate-400 mb-1">Password</label>
-              <input
-                type="password"
-                value={tPassword}
-                onChange={(e) => setTPassword(e.target.value)}
-                placeholder={torrentConfig?.has_password ? '•••••••• (leave blank to keep saved password)' : 'Web UI password'}
-                autoComplete="new-password"
-                className="w-full bg-slate-700/50 border border-slate-600 rounded-lg py-2 px-3 text-white placeholder-slate-400 focus:outline-none focus:border-purple-500 transition-colors"
-              />
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-sm text-slate-400 mb-1">Temp (incomplete) folder</label>
-            <input
-              type="text"
-              value={tIncompleteDir}
-              onChange={(e) => setTIncompleteDir(e.target.value)}
-              placeholder="e.g., /home/user/downloads/.incomplete (leave blank to disable)"
-              className="w-full bg-slate-700/50 border border-slate-600 rounded-lg py-2 px-3 text-white placeholder-slate-400 focus:outline-none focus:border-purple-500 transition-colors"
-            />
-            <p className="text-xs text-slate-500 mt-1">
-              Remote path on the VPS. Active torrents download here, then move to the destination folder when complete.
-            </p>
-          </div>
-
-          {tTestResult && (
-            <div className={`flex items-center gap-2 border rounded-lg p-3 text-sm ${
-              tTestResult.success
-                ? 'bg-green-500/20 border-green-500/50 text-green-400'
-                : 'bg-red-500/20 border-red-500/50 text-red-400'
-            }`}>
-              {tTestResult.success ? <CheckCircle className="w-4 h-4 shrink-0" /> : <AlertCircle className="w-4 h-4 shrink-0" />}
-              <span>{tTestResult.success ? tTestResult.message : tTestResult.error}</span>
-            </div>
-          )}
-
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={handleTorrentTest}
-              disabled={tTesting || tSaving || !tUrl.trim()}
-              className="flex-1 bg-slate-600 hover:bg-slate-500 text-white font-medium py-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-            >
-              {tTesting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plug className="w-4 h-4" />}
-              Test
-            </button>
-            <button
-              type="button"
-              onClick={handleTorrentSave}
-              disabled={tSaving || tTesting || !tUrl.trim()}
-              className="flex-1 bg-purple-600 hover:bg-purple-500 text-white font-medium py-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-            >
-              {tSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
-              Save
-            </button>
-            {torrentConfig?.configured && (
-              <button
-                type="button"
-                onClick={handleTorrentRemove}
-                disabled={tRemoving}
-                title="Remove the saved torrent client"
-                className="px-3 bg-red-500/10 hover:bg-red-500/20 border border-red-500/40 text-red-400 font-medium py-2 rounded-lg transition-colors disabled:opacity-50 flex items-center justify-center"
-              >
-                {tRemoving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Unplug className="w-4 h-4" />}
-              </button>
-            )}
-          </div>
+        <div className="space-y-4">
+          <TorrentClientCard
+            client="transmission"
+            label="Transmission"
+            data={torrentConfig?.transmission}
+            canBrowse={canBrowse}
+            onSaved={loadTorrentConfig}
+          />
+          <TorrentClientCard
+            client="qbittorrent"
+            label="qBittorrent"
+            data={torrentConfig?.qbittorrent}
+            canBrowse={canBrowse}
+            onSaved={loadTorrentConfig}
+          />
         </div>
+
+        {/* Default client for unattended Telegram-channel magnets */}
+        {(torrentConfig?.transmission.configured || torrentConfig?.qbittorrent.configured) && (
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <Send className="w-4 h-4 text-cyan-400 shrink-0" />
+            <label className="text-sm text-slate-300">Default client for Telegram magnets</label>
+            <select
+              value={torrentConfig?.telegram_default ?? ''}
+              onChange={(e) => handleTelegramDefaultChange((e.target.value || null) as TorrentClient | null)}
+              disabled={savingTgDefault}
+              className="bg-slate-700/50 border border-slate-600 rounded-lg py-1.5 px-2 text-sm text-white focus:outline-none focus:border-cyan-500 transition-colors disabled:opacity-50"
+            >
+              <option value="">None</option>
+              {torrentConfig?.transmission.configured && <option value="transmission">Transmission</option>}
+              {torrentConfig?.qbittorrent.configured && <option value="qbittorrent">qBittorrent</option>}
+            </select>
+            {savingTgDefault && <Loader2 className="w-4 h-4 animate-spin text-slate-400" />}
+          </div>
+        )}
       </div>
 
       {/* Watched folders */}
@@ -699,5 +559,266 @@ export function VpsSettings({ onChange }: { onChange?: () => void }) {
         onCancel={() => setConfirmRemove(false)}
       />
     </>
+  );
+}
+
+function TorrentClientCard({
+  client, label, data, canBrowse, onSaved,
+}: {
+  client: TorrentClient;
+  label: string;
+  data?: TorrentClientConfig;
+  canBrowse: boolean;
+  onSaved: () => void | Promise<void>;
+}) {
+  const [url, setUrl] = useState('');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [downloadDir, setDownloadDir] = useState('');
+  const [incompleteDir, setIncompleteDir] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+  const [testResult, setTestResult] = useState<{ success: boolean; message?: string; error?: string } | null>(null);
+  // Which folder field is currently picking a remote path.
+  const [picking, setPicking] = useState<null | 'download_dir' | 'incomplete_dir'>(null);
+
+  const configured = !!data?.configured;
+  const hasPassword = !!data?.has_password;
+  const isTransmission = client === 'transmission';
+
+  // Hydrate the form whenever the saved config (re)loads.
+  useEffect(() => {
+    setUrl(data?.url || '');
+    setUsername(data?.username || '');
+    setPassword('');
+    setDownloadDir(data?.download_dir || '');
+    setIncompleteDir(data?.incomplete_dir || '');
+  }, [data]);
+
+  const input = () => ({
+    url: url.trim(),
+    username: username.trim(),
+    download_dir: downloadDir.trim(),
+    incomplete_dir: incompleteDir.trim(),
+    ...(password ? { password } : {}),
+  });
+
+  const handleTest = async () => {
+    setTesting(true);
+    setError(null);
+    setTestResult(null);
+    try {
+      setTestResult(await testTorrentConnection(client, input()));
+    } catch {
+      setTestResult({ success: false, error: 'Failed to run connection test' });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      const result = await saveTorrentConfig(client, input());
+      if (result.error) {
+        setError(result.error);
+      } else if (result.warning) {
+        setError(result.warning);
+        await onSaved();
+      } else {
+        setSuccess(`${label} saved`);
+        await onSaved();
+        setTimeout(() => setSuccess(null), 3000);
+      }
+    } catch {
+      setError(`Failed to save ${label}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleRemove = async () => {
+    setRemoving(true);
+    setError(null);
+    setTestResult(null);
+    try {
+      await deleteTorrentConfig(client);
+      setPassword('');
+      await onSaved();
+    } catch {
+      setError(`Failed to remove ${label}`);
+    } finally {
+      setRemoving(false);
+    }
+  };
+
+  const folderField = (
+    field: 'download_dir' | 'incomplete_dir', value: string,
+    setValue: (v: string) => void, title: string, placeholder: string, help: string,
+  ) => (
+    <div>
+      <label className="block text-sm text-slate-400 mb-1">{title}</label>
+      <div className="flex gap-2">
+        <input
+          type="text"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          placeholder={placeholder}
+          className="flex-1 bg-slate-700/50 border border-slate-600 rounded-lg py-2 px-3 text-white placeholder-slate-400 focus:outline-none focus:border-purple-500 transition-colors"
+        />
+        <button
+          type="button"
+          onClick={() => setPicking(field)}
+          disabled={!canBrowse}
+          title={canBrowse ? 'Browse remote folders' : 'Save the VPS connection (with password) above to browse'}
+          className="px-3 bg-slate-600 hover:bg-slate-500 disabled:bg-slate-700 disabled:text-slate-500 disabled:cursor-not-allowed text-white rounded-lg transition-colors flex items-center"
+        >
+          <FolderOpen className="w-4 h-4" />
+        </button>
+      </div>
+      <p className="text-xs text-slate-500 mt-1">{help}</p>
+    </div>
+  );
+
+  return (
+    <div className="rounded-xl border border-slate-700/60 bg-slate-800/30 p-3 sm:p-4">
+      <div className="flex items-center justify-between mb-3">
+        <h4 className="text-sm font-semibold text-white">{label}</h4>
+        {configured && (
+          <span className="flex items-center gap-1.5 text-xs bg-green-500/15 text-green-400 border border-green-500/30 rounded-full px-2.5 py-1 shrink-0">
+            <span className="w-1.5 h-1.5 rounded-full bg-green-400" />
+            Configured
+          </span>
+        )}
+      </div>
+
+      {success && (
+        <div className="flex items-center gap-2 bg-green-500/20 border border-green-500/50 rounded-lg p-3 mb-3 text-green-400 text-sm">
+          <CheckCircle className="w-4 h-4 shrink-0" />
+          <span>{success}</span>
+        </div>
+      )}
+      {error && (
+        <div className="flex items-center gap-2 bg-red-500/20 border border-red-500/50 rounded-lg p-3 mb-3 text-red-400 text-sm">
+          <AlertCircle className="w-4 h-4 shrink-0" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      <div className="space-y-3">
+        <div>
+          <label className="block text-sm text-slate-400 mb-1">{isTransmission ? 'Web/RPC URL' : 'WebUI URL'}</label>
+          <input
+            type="text"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            placeholder={isTransmission
+              ? 'e.g., https://your-box.seedhost.eu/user/transmission/web/'
+              : 'e.g., https://your-box.seedhost.eu/qbittorrent/'}
+            className="w-full bg-slate-700/50 border border-slate-600 rounded-lg py-2 px-3 text-white placeholder-slate-400 focus:outline-none focus:border-purple-500 transition-colors"
+          />
+          <p className="text-xs text-slate-500 mt-1">
+            {isTransmission
+              ? 'The Transmission web UI URL works — it is normalized to the RPC endpoint on save.'
+              : 'The base qBittorrent WebUI URL.'}
+          </p>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label className="block text-sm text-slate-400 mb-1">Username</label>
+            <input
+              type="text"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              autoComplete="off"
+              className="w-full bg-slate-700/50 border border-slate-600 rounded-lg py-2 px-3 text-white placeholder-slate-400 focus:outline-none focus:border-purple-500 transition-colors"
+            />
+          </div>
+          <div>
+            <label className="block text-sm text-slate-400 mb-1">Password</label>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder={hasPassword ? '•••••••• (leave blank to keep saved password)' : 'WebUI password'}
+              autoComplete="new-password"
+              className="w-full bg-slate-700/50 border border-slate-600 rounded-lg py-2 px-3 text-white placeholder-slate-400 focus:outline-none focus:border-purple-500 transition-colors"
+            />
+          </div>
+        </div>
+
+        {folderField('download_dir', downloadDir, setDownloadDir,
+          'Default download folder (VPS)',
+          'e.g., /home/user/downloads (leave blank for the client default)',
+          'Remote path where completed torrents land when no folder is chosen for a magnet.')}
+
+        {folderField('incomplete_dir', incompleteDir, setIncompleteDir,
+          'Temp (incomplete) folder',
+          'e.g., /home/user/downloads/.incomplete (leave blank to disable)',
+          'Active torrents download here, then move to the destination folder when complete.')}
+
+        {testResult && (
+          <div className={`flex items-center gap-2 border rounded-lg p-3 text-sm ${
+            testResult.success
+              ? 'bg-green-500/20 border-green-500/50 text-green-400'
+              : 'bg-red-500/20 border-red-500/50 text-red-400'
+          }`}>
+            {testResult.success ? <CheckCircle className="w-4 h-4 shrink-0" /> : <AlertCircle className="w-4 h-4 shrink-0" />}
+            <span>{testResult.success ? testResult.message : testResult.error}</span>
+          </div>
+        )}
+
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={handleTest}
+            disabled={testing || saving || !url.trim()}
+            className="flex-1 bg-slate-600 hover:bg-slate-500 text-white font-medium py-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+          >
+            {testing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plug className="w-4 h-4" />}
+            Test
+          </button>
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={saving || testing || !url.trim()}
+            className="flex-1 bg-purple-600 hover:bg-purple-500 text-white font-medium py-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+          >
+            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+            Save
+          </button>
+          {configured && (
+            <button
+              type="button"
+              onClick={handleRemove}
+              disabled={removing}
+              title={`Remove the saved ${label} client`}
+              className="px-3 bg-red-500/10 hover:bg-red-500/20 border border-red-500/40 text-red-400 font-medium py-2 rounded-lg transition-colors disabled:opacity-50 flex items-center justify-center"
+            >
+              {removing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Unplug className="w-4 h-4" />}
+            </button>
+          )}
+        </div>
+      </div>
+
+      <FolderBrowser
+        isOpen={picking !== null}
+        onClose={() => setPicking(null)}
+        singleSelect
+        title={picking === 'incomplete_dir' ? 'Temp folder on the VPS' : 'Default download folder on the VPS'}
+        initialPath={(picking === 'incomplete_dir' ? incompleteDir : downloadDir) || null}
+        onConfirm={(paths) => {
+          const p = paths[0] || '';
+          if (picking === 'incomplete_dir') setIncompleteDir(p);
+          else if (picking === 'download_dir') setDownloadDir(p);
+          setPicking(null);
+        }}
+      />
+    </div>
   );
 }

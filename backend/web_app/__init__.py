@@ -27,8 +27,11 @@ from backend.web_app.base import (
 )
 from backend.web_app.torrent import (
     normalize_transmission_url, load_torrent_config, apply_torrent_session,
-    transmission_add_magnet, transmission_telegram_dirs, transmission_rpc,
-    transmission_get_torrent, TELEGRAM_TORRENT_SUBDIR, TELEGRAM_PROGRESS_SUBDIR,
+    get_telegram_default, transmission_add_magnet, transmission_telegram_dirs,
+    transmission_rpc, transmission_get_torrent,
+    torrent_add_magnet, torrent_list, torrent_control, torrent_get,
+    torrent_set_location, torrent_telegram_dirs, torrent_test,
+    TELEGRAM_TORRENT_SUBDIR, TELEGRAM_PROGRESS_SUBDIR,
 )
 from backend.web_app.vps import load_vps_credentials, annotate_vps_folders, open_vps_sftp
 from backend.web_app.helpers import candidate_file_paths

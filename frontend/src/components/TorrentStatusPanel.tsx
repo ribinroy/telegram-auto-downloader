@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Magnet, ArrowDown, ArrowUp, Play, Pause, Trash2, Loader2, Search, X, Check, Sprout, Users,
 } from 'lucide-react';
-import { fetchTorrentList, torrentAction, downloadVpsFile, type TorrentStatus } from '../api';
+import { fetchTorrentList, torrentAction, downloadVpsFile, type TorrentStatus, type TorrentClient } from '../api';
 import { formatBytes, formatTime } from '../utils/format';
 import { ConfirmDialog } from './ConfirmDialog';
 import { Tooltip } from './Tooltip';
@@ -20,21 +20,21 @@ const STATUS_STYLES: Record<TorrentStatus['status'], { label: string; cls: strin
   unknown: { label: 'Unknown', cls: 'bg-slate-500/15 text-slate-300 border-slate-500/30' },
 };
 
-export function TorrentStatusPanel({ onCountChange }: { onCountChange?: (n: number) => void } = {}) {
+export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentClient; onCountChange?: (n: number) => void }) {
   const navigate = useNavigate();
   const [torrents, setTorrents] = useState<TorrentStatus[]>([]);
   const [configured, setConfigured] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
-  // IDs with an action in flight (buttons disabled), and the torrent pending removal.
-  const [busy, setBusy] = useState<Set<number>>(new Set());
+  // Hashes with an action in flight (buttons disabled), and the torrent pending removal.
+  const [busy, setBusy] = useState<Set<string>>(new Set());
   const [removeTarget, setRemoveTarget] = useState<TorrentStatus | null>(null);
   const [search, setSearch] = useState('');
   // DownLee transfer state: torrents with a transfer being started / already started.
-  const [dlBusy, setDlBusy] = useState<Set<number>>(new Set());
-  const [dlStarted, setDlStarted] = useState<Set<number>>(new Set());
-  // Multi-select: chosen torrent ids + whether the bulk remove dialog is open.
-  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [dlBusy, setDlBusy] = useState<Set<string>>(new Set());
+  const [dlStarted, setDlStarted] = useState<Set<string>>(new Set());
+  // Multi-select: chosen torrent hashes + whether the bulk remove dialog is open.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkRemove, setBulkRemove] = useState(false);
   // Guard against overlapping polls when a request runs longer than the interval.
   const inFlight = useRef(false);
@@ -43,7 +43,7 @@ export function TorrentStatusPanel({ onCountChange }: { onCountChange?: (n: numb
     if (inFlight.current) return;
     inFlight.current = true;
     try {
-      const res = await fetchTorrentList();
+      const res = await fetchTorrentList(client);
       setConfigured(res.configured);
       setError(res.error ?? null);
       setTorrents(res.torrents ?? []);
@@ -53,7 +53,7 @@ export function TorrentStatusPanel({ onCountChange }: { onCountChange?: (n: numb
       inFlight.current = false;
       setLoaded(true);
     }
-  }, []);
+  }, [client]);
 
   useEffect(() => {
     load();
@@ -65,50 +65,50 @@ export function TorrentStatusPanel({ onCountChange }: { onCountChange?: (n: numb
   useEffect(() => { onCountChange?.(torrents.length); }, [torrents.length, onCountChange]);
 
   const runAction = async (action: 'start' | 'stop' | 'remove', t: TorrentStatus, deleteData = false) => {
-    setBusy(prev => new Set(prev).add(t.id));
+    setBusy(prev => new Set(prev).add(t.hash));
     try {
-      const res = await torrentAction(action, [t.id], deleteData);
+      const res = await torrentAction(client, action, [t.hash], deleteData);
       if (res.error) setError(res.error);
       await load();
     } finally {
-      setBusy(prev => { const next = new Set(prev); next.delete(t.id); return next; });
+      setBusy(prev => { const next = new Set(prev); next.delete(t.hash); return next; });
     }
   };
 
   // Run an action across all currently-selected torrents in one RPC call.
   const runBulkAction = async (action: 'start' | 'stop' | 'remove', deleteData = false) => {
-    const ids = torrents.filter(t => selected.has(t.id)).map(t => t.id);
-    if (ids.length === 0) return;
-    setBusy(prev => { const next = new Set(prev); ids.forEach(i => next.add(i)); return next; });
+    const hashes = torrents.filter(t => selected.has(t.hash)).map(t => t.hash);
+    if (hashes.length === 0) return;
+    setBusy(prev => { const next = new Set(prev); hashes.forEach(h => next.add(h)); return next; });
     try {
-      const res = await torrentAction(action, ids, deleteData);
+      const res = await torrentAction(client, action, hashes, deleteData);
       if (res.error) setError(res.error);
       await load();
     } finally {
-      setBusy(prev => { const next = new Set(prev); ids.forEach(i => next.delete(i)); return next; });
+      setBusy(prev => { const next = new Set(prev); hashes.forEach(h => next.delete(h)); return next; });
       if (action === 'remove') setSelected(new Set());
     }
   };
 
-  const toggleSelect = (id: number) => setSelected(prev => {
+  const toggleSelect = (hash: string) => setSelected(prev => {
     const next = new Set(prev);
-    next.has(id) ? next.delete(id) : next.add(id);
+    next.has(hash) ? next.delete(hash) : next.add(hash);
     return next;
   });
 
   // Pull a finished torrent's files from the VPS down to DownLee (home server).
   const downloadToDownlee = async (t: TorrentStatus) => {
     setError(null);
-    setDlBusy(prev => new Set(prev).add(t.id));
+    setDlBusy(prev => new Set(prev).add(t.hash));
     try {
       const remotePath = `${(t.download_dir || '').replace(/\/+$/, '')}/${t.name}`;
       const res = await downloadVpsFile(remotePath);
       if (res.error) setError(res.error);
-      else setDlStarted(prev => new Set(prev).add(t.id));
+      else setDlStarted(prev => new Set(prev).add(t.hash));
     } catch {
       setError('Failed to start the download to DownLee');
     } finally {
-      setDlBusy(prev => { const next = new Set(prev); next.delete(t.id); return next; });
+      setDlBusy(prev => { const next = new Set(prev); next.delete(t.hash); return next; });
     }
   };
 
@@ -138,17 +138,17 @@ export function TorrentStatusPanel({ onCountChange }: { onCountChange?: (n: numb
   const sorted = [...torrents].sort((a, b) => b.added_date - a.added_date);
   const filtered = query ? sorted.filter(t => t.name.toLowerCase().includes(query)) : sorted;
 
-  const selectedCount = torrents.filter(t => selected.has(t.id)).length;
-  const allFilteredSelected = filtered.length > 0 && filtered.every(t => selected.has(t.id));
+  const selectedCount = torrents.filter(t => selected.has(t.hash)).length;
+  const allFilteredSelected = filtered.length > 0 && filtered.every(t => selected.has(t.hash));
   const toggleSelectAll = () => setSelected(prev => {
     if (allFilteredSelected) {
       const next = new Set(prev);
-      filtered.forEach(t => next.delete(t.id));
+      filtered.forEach(t => next.delete(t.hash));
       return next;
     }
-    return new Set([...prev, ...filtered.map(t => t.id)]);
+    return new Set([...prev, ...filtered.map(t => t.hash)]);
   });
-  const bulkBusy = torrents.some(t => selected.has(t.id) && busy.has(t.id));
+  const bulkBusy = torrents.some(t => selected.has(t.hash) && busy.has(t.hash));
 
   return (
     <div className="space-y-2">
@@ -254,27 +254,27 @@ export function TorrentStatusPanel({ onCountChange }: { onCountChange?: (n: numb
         const style = STATUS_STYLES[t.status] ?? STATUS_STYLES.unknown;
         const active = t.status === 'downloading';
         const paused = t.status === 'stopped';
-        const isBusy = busy.has(t.id);
+        const isBusy = busy.has(t.hash);
         const done = t.percent_done >= 100;
-        const dlInFlight = dlBusy.has(t.id);
-        const dlDone = dlStarted.has(t.id);
+        const dlInFlight = dlBusy.has(t.hash);
+        const dlDone = dlStarted.has(t.hash);
         return (
           <div
             key={t.hash}
             className={`rounded-xl border bg-slate-800/30 p-3 sm:p-4 transition-colors ${
-              selected.has(t.id) ? 'border-purple-500/60 bg-purple-500/5' : 'border-slate-700/50'
+              selected.has(t.hash) ? 'border-purple-500/60 bg-purple-500/5' : 'border-slate-700/50'
             }`}
           >
             <div className="flex items-center justify-between gap-3">
               <button
-                onClick={() => toggleSelect(t.id)}
+                onClick={() => toggleSelect(t.hash)}
                 className="shrink-0"
-                title={selected.has(t.id) ? 'Deselect' : 'Select'}
+                title={selected.has(t.hash) ? 'Deselect' : 'Select'}
               >
                 <span className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${
-                  selected.has(t.id) ? 'bg-purple-500 border-purple-500' : 'border-slate-500 hover:border-slate-300'
+                  selected.has(t.hash) ? 'bg-purple-500 border-purple-500' : 'border-slate-500 hover:border-slate-300'
                 }`}>
-                  {selected.has(t.id) && <Check className="w-3 h-3 text-white" />}
+                  {selected.has(t.hash) && <Check className="w-3 h-3 text-white" />}
                 </span>
               </button>
               <span className="text-sm sm:text-base text-white font-medium truncate min-w-0 flex-1" title={t.name}>{t.name}</span>

@@ -7,7 +7,7 @@ import {
 import ReactTimeAgo from 'react-time-ago';
 import { useLayoutContext } from '../components/Layout';
 import { TorrentStatusPanel } from '../components/TorrentStatusPanel';
-import { fetchVpsFiles, downloadVpsFile, deleteVpsRemote, type VpsFileEntry, type VpsFolderGroup } from '../api';
+import { fetchVpsFiles, downloadVpsFile, deleteVpsRemote, fetchTorrentConfig, type VpsFileEntry, type VpsFolderGroup, type TorrentConfig } from '../api';
 import { formatBytes, formatSpeed, formatTime } from '../utils/format';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { ROUTES } from '../routes';
@@ -172,13 +172,16 @@ export function VpsPage() {
   const { downloads, onStop, onRetry, vpsReady, showSecured } = useLayoutContext();
   const navigate = useNavigate();
   const { tab: tabParam } = useParams<{ tab?: string }>();
-  const tab: 'files' | 'torrents' = tabParam === 'torrents' ? 'torrents' : 'files';
+  const tab: 'files' | 'transmission' | 'qbittorrent' =
+    tabParam === 'transmission' || tabParam === 'qbittorrent' ? tabParam : 'files';
   const [groups, setGroups] = useState<VpsFolderGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [folderFilter, setFolderFilter] = useState('');
   const [search, setSearch] = useState('');
-  const [torrentCount, setTorrentCount] = useState<number | null>(null);
+  const [torrentConfig, setTorrentConfig] = useState<TorrentConfig | null>(null);
+  const [counts, setCounts] = useState<{ transmission: number | null; qbittorrent: number | null }>(
+    { transmission: null, qbittorrent: null });
 
   const loadFiles = useCallback(async () => {
     setLoading(true);
@@ -193,6 +196,7 @@ export function VpsPage() {
   }, [showSecured]);
 
   useEffect(() => { loadFiles(); }, [loadFiles]);
+  useEffect(() => { fetchTorrentConfig().then(setTorrentConfig).catch(() => {}); }, []);
 
   // Active folders (current connection) provide the file list & filter options.
   const activeGroups = useMemo(() => groups.filter(g => g.active), [groups]);
@@ -237,6 +241,13 @@ export function VpsPage() {
   const liveFor = (path: string): Download | undefined =>
     downloads.find(d => d.downloaded_from === 'vps' && d.url === path);
 
+  // A client tab is only "active" when that client is configured; otherwise we
+  // fall back to the Files view (covers stale/bookmarked client URLs).
+  const torrentTabActive =
+    (tab === 'transmission' && !!torrentConfig?.transmission.configured) ||
+    (tab === 'qbittorrent' && !!torrentConfig?.qbittorrent.configured);
+  const filesVisible = !torrentTabActive;
+
   return (
     <div className="max-w-7xl mx-auto px-3 sm:px-4 pt-2 sm:pt-4 pb-24 w-full">
       {/* Header */}
@@ -247,7 +258,7 @@ export function VpsPage() {
         </div>
         <div className="flex items-center gap-2">
           {/* Folder filter (Files tab only) */}
-          {tab === 'files' && folderOptions.length > 1 && (
+          {filesVisible && folderOptions.length > 1 && (
             <select
               value={folderFilter}
               onChange={(e) => setFolderFilter(e.target.value)}
@@ -260,7 +271,7 @@ export function VpsPage() {
               ))}
             </select>
           )}
-          {tab === 'files' && (
+          {filesVisible && (
             <button
               onClick={loadFiles}
               disabled={loading}
@@ -287,31 +298,52 @@ export function VpsPage() {
         <button
           onClick={() => navigate(ROUTES.VPS_FILES)}
           className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
-            tab === 'files'
+            filesVisible
               ? 'border-cyan-500 text-white'
               : 'border-transparent text-slate-400 hover:text-slate-200'
           }`}
         >
           <Folder className="w-4 h-4" /> Files{allEntries.length > 0 ? ` (${allEntries.length})` : ''}
         </button>
-        <button
-          onClick={() => navigate(ROUTES.VPS_TORRENTS)}
-          className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
-            tab === 'torrents'
-              ? 'border-purple-500 text-white'
-              : 'border-transparent text-slate-400 hover:text-slate-200'
-          }`}
-        >
-          <Magnet className="w-4 h-4" /> Torrents{torrentCount != null && torrentCount > 0 ? ` (${torrentCount})` : ''}
-        </button>
+        {torrentConfig?.transmission.configured && (
+          <button
+            onClick={() => navigate(ROUTES.VPS_TRANSMISSION)}
+            className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+              tab === 'transmission'
+                ? 'border-purple-500 text-white'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Magnet className="w-4 h-4" /> Transmission{counts.transmission ? ` (${counts.transmission})` : ''}
+          </button>
+        )}
+        {torrentConfig?.qbittorrent.configured && (
+          <button
+            onClick={() => navigate(ROUTES.VPS_QBITTORRENT)}
+            className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+              tab === 'qbittorrent'
+                ? 'border-purple-500 text-white'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Magnet className="w-4 h-4" /> qBittorrent{counts.qbittorrent ? ` (${counts.qbittorrent})` : ''}
+          </button>
+        )}
       </div>
 
-      {/* Torrent panel stays mounted so its count keeps refreshing for the tab badge */}
-      <div className={tab === 'torrents' ? '' : 'hidden'}>
-        <TorrentStatusPanel onCountChange={setTorrentCount} />
-      </div>
+      {/* Torrent panels stay mounted so their counts keep refreshing for the tab badges */}
+      {torrentConfig?.transmission.configured && (
+        <div className={tab === 'transmission' ? '' : 'hidden'}>
+          <TorrentStatusPanel client="transmission" onCountChange={(n) => setCounts(c => ({ ...c, transmission: n }))} />
+        </div>
+      )}
+      {torrentConfig?.qbittorrent.configured && (
+        <div className={tab === 'qbittorrent' ? '' : 'hidden'}>
+          <TorrentStatusPanel client="qbittorrent" onCountChange={(n) => setCounts(c => ({ ...c, qbittorrent: n }))} />
+        </div>
+      )}
 
-      <div className={tab === 'files' ? '' : 'hidden'}>
+      <div className={filesVisible ? '' : 'hidden'}>
       {/* Search */}
       <div className="relative mb-4">
         <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
