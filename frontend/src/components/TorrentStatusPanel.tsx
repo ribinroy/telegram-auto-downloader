@@ -1,13 +1,15 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Magnet, ArrowDown, ArrowUp, Play, Pause, Trash2, Loader2, Search, X, Check, Sprout, Users, RotateCw,
 } from 'lucide-react';
-import { fetchTorrentList, torrentAction, downloadVpsFile, type TorrentStatus, type TorrentClient } from '../api';
+import { type TorrentStatus, type TorrentClient } from '../api';
 import { formatBytes, formatTime } from '../utils/format';
 import { ConfirmDialog } from './ConfirmDialog';
 import { Tooltip } from './Tooltip';
 import { ROUTES } from '../routes';
 import { useNavigate } from 'react-router-dom';
+import { useTorrentList, useTorrentAction } from '../hooks/useTorrents';
+import { useDownloadVpsFile } from '../hooks/useVps';
 
 const STATUS_STYLES: Record<TorrentStatus['status'], { label: string; cls: string }> = {
   downloading: { label: 'Downloading', cls: 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30' },
@@ -22,10 +24,16 @@ const STATUS_STYLES: Record<TorrentStatus['status'], { label: string; cls: strin
 
 export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentClient; onCountChange?: (n: number) => void }) {
   const navigate = useNavigate();
-  const [torrents, setTorrents] = useState<TorrentStatus[]>([]);
-  const [configured, setConfigured] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [loaded, setLoaded] = useState(false);
+  const listQuery = useTorrentList(client);
+  const actionMut = useTorrentAction();
+  const downloadFile = useDownloadVpsFile();
+
+  const torrents = listQuery.data?.torrents ?? [];
+  const configured = listQuery.data?.configured ?? false;
+  const loaded = !listQuery.isLoading;
+  const [actionError, setActionError] = useState<string | null>(null);
+  const error = actionError || listQuery.data?.error || (listQuery.isError ? 'Failed to reach the torrent client' : null);
+
   // Hashes with an action in flight (buttons disabled), and the torrent pending removal.
   const [busy, setBusy] = useState<Set<string>>(new Set());
   const [removeTarget, setRemoveTarget] = useState<TorrentStatus | null>(null);
@@ -38,30 +46,6 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
   // Multi-select: chosen torrent hashes + whether the bulk remove dialog is open.
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkRemove, setBulkRemove] = useState(false);
-  // Guard against overlapping polls when a request runs longer than the interval.
-  const inFlight = useRef(false);
-
-  const load = useCallback(async () => {
-    if (inFlight.current) return;
-    inFlight.current = true;
-    try {
-      const res = await fetchTorrentList(client);
-      setConfigured(res.configured);
-      setError(res.error ?? null);
-      setTorrents(res.torrents ?? []);
-    } catch {
-      setError('Failed to reach the torrent client');
-    } finally {
-      inFlight.current = false;
-      setLoaded(true);
-    }
-  }, [client]);
-
-  useEffect(() => {
-    load();
-    const timer = setInterval(load, 20000);
-    return () => clearInterval(timer);
-  }, [load]);
 
   // Report the torrent count up so the parent can show it in the tab label.
   // Route through a ref and depend only on the count, so an unstable callback
@@ -72,10 +56,10 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
 
   const runAction = async (action: 'start' | 'stop' | 'remove' | 'verify', t: TorrentStatus, deleteData = false) => {
     setBusy(prev => new Set(prev).add(t.hash));
+    setActionError(null);
     try {
-      const res = await torrentAction(client, action, [t.hash], deleteData);
-      if (res.error) setError(res.error);
-      await load();
+      const res = await actionMut.mutateAsync({ client, action, hashes: [t.hash], deleteData });
+      if (res.error) setActionError(res.error);
     } finally {
       setBusy(prev => { const next = new Set(prev); next.delete(t.hash); return next; });
     }
@@ -86,10 +70,10 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
     const hashes = torrents.filter(t => selected.has(t.hash)).map(t => t.hash);
     if (hashes.length === 0) return;
     setBusy(prev => { const next = new Set(prev); hashes.forEach(h => next.add(h)); return next; });
+    setActionError(null);
     try {
-      const res = await torrentAction(client, action, hashes, deleteData);
-      if (res.error) setError(res.error);
-      await load();
+      const res = await actionMut.mutateAsync({ client, action, hashes, deleteData });
+      if (res.error) setActionError(res.error);
     } finally {
       setBusy(prev => { const next = new Set(prev); hashes.forEach(h => next.delete(h)); return next; });
       if (action === 'remove') setSelected(new Set());
@@ -104,15 +88,15 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
 
   // Pull a finished torrent's files from the VPS down to DownLee (home server).
   const downloadToDownlee = async (t: TorrentStatus) => {
-    setError(null);
+    setActionError(null);
     setDlBusy(prev => new Set(prev).add(t.hash));
     try {
       const remotePath = `${(t.download_dir || '').replace(/\/+$/, '')}/${t.name}`;
-      const res = await downloadVpsFile(remotePath, undefined, client);
-      if (res.error) setError(res.error);
+      const res = await downloadFile.mutateAsync({ path: remotePath, client });
+      if (res.error) setActionError(res.error);
       else setDlStarted(prev => new Set(prev).add(t.hash));
     } catch {
-      setError('Failed to start the download to DownLee');
+      setActionError('Failed to start the download to DownLee');
     } finally {
       setDlBusy(prev => { const next = new Set(prev); next.delete(t.hash); return next; });
     }

@@ -1,32 +1,29 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Loader2, AlertCircle, Plus, Trash2, Play, Pencil, X, TerminalSquare, BookOpen, ChevronDown } from 'lucide-react';
-import { fetchBotQueries, saveBotQuery, deleteBotQuery, testBotQuery } from '../api';
 import type { BotQuery } from '../api';
+import { useBotQueries, useSaveBotQuery, useDeleteBotQuery, useTestBotQuery } from '../hooks/useSettings';
 import { ConfirmDialog } from './ConfirmDialog';
 
 export function QueriesSettings() {
-  const [queries, setQueries] = useState<BotQuery[]>([]);
-  const [loading, setLoading] = useState(true);
+  const queriesQuery = useBotQueries();
+  const queries = queriesQuery.data ?? [];
+  const loading = queriesQuery.isLoading;
+  const saveMut = useSaveBotQuery();
+  const deleteMut = useDeleteBotQuery();
+  const testMut = useTestBotQuery();
   const [error, setError] = useState<string | null>(null);
 
   // Editor state (shared by "add new" and "edit existing")
   const [editingKey, setEditingKey] = useState<string | null>(null); // original key, '' = new
   const [formKey, setFormKey] = useState('');
   const [formCommand, setFormCommand] = useState('');
-  const [saving, setSaving] = useState(false);
+  const saving = saveMut.isPending;
 
   // Test-run state
   const [runningKey, setRunningKey] = useState<string | null>(null);
   const [outputs, setOutputs] = useState<Record<string, string>>({});
 
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
-
-  useEffect(() => {
-    fetchBotQueries()
-      .then(r => setQueries(r.queries || []))
-      .catch(() => setError('Failed to load queries'))
-      .finally(() => setLoading(false));
-  }, []);
 
   const startEdit = (q?: BotQuery) => {
     setEditingKey(q ? q.key : '');
@@ -43,19 +40,13 @@ export function QueriesSettings() {
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    setSaving(true);
     setError(null);
     try {
-      const result = await saveBotQuery(formKey.trim(), formCommand, editingKey || undefined);
+      const result = await saveMut.mutateAsync({ key: formKey.trim(), command: formCommand, originalKey: editingKey || undefined });
       if (result.error) setError(result.error);
-      else if (result.queries) {
-        setQueries(result.queries);
-        cancelEdit();
-      }
+      else cancelEdit();
     } catch {
       setError('Failed to save query');
-    } finally {
-      setSaving(false);
     }
   };
 
@@ -65,9 +56,8 @@ export function QueriesSettings() {
     setDeleteTarget(null);
     setError(null);
     try {
-      const result = await deleteBotQuery(key);
+      const result = await deleteMut.mutateAsync(key);
       if (result.error) setError(result.error);
-      else if (result.queries) setQueries(result.queries);
     } catch {
       setError('Failed to delete query');
     }
@@ -77,7 +67,7 @@ export function QueriesSettings() {
     setRunningKey(q.key);
     setError(null);
     try {
-      const result = await testBotQuery(q.command);
+      const result = await testMut.mutateAsync(q.command);
       setOutputs(prev => ({ ...prev, [q.key]: result.error || result.output || '(no output)' }));
     } catch {
       setOutputs(prev => ({ ...prev, [q.key]: 'Failed to run command' }));

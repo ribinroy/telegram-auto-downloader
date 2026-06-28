@@ -1,15 +1,20 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState } from 'react';
 import {
   Loader2, AlertCircle, Plus, Trash2, Pencil, Check, X, Eye, EyeOff, FolderOpen, Globe,
 } from 'lucide-react';
-import { fetchMappings, createMapping, updateMapping, deleteMapping, browseLocal } from '../api';
+import { browseLocal } from '../api';
 import type { SourceMapping } from '../types';
+import { useMappings, useCreateMapping, useUpdateMapping, useDeleteMapping } from '../hooks/useSettings';
 import { ConfirmDialog } from './ConfirmDialog';
 import { FolderBrowser } from './FolderBrowser';
 
 export function SourcesSettings({ onChange }: { onChange?: () => void }) {
-  const [mappings, setMappings] = useState<SourceMapping[]>([]);
-  const [loading, setLoading] = useState(false);
+  const mappingsQuery = useMappings();
+  const mappings = mappingsQuery.data ?? [];
+  const loading = mappingsQuery.isLoading;
+  const createMut = useCreateMapping();
+  const updateMut = useUpdateMapping();
+  const deleteMut = useDeleteMapping();
   const [error, setError] = useState<string | null>(null);
 
   // Add form
@@ -18,40 +23,26 @@ export function SourcesSettings({ onChange }: { onChange?: () => void }) {
   const [newFolder, setNewFolder] = useState('');
   const [newQuality, setNewQuality] = useState('');
   const [newHidden, setNewHidden] = useState(false);
-  const [adding, setAdding] = useState(false);
 
   // Edit
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editFolder, setEditFolder] = useState('');
   const [editQuality, setEditQuality] = useState('');
-  const [savingEdit, setSavingEdit] = useState(false);
 
   const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null);
 
   // Folder picker: 'new' for the add form, or a mapping id for an inline edit
   const [browseTarget, setBrowseTarget] = useState<'new' | number | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      setMappings(await fetchMappings());
-    } catch {
-      setError('Failed to load source settings');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => { load(); }, [load]);
+  const adding = createMut.isPending;
+  const savingEdit = updateMut.isPending;
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newSource.trim()) return;
-    setAdding(true);
     setError(null);
     try {
-      const result = await createMapping({
+      const result = await createMut.mutateAsync({
         downloaded_from: newSource.trim().toLowerCase(),
         folder: newFolder.trim() || null,
         quality: newQuality.trim() || null,
@@ -60,23 +51,19 @@ export function SourcesSettings({ onChange }: { onChange?: () => void }) {
       if ('error' in result) {
         setError(result.error);
       } else {
-        setMappings(prev => [...prev, result].sort((a, b) => a.downloaded_from.localeCompare(b.downloaded_from)));
         setNewSource(''); setNewFolder(''); setNewQuality(''); setNewHidden(false);
         setShowAdd(false);
         onChange?.();
       }
     } catch {
       setError('Failed to add source');
-    } finally {
-      setAdding(false);
     }
   };
 
   const handleToggleHidden = async (mapping: SourceMapping) => {
     try {
-      const result = await updateMapping(mapping.id, { is_secured: !mapping.is_secured });
+      const result = await updateMut.mutateAsync({ id: mapping.id, data: { is_secured: !mapping.is_secured } });
       if ('error' in result) { setError(result.error); return; }
-      setMappings(prev => prev.map(m => m.id === mapping.id ? result : m));
       onChange?.();
     } catch { setError('Failed to update source'); }
   };
@@ -88,26 +75,22 @@ export function SourcesSettings({ onChange }: { onChange?: () => void }) {
   };
 
   const saveEdit = async (id: number) => {
-    setSavingEdit(true);
     setError(null);
     try {
-      const result = await updateMapping(id, {
+      const result = await updateMut.mutateAsync({ id, data: {
         folder: editFolder.trim() || null,
         quality: editQuality.trim() || null,
-      });
+      } });
       if ('error' in result) { setError(result.error); return; }
-      setMappings(prev => prev.map(m => m.id === id ? result : m));
       setEditingId(null);
       onChange?.();
     } catch { setError('Failed to update source'); }
-    finally { setSavingEdit(false); }
   };
 
   const handleDelete = async (id: number) => {
     setDeleteConfirmId(null);
     try {
-      await deleteMapping(id);
-      setMappings(prev => prev.filter(m => m.id !== id));
+      await deleteMut.mutateAsync(id);
       onChange?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to delete source');

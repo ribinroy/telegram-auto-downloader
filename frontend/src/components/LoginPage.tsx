@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Loader2, AlertCircle, KeyRound } from 'lucide-react';
-import { login, setToken, updatePassword } from '../api';
+import { setToken } from '../api';
+import { useLogin, useUpdatePassword } from '../hooks/useMisc';
 
 interface LoginPageProps {
   onLogin: () => void;
@@ -13,15 +14,15 @@ export function LoginPage({ onLogin }: LoginPageProps) {
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const loginMut = useLogin();
+  const passwordMut = useUpdatePassword();
+  const loading = loginMut.isPending || passwordMut.isPending;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-    setLoading(true);
-
     try {
-      const response = await login(username, password);
+      const response = await loginMut.mutateAsync({ username, password });
       setToken(response.token);
       if (response.must_change_password) {
         setStep('change-password');
@@ -30,8 +31,6 @@ export function LoginPage({ onLogin }: LoginPageProps) {
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed');
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -48,14 +47,11 @@ export function LoginPage({ onLogin }: LoginPageProps) {
       return;
     }
 
-    setLoading(true);
     try {
-      await updatePassword(password, newPassword);
+      await passwordMut.mutateAsync({ currentPassword: password, newPassword });
       onLogin();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to update password');
-    } finally {
-      setLoading(false);
     }
   };
 

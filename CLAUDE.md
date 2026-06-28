@@ -264,6 +264,16 @@ All config via `.env` file at project root (loaded by python-dotenv):
 - `backend/utils.resolve_spec(source, path=None)` reads `download_type_maps` (+ longest-prefix `vps_watch_folders` match for VPS paths)
 - `hidden` is computed at query time in `WebApp._annotate_downloads()` — never stamped on downloads, so spec changes apply retroactively
 
+## Frontend Data Layer (TanStack Query)
+
+All API access goes through **React Query** (`@tanstack/react-query`):
+- Singleton client in `frontend/src/lib/queryClient.ts` (global `staleTime` 5 min, `gcTime` 10 min, `refetchOnWindowFocus` false, `retry` 1); provider in `main.tsx`.
+- Central key registry `frontend/src/api/queryKeys.ts` (`qk.*`). Mutations invalidate by **prefix** (`['torrent']`, `['vps']`, `['telegram']`, `['downloads']`) so a change refreshes every dependent screen.
+- Per-domain hooks in `frontend/src/hooks/` (`useDownloads`, `useTorrents`, `useVps`, `useTelegram`, `useSettings`, `useMisc`) wrap the `api/index.ts` fetchers — queries via `useQuery`/`useInfiniteQuery`, writes via `useMutation` with `onSuccess` invalidation. `api/index.ts` remains the transport layer.
+- **Realtime** (`hooks/useRealtime.ts`, mounted once in `Layout`): Socket.IO events **patch the query cache** via `setQueryData` (no refetch) — `download:new/progress/status/deleted/meta` update the `['downloads']` infinite-query pages; `stats` updates `qk.stats()`; a (re)connect invalidates once to resync.
+- Live panels use `refetchInterval` (torrent list 20s) instead of `setInterval`.
+- Imperative/on-demand calls stay direct (FolderBrowser `browseVps`/`browseLocal`, `checkVideoFile`, URL builders, `setToken`).
+
 ## Key Patterns
 
 - **Shared state**: `download_tasks = {}` dict passed to all handlers

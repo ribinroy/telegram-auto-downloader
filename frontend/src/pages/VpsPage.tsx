@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   HardDrive, Folder, File as FileIcon, Download as DownloadIcon, RefreshCw, Loader2,
@@ -7,7 +7,9 @@ import {
 import ReactTimeAgo from 'react-time-ago';
 import { useLayoutContext } from '../components/Layout';
 import { TorrentStatusPanel } from '../components/TorrentStatusPanel';
-import { fetchVpsFiles, downloadVpsFile, deleteVpsRemote, fetchTorrentConfig, type VpsFileEntry, type VpsFolderGroup, type TorrentConfig } from '../api';
+import { type VpsFileEntry } from '../api';
+import { useVpsFiles, useDownloadVpsFile, useDeleteVpsRemote } from '../hooks/useVps';
+import { useTorrentConfig } from '../hooks/useTorrents';
 import { formatBytes, formatSpeed, formatTime } from '../utils/format';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { ROUTES } from '../routes';
@@ -174,12 +176,9 @@ export function VpsPage() {
   const { tab: tabParam } = useParams<{ tab?: string }>();
   const tab: 'files' | 'transmission' | 'qbittorrent' =
     tabParam === 'transmission' || tabParam === 'qbittorrent' ? tabParam : 'files';
-  const [groups, setGroups] = useState<VpsFolderGroup[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [folderFilter, setFolderFilter] = useState('');
   const [search, setSearch] = useState('');
-  const [torrentConfig, setTorrentConfig] = useState<TorrentConfig | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [counts, setCounts] = useState<{ transmission: number | null; qbittorrent: number | null }>(
     { transmission: null, qbittorrent: null });
   // Stable callbacks with a no-op guard — the panel's count effect depends on
@@ -189,20 +188,13 @@ export function VpsPage() {
   const onQbittorrentCount = useCallback(
     (n: number) => setCounts(c => (c.qbittorrent === n ? c : { ...c, qbittorrent: n })), []);
 
-  const loadFiles = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      setGroups(await fetchVpsFiles(showSecured));
-    } catch {
-      setError('Failed to load VPS files');
-    } finally {
-      setLoading(false);
-    }
-  }, [showSecured]);
-
-  useEffect(() => { loadFiles(); }, [loadFiles]);
-  useEffect(() => { fetchTorrentConfig().then(setTorrentConfig).catch(() => {}); }, []);
+  const filesQuery = useVpsFiles(showSecured);
+  const groups = useMemo(() => filesQuery.data ?? [], [filesQuery.data]);
+  const loading = filesQuery.isLoading;
+  const error = actionError || (filesQuery.isError ? 'Failed to load VPS files' : null);
+  const torrentConfig = useTorrentConfig().data ?? null;
+  const downloadFile = useDownloadVpsFile();
+  const deleteRemote = useDeleteVpsRemote();
 
   // Active folders (current connection) provide the file list & filter options.
   const activeGroups = useMemo(() => groups.filter(g => g.active), [groups]);
@@ -226,21 +218,20 @@ export function VpsPage() {
   }, [allEntries, folderFilter, search]);
 
   const handleDownload = async (entry: VpsFileEntry) => {
-    const res = await downloadVpsFile(entry.path, entry.size);
-    if (res?.error) setError(res.error);
+    setActionError(null);
+    const res = await downloadFile.mutateAsync({ path: entry.path, size: entry.size });
+    if (res?.error) setActionError(res.error);
     // The WebSocket download:new event updates the shared downloads list,
     // which this page reads for live progress.
   };
 
   const handleDeleteRemote = async (entry: VpsFileEntry) => {
-    const res = await deleteVpsRemote(entry.path);
+    setActionError(null);
+    const res = await deleteRemote.mutateAsync(entry.path);
     if (res?.error) {
-      setError(res.error);
-    } else {
-      // Drop it from the list immediately, then re-sync with the server.
-      setGroups(prev => prev.map(g => ({ ...g, entries: g.entries.filter(e => e.path !== entry.path) })));
-      loadFiles();
+      setActionError(res.error);
     }
+    // useDeleteVpsRemote invalidates the files list, so it re-syncs automatically.
   };
 
   // Match a file to its live download by remote path (url) for live progress.
@@ -281,12 +272,12 @@ export function VpsPage() {
           )}
           {filesVisible && (
             <button
-              onClick={loadFiles}
-              disabled={loading}
+              onClick={() => filesQuery.refetch()}
+              disabled={filesQuery.isFetching}
               className="flex items-center gap-2 bg-slate-700/50 hover:bg-slate-600/50 text-slate-300 text-sm py-2 px-3 rounded-lg transition-colors"
               title="Refresh listing"
             >
-              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+              <RefreshCw className={`w-4 h-4 ${filesQuery.isFetching ? 'animate-spin' : ''}`} />
               <span className="hidden sm:inline">Refresh</span>
             </button>
           )}

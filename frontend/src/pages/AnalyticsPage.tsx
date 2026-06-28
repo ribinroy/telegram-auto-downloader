@@ -1,8 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Loader2, Download, CheckCircle, XCircle, TrendingUp, HardDrive, Calendar, Clock, User } from 'lucide-react';
-import { fetchAnalytics } from '../api';
 import { formatBytes } from '../utils/format';
-import type { AnalyticsData } from '../types';
+import { useAnalytics } from '../hooks/useMisc';
 import {
   AreaChart,
   Area,
@@ -22,29 +21,14 @@ import {
 const COLORS = ['#06b6d4', '#8b5cf6', '#f59e0b', '#10b981', '#ef4444', '#ec4899', '#6366f1', '#14b8a6'];
 
 export function AnalyticsPage() {
-  const [data, setData] = useState<AnalyticsData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [days, setDays] = useState(30);
   const [groupBy, setGroupBy] = useState<'day' | 'hour'>('day');
   const [includeDeleted, setIncludeDeleted] = useState(false);
 
-  useEffect(() => {
-    loadAnalytics();
-  }, [days, groupBy, includeDeleted]);
-
-  const loadAnalytics = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const result = await fetchAnalytics(days, groupBy, includeDeleted);
-      setData(result);
-    } catch (err) {
-      setError('Failed to load analytics');
-    } finally {
-      setLoading(false);
-    }
-  };
+  const analyticsQuery = useAnalytics(days, groupBy, includeDeleted);
+  const data = analyticsQuery.data ?? null;
+  const loading = analyticsQuery.isLoading;
+  const error = analyticsQuery.isError ? 'Failed to load analytics' : null;
 
   const formatLabel = (label: string) => {
     if (groupBy === 'hour') {
