@@ -1,14 +1,22 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Outlet, useNavigate, useLocation, useOutletContext } from 'react-router-dom';
 import { Wifi, WifiOff, HardDrive, Clock, Zap, LogOut, Settings, BarChart3 } from 'lucide-react';
 import { formatBytes, formatSpeed } from '../utils/format';
-import { fetchDownloads, fetchStats, fetchAuthors, retryDownload, stopDownload, pauseDownload, resumeDownload, deleteDownload, fetchVpsConfig, fetchVpsFolders, type SortBy, type SortOrder } from '../api';
-import { connectSocket, disconnectSocket, type ProgressUpdate, type StatusUpdate, type DeletedUpdate, type MetaUpdate } from '../api/socket';
+import { type SortBy, type SortOrder } from '../api';
 import { ToastContainer, useToast } from './Toast';
 import { ROUTES } from '../routes';
 import type { Download as DownloadType, Stats } from '../types';
+import {
+  useDownloads, useStats, useAuthors,
+  useRetryDownload, useStopDownload, usePauseDownload, useResumeDownload, useDeleteDownload,
+} from '../hooks/useDownloads';
+import { useVpsConfig, useVpsFolders } from '../hooks/useVps';
+import { useRealtime, type RealtimeCallbacks } from '../hooks/useRealtime';
 
-const PAGE_SIZE = 30;
+const EMPTY_STATS: Stats = {
+  total_downloaded: 0, total_size: 0, pending_bytes: 0, total_speed: 0,
+  downloaded_count: 0, total_count: 0, all_count: 0, active_count: 0,
+};
 
 export interface LayoutContext {
   downloads: DownloadType[];
@@ -49,22 +57,13 @@ export function useLayoutContext() {
 export function Layout({ onLogout }: { onLogout: () => void }) {
   const navigate = useNavigate();
   const location = useLocation();
-
-  // Downloads state
-  const [downloads, setDownloads] = useState<DownloadType[]>([]);
-  const [totalResults, setTotalResults] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [hasMore, setHasMore] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const downloadsRef = useRef<Map<string, DownloadType>>(new Map());
+  const { toasts, addToast, dismissToast } = useToast();
 
   // Search/sort/filter
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [sortBy, setSortBy] = useState<SortBy>('created_at');
   const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
-  const [authors, setAuthors] = useState<string[]>([]);
   const [selectedAuthor, setSelectedAuthor] = useState<string>('');
 
   // Secured/hidden state (driven by secured sources/folders)
@@ -76,23 +75,8 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
   const [addUrlOpen, setAddUrlOpen] = useState(false);
   const [pastedUrl, setPastedUrl] = useState<string | null>(null);
 
-  // VPS readiness (configured + at least one watched folder for this connection)
-  const [vpsReady, setVpsReady] = useState(false);
-
-  // Connection & stats
+  // Connection state (driven by the realtime socket)
   const [connected, setConnected] = useState(false);
-  const [stats, setStats] = useState<Stats>({
-    total_downloaded: 0,
-    total_size: 0,
-    pending_bytes: 0,
-    total_speed: 0,
-    downloaded_count: 0,
-    total_count: 0,
-    all_count: 0,
-    active_count: 0,
-  });
-
-  const { toasts, addToast, dismissToast } = useToast();
 
   // Debounce search
   useEffect(() => {
@@ -100,145 +84,60 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
     return () => clearTimeout(timer);
   }, [search]);
 
-  // WebSocket handlers
-  const handleProgress = useCallback((data: ProgressUpdate) => {
-    setDownloads(prev => {
-      const updated = prev.map(d =>
-        d.message_id === data.message_id ? { ...d, ...data } : d
-      );
-      const totalSpeed = updated
-        .filter(d => d.status === 'downloading')
-        .reduce((sum, d) => sum + (d.speed || 0), 0);
-      setStats(prev => ({ ...prev, total_speed: totalSpeed }));
-      return updated;
-    });
-  }, []);
+  // Downloads (infinite), stats, authors via React Query
+  const filters = useMemo(() => ({
+    search: debouncedSearch || undefined,
+    filter: 'all' as const,
+    sortBy, sortOrder,
+    includeHidden: showSecured,
+    author: selectedAuthor || undefined,
+  }), [debouncedSearch, sortBy, sortOrder, showSecured, selectedAuthor]);
 
-  const handleStatus = useCallback((data: StatusUpdate) => {
-    const download = downloadsRef.current.get(data.message_id);
-    if (download) {
-      if (data.status === 'done') {
-        addToast({ type: 'success', title: 'Download Complete', message: download.file, duration: 5000 });
-      } else if (data.status === 'failed') {
-        addToast({ type: 'error', title: 'Download Failed', message: download.file, duration: 6000 });
-      }
-    }
-    setDownloads(prev => prev.map(d =>
-      d.message_id === data.message_id
-        ? { ...d, status: data.status, error: data.error || null, speed: 0 }
-        : d
-    ));
-  }, [addToast]);
+  const downloadsQuery = useDownloads(filters);
+  const downloads = useMemo(
+    () => downloadsQuery.data?.pages.flatMap(p => p.downloads) ?? [],
+    [downloadsQuery.data]);
+  const totalResults = downloadsQuery.data?.pages[0]?.total ?? 0;
 
-  const handleNewDownload = useCallback((data: DownloadType) => {
-    if (data.message_id) downloadsRef.current.set(data.message_id, data);
-    addToast({ type: 'info', title: 'Download Started', message: data.file, duration: 3000 });
-    setDownloads(prev => [data, ...prev]);
-  }, [addToast]);
+  const statsQuery = useStats();
+  const stats: Stats = statsQuery.data ?? EMPTY_STATS;
+  const authorsQuery = useAuthors();
+  const authors = authorsQuery.data ?? [];
 
-  const handleDeleted = useCallback((data: DeletedUpdate) => {
-    setDownloads(prev => prev.filter(d => d.message_id !== data.message_id));
-  }, []);
+  // VPS readiness (configured + at least one active watched folder)
+  const vpsConfig = useVpsConfig();
+  const vpsFolders = useVpsFolders();
+  const vpsReady = !!vpsConfig.data?.configured && (vpsFolders.data ?? []).some(f => f.active);
 
-  const handleMeta = useCallback((data: MetaUpdate) => {
-    setDownloads(prev => prev.map(d =>
-      d.message_id === data.message_id ? { ...d, file_meta: data.file_meta } : d
-    ));
-  }, []);
+  // Realtime: socket patches the query cache; surface toasts + connection state.
+  const realtimeCb: RealtimeCallbacks = useMemo(() => ({
+    onConnectedChange: setConnected,
+    onNewDownload: (d) => addToast({ type: 'info', title: 'Download Started', message: d.file, duration: 3000 }),
+    onStatusChange: (s, d) => {
+      if (!d) return;
+      if (s.status === 'done') addToast({ type: 'success', title: 'Download Complete', message: d.file, duration: 5000 });
+      else if (s.status === 'failed') addToast({ type: 'error', title: 'Download Failed', message: d.file, duration: 6000 });
+    },
+  }), [addToast]);
+  useRealtime(realtimeCb);
 
-  const handleStats = useCallback((data: Stats) => {
-    setStats(data);
-  }, []);
-
-  // WebSocket connection
-  useEffect(() => {
-    connectSocket({
-      onProgress: handleProgress,
-      onStatus: handleStatus,
-      onNew: handleNewDownload,
-      onDeleted: handleDeleted,
-      onMeta: handleMeta,
-      onStats: handleStats,
-      onConnect: () => setConnected(true),
-      onDisconnect: () => setConnected(false),
-    });
-    return () => { disconnectSocket(); };
-  }, [handleProgress, handleStatus, handleNewDownload, handleDeleted, handleMeta, handleStats]);
-
-  // Fetch downloads
-  const loadDownloads = useCallback(async (reset = true) => {
-    if (reset) setLoading(true); else setLoadingMore(true);
-    try {
-      const offset = reset ? 0 : downloads.length;
-      const data = await fetchDownloads({
-        search: debouncedSearch, filter: 'all', sortBy, sortOrder,
-        limit: PAGE_SIZE, offset, includeHidden: showSecured,
-        author: selectedAuthor || undefined,
-      });
-      if (reset) {
-        setDownloads(data.downloads);
-        downloadsRef.current.clear();
-        data.downloads.forEach((d: DownloadType) => {
-          if (d.message_id) downloadsRef.current.set(d.message_id, d);
-        });
-      } else {
-        setDownloads(prev => [...prev, ...data.downloads]);
-        data.downloads.forEach((d: DownloadType) => {
-          if (d.message_id) downloadsRef.current.set(d.message_id, d);
-        });
-      }
-      setTotalResults(data.total);
-      setHasMore(data.has_more);
-      setError(null);
-    } catch {
-      setError('Failed to fetch downloads');
-    } finally {
-      setLoading(false);
-      setLoadingMore(false);
-    }
-  }, [debouncedSearch, sortBy, sortOrder, showSecured, selectedAuthor, downloads.length]);
+  // Download actions (mutations)
+  const retryMut = useRetryDownload();
+  const stopMut = useStopDownload();
+  const pauseMut = usePauseDownload();
+  const resumeMut = useResumeDownload();
+  const deleteMut = useDeleteDownload();
+  const onRetry = async (id: number) => { await retryMut.mutateAsync(id); };
+  const onStop = async (message_id: string) => { await stopMut.mutateAsync(message_id); };
+  const onPause = async (message_id: string) => { await pauseMut.mutateAsync(message_id); };
+  const onResume = async (message_id: string) => { await resumeMut.mutateAsync(message_id); };
+  const onDelete = async (message_id: string, deleteFile?: boolean) => {
+    await deleteMut.mutateAsync({ messageId: message_id, deleteFile });
+  };
 
   const loadMore = useCallback(() => {
-    if (!loadingMore && hasMore) loadDownloads(false);
-  }, [loadDownloads, loadingMore, hasMore]);
-
-  const loadStats = useCallback(async () => {
-    try { setStats(await fetchStats()); } catch { console.error('Failed to fetch stats'); }
-  }, []);
-
-  const loadAuthors = useCallback(async () => {
-    try { setAuthors(await fetchAuthors()); } catch { console.error('Failed to fetch authors'); }
-  }, []);
-
-  // Check VPS readiness for the floating button / page gating
-  const loadVpsReady = useCallback(async () => {
-    try {
-      const [cfg, folders] = await Promise.all([fetchVpsConfig(), fetchVpsFolders()]);
-      setVpsReady(!!cfg.configured && folders.some(f => f.active));
-    } catch {
-      setVpsReady(false);
-    }
-  }, []);
-
-  // Load initial data
-  useEffect(() => {
-    loadStats();
-    loadAuthors();
-    loadVpsReady();
-  }, [loadStats, loadAuthors, loadVpsReady]);
-
-  // Load downloads on mount and when filters change
-  useEffect(() => {
-    loadDownloads(true);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedSearch, sortBy, sortOrder, showSecured, selectedAuthor]);
-
-  // Download actions
-  const onRetry = async (id: number) => { await retryDownload(id); };
-  const onStop = async (message_id: string) => { await stopDownload(message_id); };
-  const onPause = async (message_id: string) => { await pauseDownload(message_id); };
-  const onResume = async (message_id: string) => { await resumeDownload(message_id); };
-  const onDelete = async (message_id: string, deleteFile?: boolean) => { await deleteDownload(message_id, deleteFile); };
+    if (!downloadsQuery.isFetchingNextPage && downloadsQuery.hasNextPage) downloadsQuery.fetchNextPage();
+  }, [downloadsQuery]);
 
   // Secured toggle
   const toggleSecured = useCallback(() => {
@@ -266,13 +165,17 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
   }, [toggleSecured]);
 
   const context: LayoutContext = {
-    downloads, totalResults, loading, loadingMore, hasMore, error,
+    downloads, totalResults,
+    loading: downloadsQuery.isLoading,
+    loadingMore: downloadsQuery.isFetchingNextPage,
+    hasMore: !!downloadsQuery.hasNextPage,
+    error: downloadsQuery.isError ? 'Failed to fetch downloads' : null,
     search, setSearch, debouncedSearch,
     sortBy, setSortBy, sortOrder, setSortOrder,
     authors, selectedAuthor, setSelectedAuthor,
     loadMore, onRetry, onStop, onPause, onResume, onDelete,
     addUrlOpen, setAddUrlOpen, pastedUrl, setPastedUrl,
-    showSecured, refreshDownloads: () => loadDownloads(true),
+    showSecured, refreshDownloads: () => { downloadsQuery.refetch(); },
     vpsReady,
   };
 

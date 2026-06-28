@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Loader2, AlertCircle, CheckCircle, Key, Globe, Cookie, Wrench, Server, Send, TerminalSquare, Users } from 'lucide-react';
-import { updatePassword, fetchCookies, saveCookies, syncThumbnails, getYtdlpVersion, upgradeYtdlp } from '../api';
 import type { SyncThumbnailsResult } from '../api';
+import { useCookies, useSaveCookies, useSyncThumbnails, useYtdlpVersion, useUpgradeYtdlp } from '../hooks/useSettings';
+import { useUpdatePassword } from '../hooks/useMisc';
 import { VpsSettings } from '../components/VpsSettings';
 import { SourcesSettings } from '../components/SourcesSettings';
 import { TelegramSettings } from '../components/TelegramSettings';
@@ -31,65 +32,50 @@ export function SettingsPage() {
   // Navigate to a tab's unique URL (also updates activeTab via the effect)
   const goToTab = (id: TabType) => navigate(settingsTab(id));
 
+  // Mutations / queries
+  const passwordMut = useUpdatePassword();
+  const cookiesQuery = useCookies(activeTab === 'cookies');
+  const saveCookiesMut = useSaveCookies();
+  const syncMut = useSyncThumbnails();
+  const ytdlpQuery = useYtdlpVersion(activeTab === 'jobs');
+  const upgradeMut = useUpgradeYtdlp();
+
   // Password state
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [passwordLoading, setPasswordLoading] = useState(false);
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [passwordSuccess, setPasswordSuccess] = useState(false);
+  const passwordLoading = passwordMut.isPending;
 
-  // Cookies state
+  // Cookies state (editable; seeded from the query)
   const [cookiesContent, setCookiesContent] = useState('');
-  const [cookiesLoading, setCookiesLoading] = useState(false);
-  const [cookiesSaving, setCookiesSaving] = useState(false);
   const [cookiesError, setCookiesError] = useState<string | null>(null);
   const [cookiesSuccess, setCookiesSuccess] = useState(false);
+  const cookiesLoading = cookiesQuery.isLoading;
+  const cookiesSaving = saveCookiesMut.isPending;
 
   // Jobs state
-  const [syncRunning, setSyncRunning] = useState(false);
   const [syncResult, setSyncResult] = useState<SyncThumbnailsResult | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
+  const syncRunning = syncMut.isPending;
 
   // yt-dlp upgrade state
-  const [ytdlpVersion, setYtdlpVersion] = useState<string | null>(null);
-  const [ytdlpUpgrading, setYtdlpUpgrading] = useState(false);
   const [ytdlpResult, setYtdlpResult] = useState<{ old_version?: string; new_version?: string; upgraded?: boolean } | null>(null);
   const [ytdlpError, setYtdlpError] = useState<string | null>(null);
+  const ytdlpUpgrading = upgradeMut.isPending;
+  const ytdlpVersion = ytdlpResult?.new_version ?? ytdlpQuery.data?.version ?? null;
 
-  // Load cookies when tab changes to cookies
+  // Seed the editable cookies textarea when the query resolves.
   useEffect(() => {
-    if (activeTab === 'cookies') {
-      loadCookies();
-    }
-  }, [activeTab]);
-
-  // Load yt-dlp version when tab changes to jobs
-  useEffect(() => {
-    if (activeTab === 'jobs') {
-      getYtdlpVersion().then(r => setYtdlpVersion(r.version)).catch(() => {});
-    }
-  }, [activeTab]);
-
-  const loadCookies = async () => {
-    setCookiesLoading(true);
-    setCookiesError(null);
-    try {
-      const data = await fetchCookies();
-      setCookiesContent(data);
-    } catch {
-      setCookiesError('Failed to load cookies');
-    } finally {
-      setCookiesLoading(false);
-    }
-  };
+    if (cookiesQuery.data !== undefined) setCookiesContent(cookiesQuery.data);
+  }, [cookiesQuery.data]);
 
   const handleSaveCookies = async () => {
-    setCookiesSaving(true);
     setCookiesError(null);
     setCookiesSuccess(false);
     try {
-      const result = await saveCookies(cookiesContent);
+      const result = await saveCookiesMut.mutateAsync(cookiesContent);
       if (result.error) {
         setCookiesError(result.error);
       } else {
@@ -98,41 +84,28 @@ export function SettingsPage() {
       }
     } catch {
       setCookiesError('Failed to save cookies');
-    } finally {
-      setCookiesSaving(false);
     }
   };
 
   const handleYtdlpUpgrade = async () => {
-    setYtdlpUpgrading(true);
     setYtdlpError(null);
     setYtdlpResult(null);
     try {
-      const result = await upgradeYtdlp();
-      if (result.error) {
-        setYtdlpError(result.error);
-      } else {
-        setYtdlpResult(result);
-        if (result.new_version) setYtdlpVersion(result.new_version);
-      }
+      const result = await upgradeMut.mutateAsync();
+      if (result.error) setYtdlpError(result.error);
+      else setYtdlpResult(result);
     } catch {
       setYtdlpError('Failed to upgrade yt-dlp');
-    } finally {
-      setYtdlpUpgrading(false);
     }
   };
 
   const handleSyncThumbnails = async () => {
-    setSyncRunning(true);
     setSyncError(null);
     setSyncResult(null);
     try {
-      const result = await syncThumbnails();
-      setSyncResult(result);
+      setSyncResult(await syncMut.mutateAsync());
     } catch {
       setSyncError('Failed to run thumbnail sync');
-    } finally {
-      setSyncRunning(false);
     }
   };
 
@@ -151,17 +124,14 @@ export function SettingsPage() {
       return;
     }
 
-    setPasswordLoading(true);
     try {
-      await updatePassword(currentPassword, newPassword);
+      await passwordMut.mutateAsync({ currentPassword, newPassword });
       setPasswordSuccess(true);
       setCurrentPassword('');
       setNewPassword('');
       setConfirmPassword('');
     } catch (err) {
       setPasswordError(err instanceof Error ? err.message : 'Failed to update password');
-    } finally {
-      setPasswordLoading(false);
     }
   };
 

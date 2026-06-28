@@ -1,52 +1,41 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Loader2, AlertCircle, Shield, User as UserIcon, Globe, Send, RefreshCw, CheckCircle } from 'lucide-react';
-import { fetchUsers, updateUserRole, syncUsers } from '../api';
 import type { AppUser } from '../api';
+import { useUsers, useSyncUsers, useUpdateUserRole } from '../hooks/useSettings';
 
 export function UsersSettings() {
-  const [users, setUsers] = useState<AppUser[]>([]);
-  const [loading, setLoading] = useState(true);
+  const usersQuery = useUsers();
+  const users = usersQuery.data ?? [];
+  const loading = usersQuery.isLoading;
+  const syncMut = useSyncUsers();
+  const roleMut = useUpdateUserRole();
   const [error, setError] = useState<string | null>(null);
   const [savingId, setSavingId] = useState<number | null>(null);
-  const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<number | null>(null);
+  const syncing = syncMut.isPending;
 
   const handleSync = async () => {
-    setSyncing(true);
     setError(null);
     setSyncResult(null);
     try {
-      const result = await syncUsers();
+      const result = await syncMut.mutateAsync();
       if (result.error) setError(result.error);
       else {
-        if (result.users) setUsers(result.users);
         setSyncResult(result.synced ?? 0);
         setTimeout(() => setSyncResult(null), 5000);
       }
     } catch {
       setError('Failed to sync group members');
-    } finally {
-      setSyncing(false);
     }
   };
-
-  useEffect(() => {
-    fetchUsers()
-      .then(r => setUsers(r.users || []))
-      .catch(() => setError('Failed to load users'))
-      .finally(() => setLoading(false));
-  }, []);
 
   const handleRoleChange = async (user: AppUser, role: 'admin' | 'user') => {
     if (role === user.role) return;
     setSavingId(user.id);
     setError(null);
     try {
-      const result = await updateUserRole(user.id, role);
+      const result = await roleMut.mutateAsync({ userId: user.id, role });
       if (result.error) setError(result.error);
-      else if (result.user) {
-        setUsers(prev => prev.map(u => (u.id === user.id ? result.user! : u)));
-      }
     } catch {
       setError('Failed to update role');
     } finally {

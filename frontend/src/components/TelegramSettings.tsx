@@ -1,19 +1,36 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { Loader2, AlertCircle, CheckCircle, Send, LogOut, Plus, Trash2, Radio, Search, RefreshCw, KeyRound } from 'lucide-react';
+import { fetchTelegramDialogs } from '../api';
+import type { TelegramChannel, TelegramDialog, TorrentClient } from '../api';
 import {
-  fetchTelegramStatus, sendTelegramCode, verifyTelegramCode, verifyTelegramPassword,
-  telegramBotLogin, telegramLogout, addTelegramChannel, removeTelegramChannel, fetchTelegramDialogs,
-  fetchTelegramApiConfig, saveTelegramApiConfig,
-  fetchTorrentConfig, setChannelTorrentClient,
-} from '../api';
-import type { TelegramStatus, TelegramChannel, TelegramDialog, TelegramApiConfig, TorrentConfig, TorrentClient } from '../api';
+  useTelegramStatus, useTelegramApiConfig,
+  useSendTelegramCode, useVerifyTelegramCode, useVerifyTelegramPassword,
+  useTelegramBotLogin, useTelegramLogout, useAddTelegramChannel, useRemoveTelegramChannel,
+  useSetChannelTorrentClient, useSaveTelegramApiConfig,
+} from '../hooks/useTelegram';
+import { useTorrentConfig } from '../hooks/useTorrents';
 import { ConfirmDialog } from './ConfirmDialog';
 
 type LoginStep = 'phone' | 'code' | 'password';
 
 export function TelegramSettings() {
-  const [status, setStatus] = useState<TelegramStatus | null>(null);
-  const [loading, setLoading] = useState(true);
+  const statusQuery = useTelegramStatus();
+  const status = statusQuery.data ?? null;
+  const apiConfig = useTelegramApiConfig().data ?? null;
+  const torrentConfig = useTorrentConfig().data ?? null;
+  const channels = status?.channels ?? [];
+  const loading = statusQuery.isLoading;
+
+  const sendCodeMut = useSendTelegramCode();
+  const verifyCodeMut = useVerifyTelegramCode();
+  const verifyPasswordMut = useVerifyTelegramPassword();
+  const botLoginMut = useTelegramBotLogin();
+  const logoutMut = useTelegramLogout();
+  const addChannelMut = useAddTelegramChannel();
+  const removeChannelMut = useRemoveTelegramChannel();
+  const setChannelClientMut = useSetChannelTorrentClient();
+  const saveApiMut = useSaveTelegramApiConfig();
+
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
@@ -24,49 +41,33 @@ export function TelegramSettings() {
   const [code, setCode] = useState('');
   const [password, setPassword] = useState('');
   const [botToken, setBotToken] = useState('');
-  const [submitting, setSubmitting] = useState(false);
+  const submitting = sendCodeMut.isPending || verifyCodeMut.isPending || verifyPasswordMut.isPending || botLoginMut.isPending;
 
   // Channels state
-  const [channels, setChannels] = useState<TelegramChannel[]>([]);
   const [newChannel, setNewChannel] = useState('');
-  const [addingChannel, setAddingChannel] = useState(false);
+  const addingChannel = addChannelMut.isPending;
   const [removeTarget, setRemoveTarget] = useState<TelegramChannel | null>(null);
   const [logoutConfirm, setLogoutConfirm] = useState(false);
-  // Configured torrent clients, for the per-channel magnet-target selector.
-  const [torrentConfig, setTorrentConfig] = useState<TorrentConfig | null>(null);
 
-  // Dialog picker state
+  // Dialog picker state (loaded on demand)
   const [dialogs, setDialogs] = useState<TelegramDialog[] | null>(null);
   const [dialogsLoading, setDialogsLoading] = useState(false);
   const [dialogSearch, setDialogSearch] = useState('');
 
   // API credentials state
-  const [apiConfig, setApiConfig] = useState<TelegramApiConfig | null>(null);
   const [apiId, setApiId] = useState('');
   const [apiHash, setApiHash] = useState('');
-  const [apiSaving, setApiSaving] = useState(false);
   const [showApiForm, setShowApiForm] = useState(false);
+  const apiSaving = saveApiMut.isPending;
 
-  const loadStatus = useCallback(async () => {
-    try {
-      const [s, api] = await Promise.all([fetchTelegramStatus(), fetchTelegramApiConfig()]);
-      setStatus(s);
-      setChannels(s.channels || []);
-      setApiConfig(api);
-      setApiId(api.api_id ? String(api.api_id) : '');
-      setShowApiForm(!api.configured);
-      fetchTorrentConfig().then(setTorrentConfig).catch(() => {});
-      if (s.error) setError(s.error);
-    } catch {
-      setError('Failed to load Telegram status');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
+  // Seed API form + surface status errors when the queries resolve.
   useEffect(() => {
-    loadStatus();
-  }, [loadStatus]);
+    if (apiConfig) {
+      setApiId(apiConfig.api_id ? String(apiConfig.api_id) : '');
+      setShowApiForm(!apiConfig.configured);
+    }
+  }, [apiConfig]);
+  useEffect(() => { if (status?.error) setError(status.error); }, [status?.error]);
 
   const flashSuccess = (msg: string) => {
     setSuccess(msg);
@@ -75,10 +76,9 @@ export function TelegramSettings() {
 
   const handleSendCode = async (e: React.FormEvent) => {
     e.preventDefault();
-    setSubmitting(true);
     setError(null);
     try {
-      const result = await sendTelegramCode(phone);
+      const result = await sendCodeMut.mutateAsync(phone);
       if (result.error) setError(result.error);
       else {
         setStep('code');
@@ -86,69 +86,55 @@ export function TelegramSettings() {
       }
     } catch {
       setError('Failed to send code');
-    } finally {
-      setSubmitting(false);
     }
   };
 
   const handleVerifyCode = async (e: React.FormEvent) => {
     e.preventDefault();
-    setSubmitting(true);
     setError(null);
     try {
-      const result = await verifyTelegramCode(code);
+      const result = await verifyCodeMut.mutateAsync(code);
       if (result.error) setError(result.error);
       else if (result.status === 'password_required') setStep('password');
       else {
         flashSuccess('Connected to Telegram');
         setStep('phone');
         setCode('');
-        await loadStatus();
       }
     } catch {
       setError('Failed to verify code');
-    } finally {
-      setSubmitting(false);
     }
   };
 
   const handleVerifyPassword = async (e: React.FormEvent) => {
     e.preventDefault();
-    setSubmitting(true);
     setError(null);
     try {
-      const result = await verifyTelegramPassword(password);
+      const result = await verifyPasswordMut.mutateAsync(password);
       if (result.error) setError(result.error);
       else {
         flashSuccess('Connected to Telegram');
         setStep('phone');
         setCode('');
         setPassword('');
-        await loadStatus();
       }
     } catch {
       setError('Failed to verify password');
-    } finally {
-      setSubmitting(false);
     }
   };
 
   const handleBotLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    setSubmitting(true);
     setError(null);
     try {
-      const result = await telegramBotLogin(botToken);
+      const result = await botLoginMut.mutateAsync(botToken);
       if (result.error) setError(result.error);
       else {
         flashSuccess('Connected as bot');
         setBotToken('');
-        await loadStatus();
       }
     } catch {
       setError('Failed to sign in with bot token');
-    } finally {
-      setSubmitting(false);
     }
   };
 
@@ -156,12 +142,11 @@ export function TelegramSettings() {
     setLogoutConfirm(false);
     setError(null);
     try {
-      const result = await telegramLogout();
+      const result = await logoutMut.mutateAsync();
       if (result.error) setError(result.error);
       else {
         flashSuccess('Logged out of Telegram');
         setDialogs(null);
-        await loadStatus();
       }
     } catch {
       setError('Failed to log out');
@@ -169,13 +154,11 @@ export function TelegramSettings() {
   };
 
   const handleAddChannel = async (chat: string) => {
-    setAddingChannel(true);
     setError(null);
     try {
-      const result = await addTelegramChannel(chat);
+      const result = await addChannelMut.mutateAsync(chat);
       if (result.error) setError(result.error);
       else if (result.channels) {
-        setChannels(result.channels);
         setNewChannel('');
         flashSuccess('Channel added — new files will be downloaded automatically');
         if (dialogs) {
@@ -185,8 +168,6 @@ export function TelegramSettings() {
       }
     } catch {
       setError('Failed to add channel');
-    } finally {
-      setAddingChannel(false);
     }
   };
 
@@ -196,13 +177,10 @@ export function TelegramSettings() {
     setRemoveTarget(null);
     setError(null);
     try {
-      const result = await removeTelegramChannel(target.id);
+      const result = await removeChannelMut.mutateAsync(target.id);
       if (result.error) setError(result.error);
-      else if (result.channels) {
-        setChannels(result.channels);
-        if (dialogs) {
-          setDialogs(dialogs.map(d => (d.id === target.id ? { ...d, monitored: false } : d)));
-        }
+      else if (result.channels && dialogs) {
+        setDialogs(dialogs.map(d => (d.id === target.id ? { ...d, monitored: false } : d)));
       }
     } catch {
       setError('Failed to remove channel');
@@ -211,12 +189,9 @@ export function TelegramSettings() {
 
   const handleChannelClientChange = async (channel: TelegramChannel, client: TorrentClient | null) => {
     setError(null);
-    // Optimistic update so the select reflects the choice immediately.
-    setChannels(prev => prev.map(c => (c.id === channel.id ? { ...c, torrent_client: client } : c)));
     try {
-      const result = await setChannelTorrentClient(channel.id, client);
+      const result = await setChannelClientMut.mutateAsync({ chatId: channel.id, client });
       if (result.error) setError(result.error);
-      if (result.channels) setChannels(result.channels);
     } catch {
       setError('Failed to update the channel torrent client');
     }
@@ -224,22 +199,19 @@ export function TelegramSettings() {
 
   const handleSaveApi = async (e: React.FormEvent) => {
     e.preventDefault();
-    setApiSaving(true);
     setError(null);
     try {
-      const result = await saveTelegramApiConfig(apiId.trim(), apiHash.trim());
+      const result = await saveApiMut.mutateAsync({ apiId: apiId.trim(), apiHash: apiHash.trim() });
       if (result.error) setError(result.error);
       else {
         setApiHash('');
         flashSuccess('API credentials saved — the client reconnected with them');
         setStep('phone');
-        // Give the client a moment to reconnect before refreshing status
-        setTimeout(() => loadStatus(), 1500);
+        // Give the client a moment to reconnect, then refresh status.
+        setTimeout(() => statusQuery.refetch(), 1500);
       }
     } catch {
       setError('Failed to save API credentials');
-    } finally {
-      setApiSaving(false);
     }
   };
 

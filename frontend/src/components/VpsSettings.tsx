@@ -1,95 +1,70 @@
 import { useState, useEffect } from 'react';
 import { Loader2, AlertCircle, CheckCircle, Check, Plug, FolderPlus, Folder, FolderOpen, Eye, EyeOff, Trash2, Unplug, Server, Magnet, Send } from 'lucide-react';
 import {
-  fetchVpsConfig, saveVpsConfig, testVpsConnection, deleteVpsConfig,
-  fetchVpsFolders, addVpsFolders, deleteVpsFolder, updateVpsFolder, browseLocal,
-  fetchTorrentConfig, saveTorrentConfig, deleteTorrentConfig, testTorrentConnection,
-  setTelegramDefault,
-  type VpsConfig, type VpsWatchFolder, type TorrentConfig, type TorrentClient, type TorrentClientConfig,
+  browseLocal,
+  type VpsWatchFolder, type TorrentClient, type TorrentClientConfig,
 } from '../api';
+import {
+  useVpsConfig, useVpsFolders, useSaveVpsConfig, useTestVpsConnection, useDeleteVpsConfig,
+  useAddVpsFolders, useDeleteVpsFolder, useUpdateVpsFolder,
+} from '../hooks/useVps';
+import {
+  useTorrentConfig, useSaveTorrentConfig, useTestTorrentConnection, useDeleteTorrentConfig,
+  useSetTelegramDefault,
+} from '../hooks/useTorrents';
 import { FolderBrowser } from './FolderBrowser';
 import { ConfirmDialog } from './ConfirmDialog';
 
 export function VpsSettings({ onChange }: { onChange?: () => void }) {
-  // Connection config
-  const [config, setConfig] = useState<VpsConfig | null>(null);
+  // Queries
+  const configQuery = useVpsConfig();
+  const config = configQuery.data ?? null;
+  const foldersQuery = useVpsFolders();
+  const folders = foldersQuery.data ?? [];
+  const torrentConfig = useTorrentConfig().data ?? null;
+
+  // Mutations
+  const saveConfigMut = useSaveVpsConfig();
+  const testConfigMut = useTestVpsConnection();
+  const deleteConfigMut = useDeleteVpsConfig();
+  const addFoldersMut = useAddVpsFolders();
+  const deleteFolderMut = useDeleteVpsFolder();
+  const updateFolderMut = useUpdateVpsFolder();
+  const setTgDefaultMut = useSetTelegramDefault();
+
+  // Connection form fields
   const [host, setHost] = useState('');
   const [port, setPort] = useState('22');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [testing, setTesting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<{ success: boolean; message?: string; error?: string } | null>(null);
-  const [removing, setRemoving] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
 
   // Watched folders
-  const [folders, setFolders] = useState<VpsWatchFolder[]>([]);
-  const [foldersLoading, setFoldersLoading] = useState(false);
   const [foldersError, setFoldersError] = useState<string | null>(null);
   const [browserOpen, setBrowserOpen] = useState(false);
-  // Watched folder currently picking a local destination folder
   const [destTarget, setDestTarget] = useState<VpsWatchFolder | null>(null);
 
-  // Torrent client config (both Transmission + qBittorrent)
-  const [torrentConfig, setTorrentConfig] = useState<TorrentConfig | null>(null);
-  const [savingTgDefault, setSavingTgDefault] = useState(false);
+  // Derived loading/pending flags
+  const loading = configQuery.isLoading;
+  const saving = saveConfigMut.isPending;
+  const testing = testConfigMut.isPending;
+  const removing = deleteConfigMut.isPending;
+  const foldersLoading = foldersQuery.isLoading;
+  const savingTgDefault = setTgDefaultMut.isPending;
 
+  // Hydrate the form when the saved config (re)loads.
   useEffect(() => {
-    loadConfig();
-    loadFolders();
-    loadTorrentConfig();
-  }, []);
-
-  const loadTorrentConfig = async () => {
-    try {
-      setTorrentConfig(await fetchTorrentConfig());
-    } catch { /* section stays unconfigured */ }
-  };
+    setHost(config?.host || '');
+    setPort(String(config?.port || 22));
+    setUsername(config?.username || '');
+    setPassword('');
+  }, [config]);
 
   const handleTelegramDefaultChange = async (client: TorrentClient | null) => {
-    setSavingTgDefault(true);
-    try {
-      await setTelegramDefault(client);
-      await loadTorrentConfig();
-    } catch {
-      /* ignore — selector reflects last loaded value */
-    } finally {
-      setSavingTgDefault(false);
-    }
-  };
-
-  const loadConfig = async () => {
-    setLoading(true);
-    setError(null);
-    setTestResult(null);
-    try {
-      const cfg = await fetchVpsConfig();
-      setConfig(cfg);
-      setHost(cfg.host || '');
-      setPort(String(cfg.port || 22));
-      setUsername(cfg.username || '');
-      setPassword('');
-    } catch {
-      setError('Failed to load VPS configuration');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const loadFolders = async () => {
-    setFoldersLoading(true);
-    setFoldersError(null);
-    try {
-      setFolders(await fetchVpsFolders());
-    } catch {
-      setFoldersError('Failed to load watched folders');
-    } finally {
-      setFoldersLoading(false);
-    }
+    try { await setTgDefaultMut.mutateAsync(client); } catch { /* selector reflects last value */ }
   };
 
   const buildInput = () => ({
@@ -104,59 +79,48 @@ export function VpsSettings({ onChange }: { onChange?: () => void }) {
   const canBrowse = !!config?.configured && !!config?.has_password;
 
   const handleTest = async () => {
-    setTesting(true);
     setError(null);
     setTestResult(null);
     try {
-      setTestResult(await testVpsConnection(buildInput()));
+      setTestResult(await testConfigMut.mutateAsync(buildInput()));
     } catch {
       setTestResult({ success: false, error: 'Failed to run connection test' });
-    } finally {
-      setTesting(false);
     }
   };
 
   const handleSave = async () => {
-    setSaving(true);
     setError(null);
     setSuccess(null);
     try {
-      const result = await saveVpsConfig(buildInput());
+      const result = await saveConfigMut.mutateAsync(buildInput());
       if (result.error) {
         setError(result.error);
       } else {
         setSuccess('VPS connection saved');
         setPassword('');
-        await loadConfig();
         setTimeout(() => setSuccess(null), 3000);
       }
     } catch {
       setError('Failed to save VPS configuration');
-    } finally {
-      setSaving(false);
     }
   };
 
   const handleRemove = async () => {
     setConfirmRemove(false);
-    setRemoving(true);
     setError(null);
     setSuccess(null);
     setTestResult(null);
     try {
-      const result = await deleteVpsConfig();
+      const result = await deleteConfigMut.mutateAsync();
       if (result.error) {
         setError(result.error);
       } else {
         setPassword('');
-        await loadConfig();
         setSuccess('VPS connection removed');
         setTimeout(() => setSuccess(null), 3000);
       }
     } catch {
       setError('Failed to remove VPS connection');
-    } finally {
-      setRemoving(false);
     }
   };
 
@@ -165,7 +129,7 @@ export function VpsSettings({ onChange }: { onChange?: () => void }) {
     if (paths.length === 0) return;
     setFoldersError(null);
     try {
-      setFolders(await addVpsFolders(paths));
+      await addFoldersMut.mutateAsync(paths);
     } catch {
       setFoldersError('Failed to add folders');
     }
@@ -174,7 +138,7 @@ export function VpsSettings({ onChange }: { onChange?: () => void }) {
   const handleDeleteFolder = async (id: number) => {
     setFoldersError(null);
     try {
-      setFolders(await deleteVpsFolder(id));
+      await deleteFolderMut.mutateAsync(id);
     } catch {
       setFoldersError('Failed to remove folder');
     }
@@ -183,7 +147,7 @@ export function VpsSettings({ onChange }: { onChange?: () => void }) {
   const handleToggleAutoSync = async (folder: VpsWatchFolder) => {
     setFoldersError(null);
     try {
-      setFolders(await updateVpsFolder(folder.id, { auto_sync: !folder.auto_sync }));
+      await updateFolderMut.mutateAsync({ id: folder.id, data: { auto_sync: !folder.auto_sync } });
     } catch {
       setFoldersError('Failed to update autoSync');
     }
@@ -192,7 +156,7 @@ export function VpsSettings({ onChange }: { onChange?: () => void }) {
   const handleToggleSecured = async (folder: VpsWatchFolder) => {
     setFoldersError(null);
     try {
-      setFolders(await updateVpsFolder(folder.id, { is_secured: !folder.is_secured }));
+      await updateFolderMut.mutateAsync({ id: folder.id, data: { is_secured: !folder.is_secured } });
       onChange?.();
     } catch {
       setFoldersError('Failed to update hidden flag');
@@ -202,7 +166,7 @@ export function VpsSettings({ onChange }: { onChange?: () => void }) {
   const handleSetDestFolder = async (folder: VpsWatchFolder, dest: string | null) => {
     setFoldersError(null);
     try {
-      setFolders(await updateVpsFolder(folder.id, { folder: dest }));
+      await updateFolderMut.mutateAsync({ id: folder.id, data: { folder: dest } });
       onChange?.();
     } catch {
       setFoldersError('Failed to set destination folder');
@@ -384,14 +348,12 @@ export function VpsSettings({ onChange }: { onChange?: () => void }) {
             label="Transmission"
             data={torrentConfig?.transmission}
             canBrowse={canBrowse}
-            onSaved={loadTorrentConfig}
           />
           <TorrentClientCard
             client="qbittorrent"
             label="qBittorrent"
             data={torrentConfig?.qbittorrent}
             canBrowse={canBrowse}
-            onSaved={loadTorrentConfig}
           />
         </div>
 
@@ -566,29 +528,32 @@ export function VpsSettings({ onChange }: { onChange?: () => void }) {
 }
 
 function TorrentClientCard({
-  client, label, data, canBrowse, onSaved,
+  client, label, data, canBrowse,
 }: {
   client: TorrentClient;
   label: string;
   data?: TorrentClientConfig;
   canBrowse: boolean;
-  onSaved: () => void | Promise<void>;
 }) {
+  const saveMut = useSaveTorrentConfig();
+  const testMut = useTestTorrentConnection();
+  const removeMut = useDeleteTorrentConfig();
+
   const [url, setUrl] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [downloadDir, setDownloadDir] = useState('');
   const [incompleteDir, setIncompleteDir] = useState('');
   const [localDir, setLocalDir] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [testing, setTesting] = useState(false);
-  const [removing, setRemoving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<{ success: boolean; message?: string; error?: string } | null>(null);
   // Which folder field is currently picking a path (local_dir browses the home server).
   const [picking, setPicking] = useState<null | 'download_dir' | 'incomplete_dir' | 'local_dir'>(null);
 
+  const saving = saveMut.isPending;
+  const testing = testMut.isPending;
+  const removing = removeMut.isPending;
   const configured = !!data?.configured;
   const hasPassword = !!data?.has_password;
   const isTransmission = client === 'transmission';
@@ -613,53 +578,41 @@ function TorrentClientCard({
   });
 
   const handleTest = async () => {
-    setTesting(true);
     setError(null);
     setTestResult(null);
     try {
-      setTestResult(await testTorrentConnection(client, input()));
+      setTestResult(await testMut.mutateAsync({ client, config: input() }));
     } catch {
       setTestResult({ success: false, error: 'Failed to run connection test' });
-    } finally {
-      setTesting(false);
     }
   };
 
   const handleSave = async () => {
-    setSaving(true);
     setError(null);
     setSuccess(null);
     try {
-      const result = await saveTorrentConfig(client, input());
+      const result = await saveMut.mutateAsync({ client, config: input() });
       if (result.error) {
         setError(result.error);
       } else if (result.warning) {
         setError(result.warning);
-        await onSaved();
       } else {
         setSuccess(`${label} saved`);
-        await onSaved();
         setTimeout(() => setSuccess(null), 3000);
       }
     } catch {
       setError(`Failed to save ${label}`);
-    } finally {
-      setSaving(false);
     }
   };
 
   const handleRemove = async () => {
-    setRemoving(true);
     setError(null);
     setTestResult(null);
     try {
-      await deleteTorrentConfig(client);
+      await removeMut.mutateAsync(client);
       setPassword('');
-      await onSaved();
     } catch {
       setError(`Failed to remove ${label}`);
-    } finally {
-      setRemoving(false);
     }
   };
 

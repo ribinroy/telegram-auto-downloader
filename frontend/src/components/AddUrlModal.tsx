@@ -1,9 +1,14 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { X, Link, Loader2, AlertCircle, CheckCircle, Download, Folder, Magnet, Send, Upload } from 'lucide-react';
-import { checkUrl, downloadUrl, fetchMappings, addTorrent, addTorrentFile, fetchTorrentConfig, fetchVpsFolders, type VpsWatchFolder, type TorrentClient } from '../api';
+import { type TorrentClient } from '../api';
 import type { UrlCheckResult, VideoFormat, SourceMapping } from '../types';
 import { formatBytes } from '../utils/format';
+import { useTorrentConfig, useAddTorrent, useAddTorrentFile } from '../hooks/useTorrents';
+import { useVpsFolders } from '../hooks/useVps';
+import { useMappings } from '../hooks/useSettings';
+import { useCheckUrl } from '../hooks/useMisc';
+import { useDownloadUrl } from '../hooks/useDownloads';
 
 const isMagnetLink = (s: string) => s.trim().toLowerCase().startsWith('magnet:');
 
@@ -45,20 +50,15 @@ interface AddUrlModalProps {
 
 export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
   const [url, setUrl] = useState('');
-  const [checking, setChecking] = useState(false);
-  const [downloading, setDownloading] = useState(false);
   const [checkResult, setCheckResult] = useState<UrlCheckResult | null>(null);
   const [selectedFormat, setSelectedFormat] = useState<VideoFormat | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [customFilename, setCustomFilename] = useState('');
   const [sourceMapping, setSourceMapping] = useState<SourceMapping | null>(null);
-  // Magnet -> VPS torrent client state
+  // Magnet / .torrent -> VPS torrent client state
   const [magnetMode, setMagnetMode] = useState(false);
-  const [torrentClients, setTorrentClients] = useState<TorrentClient[]>([]);
   const [magnetClient, setMagnetClient] = useState<TorrentClient | ''>('');
-  const [vpsFolders, setVpsFolders] = useState<VpsWatchFolder[]>([]);
   const [torrentDest, setTorrentDest] = useState('');
-  const [sendingMagnet, setSendingMagnet] = useState(false);
   const [magnetResult, setMagnetResult] = useState<{ status?: 'added' | 'duplicate'; name?: string } | null>(null);
   // Uploaded .torrent file (alternative to a magnet link).
   const [torrentFile, setTorrentFile] = useState<File | null>(null);
@@ -66,31 +66,44 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
   const filenameInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Data + mutation hooks
+  const { data: torrentConfig } = useTorrentConfig();
+  const { data: allFolders } = useVpsFolders();
+  const { data: mappings } = useMappings();
+  const addTorrentMut = useAddTorrent();
+  const addTorrentFileMut = useAddTorrentFile();
+  const checkUrlMut = useCheckUrl();
+  const downloadUrlMut = useDownloadUrl();
+
+  const torrentClients = useMemo<TorrentClient[]>(() => {
+    const c: TorrentClient[] = [];
+    if (torrentConfig?.transmission?.configured) c.push('transmission');
+    if (torrentConfig?.qbittorrent?.configured) c.push('qbittorrent');
+    return c;
+  }, [torrentConfig]);
+  const vpsFolders = useMemo(() => (allFolders ?? []).filter(f => f.active), [allFolders]);
+
   // Files (uploaded torrent) and magnets share the same submit UI.
   const inTorrentMode = magnetMode || !!torrentFile;
+  const sending = addTorrentMut.isPending || addTorrentFileMut.isPending;
+  const checking = checkUrlMut.isPending;
+  const downloading = downloadUrlMut.isPending;
 
-  // Load the configured clients + watched folders for the torrent submit UI.
-  const loadTorrentTargets = async () => {
-    try {
-      const [cfg, folders] = await Promise.all([fetchTorrentConfig(), fetchVpsFolders()]);
-      const clients: TorrentClient[] = [];
-      if (cfg.transmission.configured) clients.push('transmission');
-      if (cfg.qbittorrent.configured) clients.push('qbittorrent');
-      setTorrentClients(clients);
-      // Default to the Telegram default if configured, else the first client.
-      setMagnetClient((cfg.telegram_default && clients.includes(cfg.telegram_default))
-        ? cfg.telegram_default : (clients[0] ?? ''));
-      setVpsFolders(folders.filter(f => f.active));
-      if (clients.length === 0) {
-        setError('No torrent client is configured — add one under Settings → VPS Connection');
-      }
-    } catch {
-      setTorrentClients([]);
-      setError('Failed to load torrent client settings');
+  // Pick/validate the target client when entering torrent mode.
+  useEffect(() => {
+    if (!inTorrentMode) return;
+    if (torrentClients.length === 0) {
+      setError('No torrent client is configured — add one under Settings → VPS Connection');
+      return;
     }
-  };
+    if (!magnetClient || !torrentClients.includes(magnetClient)) {
+      const def = (torrentConfig?.telegram_default && torrentClients.includes(torrentConfig.telegram_default))
+        ? torrentConfig.telegram_default : torrentClients[0];
+      setMagnetClient(def);
+    }
+  }, [inTorrentMode, torrentClients, torrentConfig, magnetClient]);
 
-  const enterMagnetMode = async (magnet: string) => {
+  const enterMagnetMode = (magnet: string) => {
     setUrl(magnet);
     setMagnetMode(true);
     setTorrentFile(null);
@@ -98,59 +111,50 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
     setCheckResult(null);
     setSelectedFormat(null);
     setMagnetResult(null);
-    await loadTorrentTargets();
   };
 
-  const enterTorrentFileMode = async (file: File) => {
+  const enterTorrentFileMode = (file: File) => {
     setTorrentFile(file);
     setMagnetMode(false);
     setError(null);
     setCheckResult(null);
     setSelectedFormat(null);
     setMagnetResult(null);
-    await loadTorrentTargets();
   };
 
   const handleSendMagnet = async () => {
-    if (!isMagnetLink(url) || !magnetClient || sendingMagnet) return;
-    setSendingMagnet(true);
+    if (!isMagnetLink(url) || !magnetClient || sending) return;
     setError(null);
     try {
-      const res = await addTorrent(url.trim(), magnetClient, torrentDest || null);
+      const res = await addTorrentMut.mutateAsync({ magnet: url.trim(), client: magnetClient, downloadDir: torrentDest || null });
       if (res.error) setError(res.error);
       else setMagnetResult(res);
     } catch {
       setError('Failed to send the magnet link');
-    } finally {
-      setSendingMagnet(false);
     }
   };
 
   const handleSendTorrentFile = async () => {
-    if (!torrentFile || !magnetClient || sendingMagnet) return;
-    setSendingMagnet(true);
+    if (!torrentFile || !magnetClient || sending) return;
     setError(null);
     try {
-      const res = await addTorrentFile(torrentFile, magnetClient, torrentDest || null);
+      const res = await addTorrentFileMut.mutateAsync({ file: torrentFile, client: magnetClient, downloadDir: torrentDest || null });
       if (res.error) setError(res.error);
       else setMagnetResult(res);
     } catch {
       setError('Failed to upload the torrent file');
-    } finally {
-      setSendingMagnet(false);
     }
   };
 
   const doCheck = async (urlToCheck: string) => {
     if (!urlToCheck.trim()) return;
 
-    setChecking(true);
     setError(null);
     setCheckResult(null);
     setSelectedFormat(null);
 
     try {
-      const result = await checkUrl(urlToCheck.trim());
+      const result = await checkUrlMut.mutateAsync(urlToCheck.trim());
       setCheckResult(result);
       if (!result.supported) {
         setError(result.error || 'URL not supported');
@@ -158,14 +162,8 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
 
       // Resolve the source's spec (for folder display + default quality)
       const source = getSourceFromUrl(urlToCheck);
-      let mapping: SourceMapping | undefined;
-      try {
-        const mappings = await fetchMappings();
-        mapping = mappings.find(m => m.downloaded_from === source);
-        setSourceMapping(mapping ?? null);
-      } catch {
-        // Ignore mapping fetch errors
-      }
+      const mapping: SourceMapping | undefined = (mappings ?? []).find(m => m.downloaded_from === source);
+      setSourceMapping(mapping ?? null);
 
       if (result.formats && result.formats.length > 0) {
         let defaultFormat: VideoFormat | null = null;
@@ -179,8 +177,6 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
       }
     } catch {
       setError('Failed to check URL');
-    } finally {
-      setChecking(false);
     }
   };
 
@@ -243,7 +239,7 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
 
     // Start download in background
     try {
-      await downloadUrl({
+      await downloadUrlMut.mutateAsync({
         url: url.trim(),
         format_id: selectedFormat?.format_id,
         title: customFilename.trim() || checkResult.title,
@@ -261,14 +257,11 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
     setCheckResult(null);
     setSelectedFormat(null);
     setError(null);
-    setChecking(false);
     setCustomFilename('');
-    setDownloading(false);
     setSourceMapping(null);
     setMagnetMode(false);
     setTorrentFile(null);
     setTorrentDest('');
-    setSendingMagnet(false);
     setMagnetResult(null);
     onClose();
   };
@@ -288,7 +281,7 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !checking && !downloading && !sendingMagnet) {
+    if (e.key === 'Enter' && !checking && !downloading && !sending) {
       if (inTorrentMode && !magnetResult) {
         if (torrentFile) handleSendTorrentFile(); else handleSendMagnet();
       } else if (checkResult?.supported) {
@@ -546,10 +539,10 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
             ) : (
               <button
                 onClick={torrentFile ? handleSendTorrentFile : handleSendMagnet}
-                disabled={sendingMagnet || !magnetClient}
+                disabled={sending || !magnetClient}
                 className="flex-1 py-2 sm:py-2.5 px-3 sm:px-4 bg-purple-600 hover:bg-purple-500 disabled:bg-purple-900 disabled:cursor-not-allowed text-white text-sm sm:text-base rounded-lg transition-colors flex items-center justify-center gap-2"
               >
-                {sendingMagnet ? (
+                {sending ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin" />
                     <span className="hidden sm:inline">Sending...</span>
