@@ -342,7 +342,7 @@ export function VpsPage() {
         </div>
       ))}
 
-      {loading ? (
+      {loading && groups.length === 0 ? (
         <div className="min-h-[50vh] flex items-center justify-center text-slate-400">
           <div className="text-center">
             <Loader2 className="w-12 h-12 mx-auto mb-4 animate-spin text-cyan-500" />
