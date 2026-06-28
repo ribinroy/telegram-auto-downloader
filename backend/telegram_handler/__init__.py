@@ -936,6 +936,7 @@ class TelegramDownloader:
                 self._pending_downlee[key] = {
                     'candidates': candidates, 'name': name,
                     'size': t.get('total_size') or 0, 'msg': reply_msg,
+                    'client': client,
                 }
                 await self._safe_edit(
                     reply_msg,
@@ -1009,9 +1010,16 @@ class TelegramDownloader:
         if not path:
             await self._safe_edit(msg, f"❌ `{name}`: files not found on the VPS yet — try again shortly")
             return
+        # Land the files in the source channel's torrent client local folder, if set.
+        dest = None
+        client = pending.get('client')
+        if client:
+            from backend.web_app.torrent import CLIENTS, read_torrent_settings
+            if client in CLIENTS:
+                dest = ((read_torrent_settings().get(client) or {}).get('local_dir') or '').strip() or None
         try:
             res = await loop.run_in_executor(None, partial(
-                web.vps_downloader.start_download, path, pending.get('size') or 0))
+                web.vps_downloader.start_download, path, pending.get('size') or 0, dest))
         except Exception as e:
             logging.error(f"Failed to start DownLee transfer for {name}: {e}")
             await self._safe_edit(msg, f"❌ `{name}`: could not start download to DownLee")
