@@ -652,6 +652,23 @@ export async function addTorrent(
   return response.json();
 }
 
+export async function addTorrentFile(
+  file: File, client: TorrentClient, downloadDir?: string | null
+): Promise<{ status?: 'added' | 'duplicate'; name?: string; hash?: string; error?: string }> {
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('client', client);
+  if (downloadDir) fd.append('download_dir', downloadDir);
+  // No Content-Type header: the browser sets the multipart boundary itself.
+  const response = await fetch(`${API_BASE}/api/torrent/add-file`, {
+    method: 'POST',
+    headers: { ...getAuthHeaders() },
+    body: fd,
+  });
+  if (response.status === 401) { clearToken(); window.location.reload(); }
+  return response.json();
+}
+
 export interface VpsBrowseEntry {
   name: string;
   path: string;

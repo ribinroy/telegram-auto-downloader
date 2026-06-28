@@ -250,3 +250,102 @@ def qbit_set_location(cfg, hashes, location):
     """Move torrents to a new save location (forces files out of the temp dir)."""
     _qbit_request(cfg, "/api/v2/torrents/setLocation",
                   data={"hashes": "|".join(hashes), "location": location})
+
+
+def _bdecode(data, i):
+    """Minimal bencode decoder -> (value, next_index)."""
+    c = data[i:i + 1]
+    if c == b"i":
+        e = data.index(b"e", i)
+        return int(data[i + 1:e]), e + 1
+    if c == b"l":
+        i += 1
+        lst = []
+        while data[i:i + 1] != b"e":
+            v, i = _bdecode(data, i)
+            lst.append(v)
+        return lst, i + 1
+    if c == b"d":
+        i += 1
+        d = {}
+        while data[i:i + 1] != b"e":
+            k, i = _bdecode(data, i)
+            v, i = _bdecode(data, i)
+            d[k] = v
+        return d, i + 1
+    colon = data.index(b":", i)
+    length = int(data[i:colon])
+    start = colon + 1
+    return data[start:start + length], start + length
+
+
+def torrent_file_info(data: bytes):
+    """Return (btih_hex, name) for a .torrent file. The info-hash is the SHA-1 of
+    the raw (exact-byte) `info` dictionary, so we capture its byte span rather than
+    re-encoding."""
+    import hashlib
+    if data[0:1] != b"d":
+        return None, None
+    i = 1
+    name = None
+    info_hash = None
+    while i < len(data) and data[i:i + 1] != b"e":
+        key, i = _bdecode(data, i)
+        start = i
+        val, i = _bdecode(data, i)
+        if key == b"info":
+            info_hash = hashlib.sha1(data[start:i]).hexdigest()
+            if isinstance(val, dict) and isinstance(val.get(b"name"), bytes):
+                name = val[b"name"].decode("utf-8", "replace")
+    return info_hash, name
+
+
+def _qbit_post_multipart(cfg, path, fields, files, opener, base, timeout: int = 30):
+    """POST multipart/form-data (for the .torrent file upload)."""
+    boundary = "----DownLeeTorrentBoundary"
+    parts = []
+    for name, value in fields.items():
+        parts.append(
+            f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'.encode())
+    for name, (filename, content, ctype) in files.items():
+        parts.append(
+            f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"; '
+            f'filename="{filename}"\r\nContent-Type: {ctype}\r\n\r\n'.encode())
+        parts.append(content + b"\r\n")
+    parts.append(f"--{boundary}--\r\n".encode())
+    body = b"".join(parts)
+    headers = {"Referer": base,
+               "Content-Type": f"multipart/form-data; boundary={boundary}",
+               **_auth_header(cfg)}
+    req = urllib.request.Request(f"{base}{path}", data=body, headers=headers, method="POST")
+    try:
+        with opener.open(req, timeout=timeout) as resp:
+            resp.read()
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403):
+            raise ValueError("qBittorrent authentication failed — check username/password")
+        raise ValueError(f"qBittorrent error: HTTP {e.code}")
+    except urllib.error.URLError as e:
+        raise ValueError(f"Cannot reach qBittorrent: {getattr(e, 'reason', e)}")
+
+
+def qbit_add_file(cfg, torrent_bytes, download_dir=None, incomplete_dir=None, paused=False):
+    """Add a .torrent file. Applies the temp dir first when given. Returns
+    {name, hash, duplicate} (name/hash parsed from the file's metadata)."""
+    info_hash, name = torrent_file_info(torrent_bytes)
+    temp = incomplete_dir if incomplete_dir is not None else cfg.get("incomplete_dir")
+    if temp:
+        qbit_apply_session({**cfg, "incomplete_dir": temp})
+    opener, base = qbit_login(cfg)
+    duplicate = False
+    if info_hash:
+        existing = _qbit_request(cfg, f"/api/v2/torrents/info?hashes={info_hash}",
+                                 expect_json=True, opener=opener, base=base) or []
+        duplicate = bool(existing)
+    fields = {"paused": "true" if paused else "false"}
+    if download_dir:
+        fields["savepath"] = download_dir
+    _qbit_post_multipart(cfg, "/api/v2/torrents/add", fields,
+                         {"torrents": ("upload.torrent", torrent_bytes, "application/x-bittorrent")},
+                         opener, base)
+    return {"name": name, "hash": info_hash, "duplicate": duplicate}

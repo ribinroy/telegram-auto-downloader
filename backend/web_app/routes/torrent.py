@@ -16,7 +16,7 @@ from backend.web_app.base import (
 from backend.web_app.torrent import (
     CLIENTS, read_torrent_settings, write_torrent_settings, load_torrent_config,
     apply_torrent_session, normalize_transmission_url,
-    torrent_test, torrent_add_magnet, torrent_list, torrent_control,
+    torrent_test, torrent_add_magnet, torrent_add_file, torrent_list, torrent_control,
 )
 from backend.web_app.vps import load_vps_credentials, annotate_vps_folders, open_vps_sftp
 from backend.web_app.helpers import candidate_file_paths
@@ -182,6 +182,32 @@ class TorrentRoutesMixin:
             download_dir = (data.get("download_dir") or "").strip()
             try:
                 result = torrent_add_magnet(client, magnet, download_dir=download_dir or None)
+            except ValueError as e:
+                return jsonify({"error": str(e)}), 502
+            return jsonify({
+                "status": "duplicate" if result.get("duplicate") else "added",
+                "name": result.get("name"),
+                "hash": result.get("hash"),
+                "download_dir": download_dir or None,
+            })
+
+        @self.app.route("/api/torrent/add-file", methods=["POST"])
+        @token_required
+        def add_torrent_file():
+            """Upload a .torrent file to a client. multipart/form-data:
+            file=<.torrent>, client=..., download_dir? (a remote VPS path)."""
+            client = (request.form.get("client") or "").strip()
+            if client not in CLIENTS:
+                return jsonify({"error": "Unknown torrent client"}), 400
+            f = request.files.get("file")
+            if not f:
+                return jsonify({"error": "A .torrent file is required"}), 400
+            data = f.read()
+            if not data:
+                return jsonify({"error": "The uploaded file is empty"}), 400
+            download_dir = (request.form.get("download_dir") or "").strip()
+            try:
+                result = torrent_add_file(client, data, download_dir=download_dir or None)
             except ValueError as e:
                 return jsonify({"error": str(e)}), 502
             return jsonify({

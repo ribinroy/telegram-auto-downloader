@@ -185,6 +185,24 @@ def transmission_add_magnet(magnet, download_dir=None, incomplete_dir=None, paus
     return transmission_rpc("torrent-add", args, config=cfg)
 
 
+def transmission_add_file(torrent_bytes, download_dir=None, incomplete_dir=None, paused=False, config=None):
+    """Add a .torrent file to Transmission via base64 metainfo. Returns the raw
+    torrent-add result."""
+    import base64
+    cfg = config or load_torrent_config("transmission")
+    if not cfg:
+        raise ValueError("Torrent client is not configured")
+    temp = incomplete_dir if incomplete_dir is not None else cfg.get("incomplete_dir")
+    if temp:
+        transmission_apply_session({**cfg, "incomplete_dir": temp})
+    args = {"metainfo": base64.b64encode(torrent_bytes).decode()}
+    if download_dir:
+        args["download-dir"] = download_dir
+    if paused:
+        args["paused"] = True
+    return transmission_rpc("torrent-add", args, config=cfg)
+
+
 def _transmission_normalize(t):
     """Map a Transmission torrent dict to the shared status shape."""
     def tracker_max(stats, key):
@@ -338,6 +356,25 @@ def torrent_add_magnet(client, magnet, download_dir=None, incomplete_dir=None, p
                                incomplete_dir=incomplete_dir, paused=paused)
     res = transmission_add_magnet(magnet, download_dir=target_dir,
                                   incomplete_dir=incomplete_dir, paused=paused, config=cfg)
+    t = res.get("torrent-added") or res.get("torrent-duplicate") or {}
+    return {
+        "name": t.get("name"),
+        "hash": t.get("hashString"),
+        "duplicate": "torrent-duplicate" in res,
+    }
+
+
+def torrent_add_file(client, torrent_bytes, download_dir=None, incomplete_dir=None, paused=False, config=None):
+    """Add a .torrent file to `client`. Falls back to the client's configured
+    default download folder when none is given. Returns {name, hash, duplicate}."""
+    cfg = _resolve(client, config)
+    target_dir = download_dir or cfg.get("download_dir") or None
+    if client == "qbittorrent":
+        from backend.web_app.qbittorrent import qbit_add_file
+        return qbit_add_file(cfg, torrent_bytes, download_dir=target_dir,
+                             incomplete_dir=incomplete_dir, paused=paused)
+    res = transmission_add_file(torrent_bytes, download_dir=target_dir,
+                                incomplete_dir=incomplete_dir, paused=paused, config=cfg)
     t = res.get("torrent-added") or res.get("torrent-duplicate") or {}
     return {
         "name": t.get("name"),
