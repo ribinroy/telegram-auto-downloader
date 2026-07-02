@@ -230,7 +230,7 @@ class MediaRoutesMixin:
         def api_ytdlp_upgrade():
             """Upgrade yt-dlp in the venv"""
             import subprocess
-            venv_pip = str(Path(__file__).parent.parent.parent / 'venv' / 'bin' / 'pip')
+            venv_pip = str(Path(__file__).parent.parent.parent.parent / 'venv' / 'bin' / 'pip')
             try:
                 # Get current version
                 old_ver = subprocess.run(

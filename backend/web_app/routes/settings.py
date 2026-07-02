@@ -21,6 +21,28 @@ from backend.web_app.vps import load_vps_credentials, annotate_vps_folders, open
 from backend.web_app.helpers import candidate_file_paths
 
 
+_NETSCAPE_HEADER = "# Netscape HTTP Cookie File"
+
+
+def _normalize_netscape_cookies(content: str) -> str:
+    """Make pasted cookies loadable by yt-dlp's MozillaCookieJar.
+
+    The parser requires the file to *begin* with the Netscape magic header
+    and expects tab-separated fields. Browser extensions / manual pastes often
+    drop the header or leave a leading blank line, which yt-dlp rejects with
+    "does not look like a Netscape format cookies file". Prepend the header if
+    it's missing and strip leading blank lines.
+    """
+    text = content.replace("\r\n", "\n").replace("\r", "\n").lstrip("\n")
+    first_line = text.split("\n", 1)[0].strip()
+    if not (first_line.startswith("# Netscape HTTP Cookie File")
+            or first_line.startswith("# HTTP Cookie File")):
+        text = _NETSCAPE_HEADER + "\n" + text
+    if not text.endswith("\n"):
+        text += "\n"
+    return text
+
+
 class SettingsRoutesMixin:
     def register_settings_routes(self):
         @self.app.route("/api/settings/cookies", methods=["GET"])
@@ -42,7 +64,7 @@ class SettingsRoutesMixin:
 
             try:
                 if cookies_content.strip():
-                    cookies_path.write_text(cookies_content)
+                    cookies_path.write_text(_normalize_netscape_cookies(cookies_content))
                 else:
                     # Delete file if empty
                     if cookies_path.exists():
