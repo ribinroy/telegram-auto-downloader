@@ -27,6 +27,7 @@ A self-hosted media downloader with Telegram integration and a modern web dashbo
 - **Per-Channel Magnet Routing**: Each monitored Telegram channel can route its magnets to a chosen client (Settings → Telegram), with a global fallback client (Settings → VPS)
 - **Per-Source Settings**: Each source (telegram, youtube, vps, ...) can have its own destination folder, default quality, and hidden flag (Settings → Sources)
 - **Per-Watchfolder Settings**: Each watched VPS folder can have its own local destination folder and hidden flag
+- **Rename Rules**: Define regex rules (Settings → Renaming) that clean up filenames **before the download starts** — strip `1080p.WEB-DL.x264-GROUP`, turn dots into spaces, bracket the year. Files are saved under their final name from the first byte, so nothing is renamed mid-transfer. Preview any rule against your real filenames, and replay the whole chain over already-downloaded files with a dry run first
 - **Quality Selection**: Choose video quality/resolution when downloading URLs (preselected from the source's default quality)
 - **Download Folder Preview**: Shows the destination folder path when adding URL downloads and on each download item
 - **Thumbnail Previews**: Hover to preview video thumbnails with carousel, or tap the preview button on mobile
@@ -175,6 +176,20 @@ Files sent to the configured Telegram chat/channel are automatically downloaded.
 ### Per-Source Settings
 Configure each source's destination folder, default quality, and hidden flag in **Settings → Sources**. Hidden sources/folders are filtered from the default view; reveal them with a triple-click on the connection status pill or **Ctrl+X**.
 
+### Silencing the Startup Greeting
+
+DownLee greets every monitored chat when it starts (`Good Evening, reporting for duty 🫡`). While you're restarting repeatedly that gets noisy. To mute **just the next restart**:
+
+```bash
+touch .skip-greeting && sudo systemctl restart telegram-downloader
+```
+
+The file is consumed at startup, so the restart after that greets normally — nothing to remember to undo. Running the app by hand, `python main.py --no-greeting` (or `-n`) does the same thing.
+
+> A command-line flag can't work with `systemctl restart`, which runs the unit's own `ExecStart` and never sees your arguments — that's why the file exists.
+
+To mute it permanently, set `SKIP_STARTUP_GREETING=true` in `.env`.
+
 ## Install as an App (PWA)
 
 DownLee ships as an installable Progressive Web App — useful on a phone, where the dashboard is mostly used to check on downloads.
@@ -257,6 +272,10 @@ By default the server binds to `0.0.0.0` — this is intended for use on a **tru
 | `/api/stop` | POST | Stop download |
 | `/api/pause` / `/api/resume` | POST | Pause/resume a Telegram download |
 | `/api/delete` | POST | Soft-delete download (sets `deleted_at` timestamp) |
+| `/api/settings/rename-rules` | GET/POST | Filename rewrite rules |
+| `/api/settings/rename-rules/<id>` | PUT/DELETE | Update or delete a rule |
+| `/api/settings/rename-rules/test` | POST | Preview rules against real filenames |
+| `/api/settings/rename-rules/apply` | POST | Replay rules over existing files (dry run by default) |
 | `/api/mappings` | GET/POST | Per-source download specs (folder, quality, hidden) |
 | `/api/mappings/<id>` | PUT/DELETE | Update or delete a source spec |
 | `/api/settings/vps` | GET/POST/DELETE | VPS SSH connection config |

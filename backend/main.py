@@ -1,6 +1,7 @@
 """
 Main entry point for DownLee
 """
+import argparse
 import asyncio
 import logging
 import threading
@@ -45,8 +46,24 @@ def validate_credentials():
     return True
 
 
-def main():
+def parse_args(argv=None):
+    """Command-line options for a manual run.
+
+    Note these never reach a `systemctl restart`, which runs the unit's own
+    ExecStart - use the .skip-greeting file (or SKIP_STARTUP_GREETING=1 in a
+    drop-in) for that. See backend/config.
+    """
+    parser = argparse.ArgumentParser(prog='downlee', description='DownLee media downloader')
+    parser.add_argument(
+        '-n', '--no-greeting', action='store_true',
+        help="don't announce startup in the monitored Telegram chats")
+    return parser.parse_args(argv)
+
+
+def main(argv=None):
     """Main function to start DownLee"""
+    args = parse_args(argv)
+
     # Setup logging
     setup_logging()
 
@@ -65,7 +82,7 @@ def main():
     loop = asyncio.new_event_loop()
 
     # Initialize components
-    telegram_downloader = TelegramDownloader(download_tasks)
+    telegram_downloader = TelegramDownloader(download_tasks, skip_greeting=args.no_greeting)
     ytdlp_downloader = YtdlpDownloader(download_tasks)
     vps_downloader = VpsDownloader(download_tasks, loop)
     web_app = WebApp(download_tasks, ytdlp_downloader, loop, telegram_downloader, vps_downloader)

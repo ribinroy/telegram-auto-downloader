@@ -109,6 +109,18 @@ REFRESH_TOKEN_DAYS = int(os.getenv('REFRESH_TOKEN_DAYS', '30'))
 # thumbnail routes only, and lives long enough to watch something through.
 MEDIA_TOKEN_HOURS = int(os.getenv('MEDIA_TOKEN_HOURS', '12'))
 
+# --- Startup greeting -----------------------------------------------------
+# The bot says hello in every monitored chat when it comes up. Handy normally,
+# noisy when you are restarting repeatedly. Three ways to mute a single start:
+#   1. python main.py --no-greeting            (running it by hand)
+#   2. SKIP_STARTUP_GREETING=1                 (env / docker / systemd drop-in)
+#   3. touch .skip-greeting, then restart      (works with systemctl, which
+#                                               runs the unit's own ExecStart
+#                                               and never sees your flags)
+# The sentinel file is consumed on startup, so it only ever mutes one run.
+SKIP_STARTUP_GREETING = _env_bool('SKIP_STARTUP_GREETING', False)
+SKIP_GREETING_FILE = BASE_DIR / ".skip-greeting"
+
 # --- Reverse proxy --------------------------------------------------------
 # Only trust X-Forwarded-For / X-Real-IP when DownLee actually sits behind a
 # proxy you control: those headers are trivially forged otherwise, and the

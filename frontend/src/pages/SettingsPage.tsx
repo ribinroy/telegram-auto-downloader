@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Loader2, AlertCircle, CheckCircle, Key, Globe, Cookie, Wrench, Server, Send, TerminalSquare, Users } from 'lucide-react';
+import { Loader2, AlertCircle, CheckCircle, Key, Globe, Cookie, Wrench, Server, Send, TerminalSquare, Users, Wand2 } from 'lucide-react';
 import type { SyncThumbnailsResult } from '../api';
 import { useCookies, useSaveCookies, useSyncThumbnails, useYtdlpVersion, useUpgradeYtdlp } from '../hooks/useSettings';
 import { useUpdatePassword } from '../hooks/useMisc';
@@ -11,11 +11,12 @@ import { QueriesSettings } from '../components/QueriesSettings';
 import { UsersSettings } from '../components/UsersSettings';
 import { useLayoutContext } from '../components/Layout';
 import { settingsTab } from '../routes';
+import { RenameRulesSettings } from '../components/RenameRulesSettings';
 import { SessionsSettings } from '../components/SessionsSettings';
 import { clearToken } from '../api';
 
-type TabType = 'password' | 'sources' | 'cookies' | 'jobs' | 'vps' | 'telegram' | 'queries' | 'users';
-const TAB_IDS: TabType[] = ['password', 'sources', 'cookies', 'telegram', 'queries', 'users', 'vps', 'jobs'];
+type TabType = 'password' | 'sources' | 'renaming' | 'cookies' | 'jobs' | 'vps' | 'telegram' | 'queries' | 'users';
+const TAB_IDS: TabType[] = ['password', 'sources', 'renaming', 'cookies', 'telegram', 'queries', 'users', 'vps', 'jobs'];
 
 export function SettingsPage() {
   const { refreshDownloads } = useLayoutContext();
@@ -140,6 +141,7 @@ export function SettingsPage() {
   const tabs: { id: TabType; label: string; description: string; icon: typeof Key; show: boolean }[] = [
     { id: 'password', label: 'Password', description: 'Change your account password', icon: Key, show: true },
     { id: 'sources', label: 'Sources', description: 'Per-source folders & defaults', icon: Globe, show: true },
+    { id: 'renaming', label: 'Renaming', description: 'Rewrite filenames before download', icon: Wand2, show: true },
     { id: 'cookies', label: 'Cookies', description: 'yt-dlp browser cookies', icon: Cookie, show: true },
     { id: 'telegram', label: 'Telegram', description: 'Account login & monitored channels', icon: Send, show: true },
     { id: 'queries', label: 'Queries', description: 'Bot chat commands', icon: TerminalSquare, show: true },
@@ -267,6 +269,8 @@ export function SettingsPage() {
         )}
 
         {activeTab === 'sources' && <SourcesSettings onChange={refreshDownloads} />}
+
+        {activeTab === 'renaming' && <RenameRulesSettings />}
 
         {activeTab === 'cookies' && (
           <>

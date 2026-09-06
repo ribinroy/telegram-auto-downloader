@@ -534,9 +534,14 @@ class YtdlpDownloader:
         domain = self.get_domain(url)
 
         # Create filename from title (without extension for yt-dlp)
-        # yt-dlp will add the extension automatically
-        filename_base = title
-        filename = f"{title}.{ext or 'mp4'}"
+        # yt-dlp will add the extension automatically.
+        # Rewrite rules are applied to the full name here, before the -o
+        # template is built, so yt-dlp writes the final name itself - the
+        # .part file already carries it and nothing needs renaming later.
+        from backend.rename import rename_for_download
+        from pathlib import Path as _Path
+        filename = rename_for_download(f"{title}.{ext or 'mp4'}", domain)
+        filename_base = _Path(filename).stem
 
         # Add to database
         new_download = db.add_download(

@@ -135,6 +135,10 @@ Main Thread
 - `id` (PK), `path` (remote), `host`/`port`/`username` (owning connection)
 - `auto_sync` (hourly auto-download of new files), `folder` (local destination), `is_secured`
 
+**`rename_rules`** - Filename rewrite rules
+- `id` (PK), `name`, `pattern` (regex), `replacement`, `enabled`, `position` (lower runs first)
+- `source` (limit to one `downloaded_from`; NULL = all), `stop_on_match`
+
 **`users`** - Authentication
 - `id` (PK), `username` (unique), `password_hash` (bcrypt; legacy SHA-256 auto-upgraded on login)
 - `token_version` - bumped to invalidate every outstanding access token
@@ -172,6 +176,11 @@ Access/refresh token pair. Access tokens are short (`ACCESS_TOKEN_MINUTES`, defa
 - `POST /api/stop` - Stop active download
 - `POST /api/pause` / `POST /api/resume` - Telegram only
 - `POST /api/delete` - Soft delete
+
+### Rename Rules
+- `GET/POST /api/settings/rename-rules`, `PUT/DELETE /api/settings/rename-rules/<id>`, `POST .../reorder`
+- `POST /api/settings/rename-rules/test` - Preview against real filenames; pass `rule` to preview an unsaved draft alone
+- `POST /api/settings/rename-rules/apply` - `{dry_run}`; defaults to a dry run returning the full before/after plan
 
 ### URL Downloads (yt-dlp)
 - `POST /api/url/check` - Check URL & get available formats
@@ -291,6 +300,18 @@ The frontend is an installable PWA. `frontend/vite.config.ts` holds a small buil
 
 Registration lives in `frontend/src/lib/pwa.ts` (skipped in dev). A waiting worker fires `downlee:update-ready`; `Layout` shows a Reload pill rather than auto-refreshing. Manifest + icons are in `frontend/public/` (regenerate icons from `logo.png`). Flask sets the cache headers and the `.webmanifest` MIME type in `WebApp.setup_routes`.
 
+## Rename Rules
+
+User-defined regexes rewrite a download's filename **before the transfer starts**, so files are written under their final name from the first byte — nothing is renamed mid-flight and no partial file is orphaned under an old name. `backend/rename.py` owns the engine; `rename_rules` table holds the rules (pattern, replacement, enabled, position, optional `source`, `stop_on_match`).
+
+- **Rules match the stem only.** The extension is split off and reattached, so the natural `(?<=\w)[._](?=\w)` "dots to spaces" rule can't turn `Movie.mkv` into `Movie mkv`.
+- `rename_for_download(name, source)` is the handler entry point: never raises, and **always sanitizes** — the input is a Telegram attachment name, a remote SFTP basename or a yt-dlp title, all attacker-influenced and all joined onto a directory.
+- Applied at three points, each before any byte is written: `telegram_handler._handle_new_file` (before `open(path)`), `vps_handler.start_download` (threaded through `_local_destination(local_name=...)`, which renames the *top-level* item so a directory pull becomes `Show S01/ep01.mkv`), and `ytdlp_handler.start_download` (before the `-o` template, so yt-dlp's own `.part` already carries the final name).
+- Compiled rules are cached against `get_rename_rules_token()`; edits call `invalidate_rules_cache()`. Patterns are validated on save (regex + replacement backrefs) and run under a 2s timeout, since a user regex can backtrack catastrophically.
+- `apply_to_existing(dry_run)` replays the chain over **completed downloads only**, so it can never race a running transfer. Collisions resolve via `unique_name()` (" (2)") rather than aborting the batch.
+
+Routes in `web_app/routes/rename_rules.py`; UI in `frontend/src/components/RenameRulesSettings.tsx` (Settings → Renaming), which previews rules against real filenames from the library and requires a dry run before it will touch anything.
+
 ## Key Patterns
 
 - **Shared state**: `download_tasks = {}` dict passed to all handlers
@@ -318,6 +339,16 @@ npm run build        # Build to frontend/dist/
 sudo systemctl start telegram_downloader
 sudo systemctl status telegram_downloader
 ```
+
+## Startup Greeting
+
+`send_startup_greeting()` announces the service in every monitored chat on each authorization. Three ways to mute one start, all folded into `TelegramDownloader.skip_greeting` in `__init__`:
+
+1. `python main.py --no-greeting` / `-n` (argparse in `backend/main.py`)
+2. `SKIP_STARTUP_GREETING=1` (env, via `backend/config`)
+3. `touch .skip-greeting` then restart — `_consume_greeting_sentinel()` deletes the file as it reads it
+
+Only (3) works with `systemctl restart`, which runs the unit's `ExecStart` and never sees CLI flags. The flag is one-shot: `send_startup_greeting` clears it after suppressing once, so a later web login in the same process still greets.
 
 ## Deployment
 

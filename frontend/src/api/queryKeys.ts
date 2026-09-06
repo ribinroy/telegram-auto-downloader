@@ -14,6 +14,7 @@ export const qk = {
   ytdlpVersion: () => ['ytdlp', 'version'] as const,
   users: () => ['users'] as const,
   botQueries: () => ['bot', 'queries'] as const,
+  renameRules: () => ['rename-rules'] as const,
 
   vpsConfig: () => ['vps', 'config'] as const,
   vpsFolders: () => ['vps', 'folders'] as const,

@@ -310,6 +310,89 @@ export async function deleteDownload(message_id: string, delete_file: boolean = 
   });
 }
 
+// Rename rules
+export interface RenameRule {
+  id: number;
+  name: string | null;
+  pattern: string;
+  replacement: string;
+  enabled: boolean;
+  position: number;
+  source: string | null;
+  stop_on_match: boolean;
+}
+
+export type RenameRuleInput = Omit<RenameRule, 'id' | 'position'> & { position?: number };
+
+export interface RenamePreviewRow {
+  original: string;
+  new: string;
+  changed: boolean;
+  applied: string[];
+}
+
+export interface RenameApplyItem {
+  id: number;
+  from: string;
+  to: string;
+  applied: string[];
+  source: string | null;
+  status: 'would_rename' | 'renamed' | 'missing' | 'failed';
+  note?: string;
+}
+
+export interface RenameApplyResult {
+  dry_run: boolean;
+  total: number;
+  renamed: number;
+  skipped: number;
+  failed: number;
+  items: RenameApplyItem[];
+}
+
+const RULES = '/api/settings/rename-rules';
+
+async function rulesRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await authFetch(`${RULES}${path}`, {
+    ...init,
+    headers: init?.body ? { 'Content-Type': 'application/json' } : {},
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error((data as { error?: string }).error || 'Request failed');
+  return data as T;
+}
+
+export function fetchRenameRules(): Promise<{ rules: RenameRule[] }> {
+  return rulesRequest('');
+}
+
+export function createRenameRule(rule: RenameRuleInput): Promise<{ rules: RenameRule[] }> {
+  return rulesRequest('', { method: 'POST', body: JSON.stringify(rule) });
+}
+
+export function updateRenameRule(id: number, rule: RenameRuleInput): Promise<{ rules: RenameRule[] }> {
+  return rulesRequest(`/${id}`, { method: 'PUT', body: JSON.stringify(rule) });
+}
+
+export function deleteRenameRule(id: number): Promise<{ rules: RenameRule[] }> {
+  return rulesRequest(`/${id}`, { method: 'DELETE' });
+}
+
+export function reorderRenameRules(ids: number[]): Promise<{ rules: RenameRule[] }> {
+  return rulesRequest('/reorder', { method: 'POST', body: JSON.stringify({ ids }) });
+}
+
+/** Preview against real filenames. Pass `rule` to preview an unsaved draft alone. */
+export function testRenameRules(rule?: RenameRuleInput | null): Promise<{
+  results: RenamePreviewRow[]; changed: number; total: number;
+}> {
+  return rulesRequest('/test', { method: 'POST', body: JSON.stringify(rule ? { rule } : {}) });
+}
+
+export function applyRenameRules(dryRun: boolean): Promise<RenameApplyResult> {
+  return rulesRequest('/apply', { method: 'POST', body: JSON.stringify({ dry_run: dryRun }) });
+}
+
 export async function checkUrl(url: string): Promise<UrlCheckResult> {
   const response = await authFetch(`/api/url/check`, {
     method: 'POST',
