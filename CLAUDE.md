@@ -69,11 +69,13 @@ Main Thread
 |  |  |- vps.py                     # VPS SSH/SFTP connection helpers
 |  |  |- helpers.py                 # Misc helpers (candidate_file_paths)
 |  |  '- routes/                    # Per-domain Flask route mixins (auth, downloads, url,
-|  |                                #   analytics, settings, vps_settings, torrent, vps_browse, media)
+|  |                                #   analytics, settings, vps_settings, torrent, vps_browse, media,
+|  |                                #   rename_rules, files)
 |  |- telegram_handler/__init__.py  # Telethon download handler (~436 lines)
 |  |- ytdlp_handler/__init__.py     # yt-dlp subprocess handler (~604 lines)
 |  |- vps_handler/__init__.py       # SFTP download handler + hourly autoSync
 |  |- utils/__init__.py             # Helpers (resolve_spec, encryption, MIME types)
+|  |- files.py                      # Filesystem service for the file explorer (mounts, listing, ops, thumbs)
 |  |- file_meta.py                  # Video metadata extraction (ffprobe)
 |  |- browser_downloader.py         # Playwright fallback for yt-dlp
 |  '- metrics/__init__.py           # Prometheus counters
@@ -87,12 +89,14 @@ Main Thread
 |     |- routes.ts                  # Route constants
 |     |- api/
 |     |  |- index.ts               # REST API client functions
+|     |  |- files.ts               # File explorer transport + media URL builders
 |     |  '- socket.ts              # WebSocket connection & event handlers
 |     |- types/index.ts            # TypeScript interfaces
 |     |- utils/format.ts           # Formatting helpers
 |     |- pages/
 |     |  |- DownloadsPage.tsx       # Main download list
 |     |  |- VpsPage.tsx             # VPS file browser (watched folders)
+|     |  |- ExplorerPage.tsx        # Local file explorer (all disks, live)
 |     |  |- SettingsPage.tsx        # Settings tabs (password/sources/cookies/vps/jobs)
 |     |  '- AnalyticsPage.tsx       # Charts & analytics
 |     '- components/
@@ -102,6 +106,8 @@ Main Thread
 |        |- SourcesSettings.tsx     # Per-source specs (folder/quality/hidden)
 |        |- VpsSettings.tsx         # SSH connection, torrent client, watched folders
 |        |- FolderBrowser.tsx       # Reusable remote/local folder picker
+|        |- explorer/               # File explorer: Sidebar, Toolbar, FileList,
+|        |                          #   ContextMenu, PreviewModal, PropertiesModal
 |        |- LoginPage.tsx           # JWT auth login
 |        |- StatsHeader.tsx         # Stats bar
 |        |- VideoPlayerModal.tsx    # Video playback
@@ -212,6 +218,14 @@ Access/refresh token pair. Access tokens are short (`ACCESS_TOKEN_MINUTES`, defa
 - Temp folder: `apply_torrent_session()` pushes the incomplete/temp dir (Transmission `session-set incomplete-dir`; qBittorrent `setPreferences temp_path`), applied on config save + re-applied before each add. The client downloads into the temp dir, then moves to the torrent's download dir on completion.
 - Frontend: Settings → VPS shows a `TorrentClientCard` per client; the VPS page has per-client tabs (Files · Transmission · qBittorrent), each its own `TorrentStatusPanel` (hash-based multi-select). Pasted magnets pick the client in `AddUrlModal`.
 
+### File Explorer (local disks)
+Live filesystem access - every call reads the disk, nothing is indexed or cached.
+- `GET /api/files/roots` - Sidebar places: Home, `DOWNLOAD_DIR`, and every real mount from `/proc/mounts` with live capacity
+- `POST /api/files/list` - `{path?, show_hidden?}` -> entries + `writable`, `usage`, `mount`, `trash`
+- `POST /api/files/mkdir` / `rename` / `delete` (`{paths, permanent?}`) / `transfer` (`{paths, dest, move}`) / `upload` (multipart)
+- `POST /api/files/search` (recursive, capped by results **and** a wall-clock deadline), `POST /api/files/size` (on-demand `du`), `POST /api/files/text` (preview head)
+- `GET /api/files/stream|download|thumb?path=` - `@media_token_required`, range-streamed; `thumb` is a cached JPEG (Pillow for images, an ffmpeg frame grab for video)
+
 ### Video Streaming
 - `GET /api/video/stream/<id>` - Range-request video streaming
 - `GET /api/video/thumbs/<id>` - Thumbnail list
@@ -250,6 +264,7 @@ All config via `.env` file at project root (loaded by python-dotenv):
 | `MAX_RETRIES` | `6` | Download retry attempts |
 | `SCREENSHOTS_DIR` | `DOWNLOAD_DIR/.thumbs` | Thumbnail storage |
 | `JWT_SECRET` | auto-generated, persisted to `.jwt_secret` | App secret: JWT signing + Fernet key for stored secrets |
+| `EXPLORER_READONLY` | `0` | Refuse every file-explorer write (rename/delete/move/copy/upload/mkdir) |
 
 ## Download Flow
 
@@ -311,6 +326,50 @@ User-defined regexes rewrite a download's filename **before the transfer starts*
 - `apply_to_existing(dry_run)` replays the chain over **completed downloads only**, so it can never race a running transfer. Collisions resolve via `unique_name()` (" (2)") rather than aborting the batch.
 
 Routes in `web_app/routes/rename_rules.py`; UI in `frontend/src/components/RenameRulesSettings.tsx` (Settings → Renaming), which previews rules against real filenames from the library and requires a dry run before it will touch anything.
+
+## File Explorer
+
+A real file manager over the home server's own disks, at `/files` (`ExplorerPage`).
+Everything is read **live from disk on every request** - there is no index, no DB
+table and no cache, so a file dropped in over SMB shows up on the next listing and
+a pulled USB drive disappears from the sidebar.
+
+- `backend/files.py` is the whole filesystem layer: mounts, listings, mutations,
+  search, sizes, thumbnails. `web_app/routes/files.py` is transport only - parse,
+  dispatch, map `FsError` to a status code.
+- **Roots** come from `/proc/mounts` on every call, minus pseudo filesystems,
+  snap loop mounts and OS partitions, plus Home and `DOWNLOAD_DIR`. Each carries
+  live `shutil.disk_usage`, which the sidebar draws as a capacity bar.
+- **Reads go anywhere** the service account can reach. **Writes** go through
+  `guard_write()`: anything on a mount other than `/` is fair game (that is where
+  a media library lives), while `PROTECTED_ROOTS` on the root filesystem
+  (`/usr`, `/etc`, `/boot`, ...) is refused. `guard_target()` additionally refuses
+  to unlink or rename a mount point itself. `EXPLORER_READONLY=1` refuses every
+  write outright.
+- **Delete is a trash move by default**, into `<mount>/.downlee-trash` - per mount,
+  so it stays a rename instead of copying 50 GB across drives, and stays
+  recoverable. Root-filesystem deletes park in `BASE_DIR/.trash`. `permanent: true`
+  unlinks for real. The trash path is reported by `/api/files/list` (only once it
+  exists) and linked in the sidebar.
+- **Bounded work**: recursive search and folder sizes both stop on a wall-clock
+  deadline as well as a result cap, because "search from the root of a 20 TB array"
+  is a reasonable thing to ask a web request to do exactly once.
+- **Thumbnails** (`/api/files/thumb`) are cached under `SCREENSHOTS_DIR/.explorer`,
+  keyed by `(path, mtime, size)` so replacing a file in place invalidates its own
+  thumbnail. Images go through Pillow; videos get an ffmpeg frame grab (~1s each),
+  which is why they are only requested in **grid** view - a 500-file list would
+  otherwise start 500 ffmpeg processes.
+- **Streaming/download by path** reuse `helpers.range_response()` (shared with the
+  per-download video route) and sit behind `@media_token_required`, so no API token
+  ever lands in a URL.
+- Frontend: `hooks/useFiles.ts` (React Query, `staleTime: 0` - a disk is always
+  stale; every mutation invalidates the whole `['files']` tree), `api/files.ts`
+  transport, and `components/explorer/*`. The current directory lives in the URL
+  (`/files?path=...`), so browser back/forward is the explorer's history.
+  Desktop behaviour throughout: click/ctrl-click/shift-click selection, double-click
+  to open, right-click menu, F2 rename, Delete to trash (Shift+Delete permanent),
+  Ctrl+A/C/X/V, Backspace for up, drag-and-drop upload. On coarse pointers a single
+  tap opens and the row's ⋮ menu replaces right-click.
 
 ## Key Patterns
 

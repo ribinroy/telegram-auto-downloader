@@ -1,6 +1,6 @@
 import type { DownloadsResponse, Stats, UrlCheckResult, Download, SourceMapping, AnalyticsData } from '../types';
 
-const API_BASE = import.meta.env.DEV ? (import.meta.env.VITE_API_BASE || 'http://localhost:4444') : '';
+export const API_BASE = import.meta.env.DEV ? (import.meta.env.VITE_API_BASE || 'http://localhost:4444') : '';
 const TOKEN_KEY = 'auth_token';
 const REFRESH_KEY = 'refresh_token';
 const MEDIA_TOKEN_KEY = 'media_token';

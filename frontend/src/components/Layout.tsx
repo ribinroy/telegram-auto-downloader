@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Outlet, useNavigate, useLocation, useOutletContext } from 'react-router-dom';
-import { Wifi, WifiOff, HardDrive, Clock, Zap, LogOut, Settings, BarChart3, RefreshCw } from 'lucide-react';
+import { Wifi, WifiOff, HardDrive, Clock, Zap, LogOut, Settings, BarChart3, RefreshCw, FolderOpen } from 'lucide-react';
 import { formatBytes, formatSpeed } from '../utils/format';
 import { type SortBy, type SortOrder } from '../api';
 import { ToastContainer, useToast } from './Toast';
@@ -246,6 +246,18 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
                   </div>
                 </div>
               )}
+              {/* File explorer - live browsing of the server's own disks */}
+              <div className="group relative">
+                <button
+                  onClick={() => navigate(ROUTES.FILES)}
+                  className={`p-2 hover:bg-slate-600/50 text-slate-400 hover:text-white rounded-lg transition-colors ${location.pathname === ROUTES.FILES ? 'bg-slate-600/50 text-white' : 'bg-slate-700/50'}`}
+                >
+                  <FolderOpen className="w-4 h-4" />
+                </button>
+                <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
+                  Files
+                </div>
+              </div>
               {/* VPS files - only when configured with watched folders */}
               {vpsReady && (
                 <div className="group relative">

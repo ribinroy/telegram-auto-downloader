@@ -18,7 +18,7 @@ from backend.web_app.torrent import (
     transmission_rpc, normalize_transmission_url,
 )
 from backend.web_app.vps import load_vps_credentials, annotate_vps_folders, open_vps_sftp
-from backend.web_app.helpers import candidate_file_paths
+from backend.web_app.helpers import candidate_file_paths, range_response
 
 
 class MediaRoutesMixin:
@@ -66,9 +66,6 @@ class MediaRoutesMixin:
         @media_token_required
         def stream_video(download_id):
             """Stream a video file for playback"""
-            from flask import Response, request
-            import mimetypes
-
             db = get_db()
             download = db.get_download_by_id(download_id)
 
@@ -91,68 +88,7 @@ class MediaRoutesMixin:
             if not file_path:
                 return jsonify({"error": "File not found"}), 404
 
-            # Get file size and mime type
-            file_size = file_path.stat().st_size
-            mime_type = mimetypes.guess_type(str(file_path))[0] or 'video/mp4'
-
-            # Handle range requests for seeking
-            range_header = request.headers.get('Range')
-
-            if range_header:
-                # Parse range header
-                byte_start = 0
-                byte_end = file_size - 1
-
-                range_match = range_header.replace('bytes=', '').split('-')
-                if range_match[0]:
-                    byte_start = int(range_match[0])
-                if len(range_match) > 1 and range_match[1]:
-                    byte_end = int(range_match[1])
-
-                content_length = byte_end - byte_start + 1
-
-                def generate():
-                    with open(file_path, 'rb') as f:
-                        f.seek(byte_start)
-                        remaining = content_length
-                        chunk_size = 1024 * 1024  # 1MB chunks
-                        while remaining > 0:
-                            chunk = f.read(min(chunk_size, remaining))
-                            if not chunk:
-                                break
-                            remaining -= len(chunk)
-                            yield chunk
-
-                response = Response(
-                    generate(),
-                    status=206,
-                    mimetype=mime_type,
-                    direct_passthrough=True
-                )
-                response.headers['Content-Range'] = f'bytes {byte_start}-{byte_end}/{file_size}'
-                response.headers['Accept-Ranges'] = 'bytes'
-                response.headers['Content-Length'] = content_length
-                return response
-            else:
-                # Full file request
-                def generate():
-                    with open(file_path, 'rb') as f:
-                        chunk_size = 1024 * 1024  # 1MB chunks
-                        while True:
-                            chunk = f.read(chunk_size)
-                            if not chunk:
-                                break
-                            yield chunk
-
-                response = Response(
-                    generate(),
-                    status=200,
-                    mimetype=mime_type,
-                    direct_passthrough=True
-                )
-                response.headers['Accept-Ranges'] = 'bytes'
-                response.headers['Content-Length'] = file_size
-                return response
+            return range_response(file_path)
 
         # Thumbnail API
         @self.app.route("/api/thumbs/<int:download_id>", methods=["GET"])

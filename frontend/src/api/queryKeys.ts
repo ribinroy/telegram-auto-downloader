@@ -23,6 +23,13 @@ export const qk = {
   torrentConfig: () => ['torrent', 'config'] as const,
   torrentList: (client: TorrentClient) => ['torrent', 'list', client] as const,
 
+  fileRoots: () => ['files', 'roots'] as const,
+  fileList: (path: string, showHidden: boolean) => ['files', 'list', path, showHidden] as const,
+  fileSearch: (path: string, query: string, showHidden: boolean) =>
+    ['files', 'search', path, query, showHidden] as const,
+  fileSize: (path: string) => ['files', 'size', path] as const,
+  fileText: (path: string) => ['files', 'text', path] as const,
+
   telegramStatus: () => ['telegram', 'status'] as const,
   telegramApiConfig: () => ['telegram', 'api'] as const,
   telegramDialogs: () => ['telegram', 'dialogs'] as const,

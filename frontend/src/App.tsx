@@ -8,6 +8,7 @@ import { DownloadsPage } from './pages/DownloadsPage';
 import { AnalyticsPage } from './pages/AnalyticsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { VpsPage } from './pages/VpsPage';
+import { ExplorerPage } from './pages/ExplorerPage';
 import { ROUTES } from './routes';
 
 function App() {
@@ -69,6 +70,7 @@ function App() {
     <Routes>
       <Route element={<Layout onLogout={handleLogout} />}>
         <Route path={ROUTES.DOWNLOADS} element={<DownloadsPage />} />
+        <Route path={ROUTES.FILES} element={<ExplorerPage />} />
         <Route path={ROUTES.ANALYTICS} element={<AnalyticsPage />} />
         <Route path={ROUTES.SETTINGS} element={<SettingsPage />} />
         <Route path="/settings/:tab" element={<SettingsPage />} />

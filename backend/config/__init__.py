@@ -128,6 +128,13 @@ SKIP_GREETING_FILE = BASE_DIR / ".skip-greeting"
 TRUST_PROXY_HEADERS = _env_bool('TRUST_PROXY_HEADERS', False)
 TRUSTED_PROXY_COUNT = int(os.getenv('TRUSTED_PROXY_COUNT', '1'))
 
+# --- File explorer --------------------------------------------------------
+# The built-in explorer browses the whole host filesystem (that is the point:
+# every attached HDD). Reads are always allowed; set EXPLORER_READONLY=1 to
+# refuse every write - rename, delete, move, copy, upload, new folder - which
+# is worth doing on an instance reachable from outside the LAN.
+EXPLORER_READONLY = _env_bool('EXPLORER_READONLY', False)
+
 # --- CORS -----------------------------------------------------------------
 # In production the React app is served by this same Flask process, so no
 # cross-origin access is needed at all. The defaults only allow the Vite dev
