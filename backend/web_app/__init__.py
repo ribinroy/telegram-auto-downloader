@@ -45,6 +45,7 @@ from backend.web_app.routes.vps_settings import VpsSettingsRoutesMixin
 from backend.web_app.routes.torrent import TorrentRoutesMixin
 from backend.web_app.routes.vps_browse import VpsBrowseRoutesMixin
 from backend.web_app.routes.media import MediaRoutesMixin
+from backend.web_app.routes.rename_rules import RenameRulesRoutesMixin
 
 
 # Python's mimetypes table predates .webmanifest on most distros; without this
@@ -80,7 +81,7 @@ def _socketio_origin_allowed(origin, environ=None):
 class WebApp(
     AuthRoutesMixin, DownloadRoutesMixin, UrlRoutesMixin, AnalyticsRoutesMixin,
     SettingsRoutesMixin, VpsSettingsRoutesMixin, TorrentRoutesMixin,
-    VpsBrowseRoutesMixin, MediaRoutesMixin,
+    VpsBrowseRoutesMixin, MediaRoutesMixin, RenameRulesRoutesMixin,
 ):
     def __init__(self, download_tasks, ytdlp_downloader=None, event_loop=None, telegram_downloader=None, vps_downloader=None):
         self.download_tasks = download_tasks
@@ -355,6 +356,7 @@ class WebApp(
         self.register_torrent_routes()
         self.register_vps_browse_routes()
         self.register_media_routes()
+        self.register_rename_rules_routes()
 
         # Serve frontend
         @self.app.route('/')

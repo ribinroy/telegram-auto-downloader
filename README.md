@@ -27,6 +27,7 @@ A self-hosted media downloader with Telegram integration and a modern web dashbo
 - **Per-Channel Magnet Routing**: Each monitored Telegram channel can route its magnets to a chosen client (Settings → Telegram), with a global fallback client (Settings → VPS)
 - **Per-Source Settings**: Each source (telegram, youtube, vps, ...) can have its own destination folder, default quality, and hidden flag (Settings → Sources)
 - **Per-Watchfolder Settings**: Each watched VPS folder can have its own local destination folder and hidden flag
+- **Rename Rules**: Define regex rules (Settings → Renaming) that clean up filenames **before the download starts** — strip `1080p.WEB-DL.x264-GROUP`, turn dots into spaces, bracket the year. Files are saved under their final name from the first byte, so nothing is renamed mid-transfer. Preview any rule against your real filenames, and replay the whole chain over already-downloaded files with a dry run first
 - **Quality Selection**: Choose video quality/resolution when downloading URLs (preselected from the source's default quality)
 - **Download Folder Preview**: Shows the destination folder path when adding URL downloads and on each download item
 - **Thumbnail Previews**: Hover to preview video thumbnails with carousel, or tap the preview button on mobile
@@ -257,6 +258,10 @@ By default the server binds to `0.0.0.0` — this is intended for use on a **tru
 | `/api/stop` | POST | Stop download |
 | `/api/pause` / `/api/resume` | POST | Pause/resume a Telegram download |
 | `/api/delete` | POST | Soft-delete download (sets `deleted_at` timestamp) |
+| `/api/settings/rename-rules` | GET/POST | Filename rewrite rules |
+| `/api/settings/rename-rules/<id>` | PUT/DELETE | Update or delete a rule |
+| `/api/settings/rename-rules/test` | POST | Preview rules against real filenames |
+| `/api/settings/rename-rules/apply` | POST | Replay rules over existing files (dry run by default) |
 | `/api/mappings` | GET/POST | Per-source download specs (folder, quality, hidden) |
 | `/api/mappings/<id>` | PUT/DELETE | Update or delete a source spec |
 | `/api/settings/vps` | GET/POST/DELETE | VPS SSH connection config |

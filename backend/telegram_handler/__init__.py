@@ -777,6 +777,10 @@ class TelegramDownloader:
         folder.mkdir(parents=True, exist_ok=True)
 
         filename = event.file.name or f"{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        # Rewrite rules run before the file is created, so it is written under
+        # its final name from the first byte - nothing to rename afterwards.
+        from backend.rename import rename_for_download
+        filename = rename_for_download(filename, 'telegram')
         path = folder / filename
 
         # Extract author info (username:id) from the sender

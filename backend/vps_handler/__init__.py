@@ -111,6 +111,9 @@ class VpsDownloader:
 
         message_id = generate_uuid()
         filename = posixpath.basename(remote_path.rstrip("/")) or remote_path
+        # Applied up front so the transfer writes straight to the final name.
+        from backend.rename import rename_for_download
+        filename = rename_for_download(filename, 'vps')
 
         new_download = db.add_download(
             file=filename,
@@ -156,18 +159,29 @@ class VpsDownloader:
         self.download_tasks[message_id] = thread
         thread.start()
 
-    def _local_destination(self, remote_path: str, base: Path = None, strip_prefix: str = None) -> Path:
+    def _local_destination(self, remote_path: str, base: Path = None, strip_prefix: str = None,
+                           local_name: str = None) -> Path:
         """Map a remote file to its local path under `base` (default DOWNLOAD_DIR/VPS).
 
         `strip_prefix` is the remote directory the download was rooted at; the file
         is placed relative to it, so the requested item's parent dirs are not
         recreated locally (e.g. /home/user/xyz under destination a/b/c → a/b/c/xyz, not
         a/b/c/home/user/xyz). Without it, the full remote path is mirrored.
+
+        `local_name` renames the *top-level* item the download was rooted at -
+        the file itself for a single-file pull, or the containing folder for a
+        directory pull (so `Season 1/ep01.mkv` becomes `Show S01/ep01.mkv`, not
+        `Season 1/Show S01`). The local name is otherwise taken from the remote
+        path, so a rename rule would be silently undone here.
         """
         if strip_prefix:
             rel = posixpath.relpath(remote_path, strip_prefix)
         else:
             rel = remote_path.lstrip("/")
+        if local_name:
+            parts = rel.split('/')
+            parts[0] = local_name
+            rel = '/'.join(parts)
         return (base or (DOWNLOAD_DIR / "VPS")) / rel
 
     def _walk(self, sftp, root, out):
@@ -206,6 +220,14 @@ class VpsDownloader:
             st = sftp.stat(remote_path)
             is_dir = stat_module.S_ISDIR(st.st_mode)
 
+            # The record's name already carries any rewrite from start_download;
+            # honour it for single files (a directory pull keeps its tree, and
+            # the rule applies to the top-level folder name).
+            record = db.get_download_by_message_id(message_id) or {}
+            local_name = record.get('file') or None
+            if local_name == posixpath.basename(remote_path.rstrip('/')):
+                local_name = None
+
             # Build the list of files to transfer
             files = []  # (remote_file, size)
             if is_dir:
@@ -217,7 +239,7 @@ class VpsDownloader:
             # Resume: count bytes already present locally
             transferred = [0]
             for rfile, rsize in files:
-                lp = self._local_destination(rfile, base, strip_prefix)
+                lp = self._local_destination(rfile, base, strip_prefix, local_name)
                 if lp.exists():
                     ls = lp.stat().st_size
                     transferred[0] += min(ls, rsize) if rsize else ls
@@ -247,7 +269,7 @@ class VpsDownloader:
             for rfile, rsize in files:
                 if message_id in self.cancelled:
                     raise _Cancelled()
-                lp = self._local_destination(rfile, base, strip_prefix)
+                lp = self._local_destination(rfile, base, strip_prefix, local_name)
                 lp.parent.mkdir(parents=True, exist_ok=True)
                 self._transfer_file(sftp, rfile, lp, rsize, bump)
 
@@ -261,7 +283,7 @@ class VpsDownloader:
             metrics.record_download_completed('vps', total_bytes, (datetime.now() - start_time).total_seconds())
             logger.info(f"[vps] Download completed: {remote_path} ({len(files)} file(s))")
 
-            if not is_dir and is_video_file(self._local_destination(remote_path).name) and self.loop:
+            if not is_dir and is_video_file(self._local_destination(remote_path, local_name=local_name).name) and self.loop:
                 asyncio.run_coroutine_threadsafe(poll_and_extract_meta(message_id), self.loop)
 
         except _Cancelled:

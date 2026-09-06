@@ -215,6 +215,40 @@ class User(Base):
             return True
 
 
+class RenameRule(Base):
+    """A regex rewrite applied to a download's filename.
+
+    Rules run in `position` order over the full basename (extension included,
+    so patterns can match ".1080p." and friends). The first rule with
+    `stop_on_match` set ends the chain once it matches."""
+    __tablename__ = 'rename_rules'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(200), nullable=True)          # human label, optional
+    pattern = Column(String(500), nullable=False)      # Python regex
+    replacement = Column(String(500), nullable=False, default='')  # supports \1, \g<name>
+    enabled = Column(Boolean, default=True)
+    position = Column(Integer, default=0)              # lower runs first
+    source = Column(String(100), nullable=True)        # limit to one downloaded_from; NULL = all
+    stop_on_match = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'name': self.name,
+            'pattern': self.pattern,
+            'replacement': self.replacement or '',
+            'enabled': bool(self.enabled),
+            'position': self.position or 0,
+            'source': self.source,
+            'stop_on_match': bool(self.stop_on_match),
+            'created_at': f"{self.created_at.isoformat()}Z" if self.created_at else None,
+            'updated_at': f"{self.updated_at.isoformat()}Z" if self.updated_at else None,
+        }
+
+
 class UserSession(Base):
     """A logged-in device/browser, addressed by the refresh token it holds.
 
@@ -1032,6 +1066,94 @@ class DatabaseManager:
             user.role = role
             session.commit()
             return user.to_dict()
+        finally:
+            self.close_session()
+
+    # --- Rename rules -----------------------------------------------------
+
+    def get_rename_rules(self, enabled_only: bool = False):
+        """All rename rules in application order."""
+        session = self.get_session()
+        try:
+            q = session.query(RenameRule)
+            if enabled_only:
+                q = q.filter(RenameRule.enabled.is_(True))
+            rows = q.order_by(RenameRule.position, RenameRule.id).all()
+            return [r.to_dict() for r in rows]
+        finally:
+            self.close_session()
+
+    def get_rename_rules_token(self):
+        """Cheap change token so callers can cache compiled patterns and only
+        recompile when a rule is actually edited."""
+        session = self.get_session()
+        try:
+            from sqlalchemy import func
+            count, newest = session.query(
+                func.count(RenameRule.id), func.max(RenameRule.updated_at)).one()
+            return f"{count}:{newest.isoformat() if newest else '-'}"
+        finally:
+            self.close_session()
+
+    def add_rename_rule(self, pattern: str, replacement: str = '', name: str = None,
+                        enabled: bool = True, source: str = None,
+                        stop_on_match: bool = False, position: int = None):
+        session = self.get_session()
+        try:
+            if position is None:
+                from sqlalchemy import func
+                highest = session.query(func.max(RenameRule.position)).scalar()
+                position = (highest or 0) + 1
+            rule = RenameRule(
+                pattern=pattern, replacement=replacement or '', name=name,
+                enabled=enabled, source=source or None,
+                stop_on_match=stop_on_match, position=position)
+            session.add(rule)
+            session.commit()
+            return rule.to_dict()
+        finally:
+            self.close_session()
+
+    def update_rename_rule(self, rule_id: int, **kwargs):
+        session = self.get_session()
+        try:
+            rule = session.query(RenameRule).filter_by(id=rule_id).first()
+            if not rule:
+                return None
+            for key in ('name', 'pattern', 'replacement', 'enabled',
+                        'position', 'source', 'stop_on_match'):
+                if key in kwargs:
+                    setattr(rule, key, kwargs[key])
+            rule.updated_at = datetime.utcnow()
+            session.commit()
+            return rule.to_dict()
+        finally:
+            self.close_session()
+
+    def delete_rename_rule(self, rule_id: int):
+        session = self.get_session()
+        try:
+            rule = session.query(RenameRule).filter_by(id=rule_id).first()
+            if not rule:
+                return False
+            session.delete(rule)
+            session.commit()
+            return True
+        finally:
+            self.close_session()
+
+    def reorder_rename_rules(self, ordered_ids: list):
+        """Persist a new application order (list of rule ids, first runs first)."""
+        session = self.get_session()
+        try:
+            rules = {r.id: r for r in session.query(RenameRule).all()}
+            for index, rule_id in enumerate(ordered_ids):
+                rule = rules.get(rule_id)
+                if rule:
+                    rule.position = index
+                    rule.updated_at = datetime.utcnow()
+            session.commit()
+            return True
         finally:
             self.close_session()
 
