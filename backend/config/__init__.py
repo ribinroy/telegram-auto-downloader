@@ -104,6 +104,10 @@ def _env_bool(name, default=False):
 # so they can be revoked server-side (logout, password change).
 ACCESS_TOKEN_MINUTES = int(os.getenv('ACCESS_TOKEN_MINUTES', '30'))
 REFRESH_TOKEN_DAYS = int(os.getenv('REFRESH_TOKEN_DAYS', '30'))
+# <video>/<img> elements can't send an Authorization header, so media URLs
+# carry a token in the query string. That token is scoped to the streaming and
+# thumbnail routes only, and lives long enough to watch something through.
+MEDIA_TOKEN_HOURS = int(os.getenv('MEDIA_TOKEN_HOURS', '12'))
 
 # --- Reverse proxy --------------------------------------------------------
 # Only trust X-Forwarded-For / X-Real-IP when DownLee actually sits behind a

@@ -10,7 +10,7 @@ from backend.config import JWT_SECRET
 from backend.database import get_db
 from backend import metrics
 from backend.web_app.base import (
-    token_required, get_socketio, get_web_app,
+    token_required, media_token_required, get_socketio, get_web_app,
     JWT_EXPIRY_DAYS, PASSWORD_CHANGE_ALLOWED_PATHS, FRONTEND_DIST,
 )
 from backend.web_app.torrent import (
@@ -63,27 +63,11 @@ class MediaRoutesMixin:
             return jsonify({"exists": False, "error": "File not found"})
 
         @self.app.route("/api/video/stream/<int:download_id>", methods=["GET"])
+        @media_token_required
         def stream_video(download_id):
             """Stream a video file for playback"""
             from flask import Response, request
             import mimetypes
-
-            # Accept token from query param (for video element) or header
-            token = request.args.get('token')
-            if not token:
-                auth_header = request.headers.get('Authorization')
-                if auth_header and auth_header.startswith('Bearer '):
-                    token = auth_header.split(' ')[1]
-
-            if not token:
-                return jsonify({'error': 'Token is missing'}), 401
-
-            try:
-                jwt.decode(token, JWT_SECRET, algorithms=['HS256'])
-            except jwt.ExpiredSignatureError:
-                return jsonify({'error': 'Token has expired'}), 401
-            except jwt.InvalidTokenError:
-                return jsonify({'error': 'Invalid token'}), 401
 
             db = get_db()
             download = db.get_download_by_id(download_id)
@@ -183,20 +167,9 @@ class MediaRoutesMixin:
             return jsonify({"thumbs": thumbs})
 
         @self.app.route("/api/thumbs/<int:download_id>/<filename>", methods=["GET"])
+        @media_token_required
         def serve_thumb(download_id, filename):
             """Serve a thumbnail image"""
-            # Accept token from query param or header
-            token = request.args.get('token')
-            if not token:
-                auth_header = request.headers.get('Authorization')
-                if auth_header and auth_header.startswith('Bearer '):
-                    token = auth_header.split(' ')[1]
-            if not token:
-                return jsonify({'error': 'Token is missing'}), 401
-            try:
-                jwt.decode(token, JWT_SECRET, algorithms=['HS256'])
-            except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
-                return jsonify({'error': 'Invalid token'}), 401
 
             # Sanitize filename to prevent directory traversal
             if '/' in filename or '\\' in filename or '..' in filename:

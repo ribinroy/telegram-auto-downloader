@@ -39,10 +39,11 @@ A self-hosted media downloader with Telegram integration and a modern web dashbo
 - **Hidden View**: Downloads from hidden sources/folders are filtered out of the default view (secret triple-click or Ctrl+X toggle)
 - **Video Playback**: Stream downloaded videos directly in the browser
 - **yt-dlp Management**: Check version and upgrade yt-dlp directly from the web UI (Settings > Jobs)
-- **User Authentication**: JWT-based login with password management
+- **User Authentication**: JWT login with bcrypt-hashed passwords, short-lived access tokens + revocable refresh sessions, per-device sign-out, and brute-force rate limiting
 - **Encrypted Credentials**: VPS and torrent client passwords stored encrypted at rest (Fernet, keyed off the JWT secret)
 - **Startup Greeting**: Sends a time-appropriate greeting to the Telegram chat on startup
 - **PostgreSQL Database**: Persistent storage for downloads and settings
+- **Installable PWA**: Add DownLee to your phone's home screen or desktop - standalone window, offline app shell, and app shortcuts
 - **Prometheus Metrics**: Export metrics for monitoring with Grafana
 
 ## Tech Stack
@@ -174,6 +175,20 @@ Files sent to the configured Telegram chat/channel are automatically downloaded.
 ### Per-Source Settings
 Configure each source's destination folder, default quality, and hidden flag in **Settings → Sources**. Hidden sources/folders are filtered from the default view; reveal them with a triple-click on the connection status pill or **Ctrl+X**.
 
+## Install as an App (PWA)
+
+DownLee ships as an installable Progressive Web App — useful on a phone, where the dashboard is mostly used to check on downloads.
+
+- **Android/Chrome/Edge**: open DownLee and choose *Install app* / *Add to Home screen*.
+- **iOS/Safari**: *Share → Add to Home Screen*.
+- **Desktop Chrome/Edge**: the install icon in the address bar.
+
+Installed, it opens in its own window with no browser chrome, gets app shortcuts (Downloads, Seedbox, Analytics), and keeps working well enough offline to show the app shell instead of a browser error page. Live data, media streaming and the WebSocket are never served from cache.
+
+> **Browsers only offer installation over HTTPS** (or on `localhost`). On a plain-HTTP LAN address the app still works, but the install prompt won't appear — put it behind a reverse proxy with a certificate, or use Tailscale HTTPS, to get the installable experience.
+
+When a new build is deployed, the running app notices and offers a **Reload** pill rather than refreshing underneath you mid-download.
+
 ## Security
 
 ### Bot Queries Run Shell Commands on the Host
@@ -198,22 +213,41 @@ your_user ALL=(root) NOPASSWD: /usr/sbin/smartctl
 
 With `sudo -n`, the query degrades gracefully (reports health as "unknown") if no rule is present — so granting this is optional and only needed for SMART health output.
 
+### Accounts and Sessions
+
+- Passwords are hashed with **bcrypt** (cost 12, SHA-256 pre-hash so long passphrases aren't truncated). Accounts created by older versions stored a bare SHA-256 digest; those are verified once and then transparently re-hashed on the owner's next successful login — no action needed, no password reset.
+- Logging in returns a **short-lived access token** (30 min, `ACCESS_TOKEN_MINUTES`) plus a **refresh token** (30 days, `REFRESH_TOKEN_DAYS`). The browser exchanges the latter for a new pair in the background, so nothing is signed in for 30 days on the strength of one stolen token.
+- Refresh tokens are backed by a `user_sessions` row and **rotate on every use**. Replaying an already-rotated token is treated as theft and revokes that entire session.
+- Sessions are revocable server-side and take effect on the very next request:
+  - **Settings → Password → Active sessions** lists every signed-in device, with per-device sign-out.
+  - **Sign out everywhere** invalidates every outstanding token for the account.
+  - **Changing your password** does the same automatically.
+- `<video>` and `<img>` tags can't send an `Authorization` header, so media URLs carry a **separate media token** scoped to the streaming and thumbnail routes only (`MEDIA_TOKEN_HOURS`, default 12h). A full API token is never placed in a URL, browser history or access log.
+- Failed logins are **rate limited** per source IP *and* per username: 5 attempts in a 15-minute window, then a lockout that doubles with each further failure (30s → 15 min). Successful logins reset the counter. Behind a reverse proxy, set `TRUST_PROXY_HEADERS=true` so the limiter sees the real client address rather than the proxy's.
+
 ### Network Exposure
 
-By default the server binds to `0.0.0.0` and allows all CORS origins (for both the REST API and the WebSocket) — this is intended for use on a **trusted LAN only**.
+By default the server binds to `0.0.0.0` — this is intended for use on a **trusted LAN only**.
 
 - **Do not expose DownLee directly to the internet.** If you need remote access, put it behind a reverse proxy (Caddy, nginx, Traefik) with HTTPS, and ideally restrict access further with a VPN (WireGuard, Tailscale) or proxy-level authentication.
-- All `/api/*` routes require a JWT, but `/metrics` (Prometheus) is **unauthenticated** by design — anyone who can reach the port can read download stats from it.
-- Change the default `admin`/`admin` credentials before the dashboard is reachable by anyone else.
+- **CORS** is closed by default: only the Vite dev server (`localhost:5173`) is allowed, since the production UI is served by this same process and needs no cross-origin grant. Add your own origins with `CORS_ORIGINS=https://downlee.example.com` (comma-separated). `*` is honoured but logs a warning — don't use it on an exposed instance.
+- All `/api/*` routes require a token, but `/metrics` (Prometheus) is **unauthenticated** by design — anyone who can reach the port can read download stats from it.
+- Change the default `admin`/`admin` credentials before the dashboard is reachable by anyone else. The app forces this on first login and refuses `admin` as the new password (minimum 8 characters).
 - To bind to a specific interface instead of all of them, set `WEB_HOST` in `.env` (e.g. `WEB_HOST=192.168.1.10`, or `127.0.0.1` when fronted by a local reverse proxy).
 
 ## API Endpoints
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/auth/login` | POST | Login |
-| `/api/auth/verify` | GET | Verify JWT token |
-| `/api/auth/password` | POST | Change password |
+| `/api/auth/login` | POST | Login; returns an access token + refresh token |
+| `/api/auth/refresh` | POST | Exchange a refresh token for a new pair (rotates it) |
+| `/api/auth/logout` | POST | Revoke this device's session |
+| `/api/auth/logout-all` | POST | Revoke every session for the account |
+| `/api/auth/sessions` | GET | List active sessions (device, IP, last used) |
+| `/api/auth/sessions/<id>` | DELETE | Revoke one session |
+| `/api/auth/media-token` | GET | Mint a token scoped to the media routes |
+| `/api/auth/verify` | GET | Verify the access token |
+| `/api/auth/password` | POST | Change password (revokes other sessions) |
 | `/api/downloads` | GET | List downloads (supports `search`, `filter`, `sort_by`, `sort_order`, `author`, `limit`, `offset`, `include_hidden`) |
 | `/api/authors` | GET | Get distinct author values for filtering |
 | `/api/stats` | GET | Get statistics |

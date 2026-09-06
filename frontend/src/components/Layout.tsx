@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Outlet, useNavigate, useLocation, useOutletContext } from 'react-router-dom';
-import { Wifi, WifiOff, HardDrive, Clock, Zap, LogOut, Settings, BarChart3 } from 'lucide-react';
+import { Wifi, WifiOff, HardDrive, Clock, Zap, LogOut, Settings, BarChart3, RefreshCw } from 'lucide-react';
 import { formatBytes, formatSpeed } from '../utils/format';
 import { type SortBy, type SortOrder } from '../api';
 import { ToastContainer, useToast } from './Toast';
@@ -12,6 +12,7 @@ import {
 } from '../hooks/useDownloads';
 import { useVpsConfig, useVpsFolders } from '../hooks/useVps';
 import { useRealtime, type RealtimeCallbacks } from '../hooks/useRealtime';
+import { applyUpdate } from '../lib/pwa';
 
 const EMPTY_STATS: Stats = {
   total_downloaded: 0, total_size: 0, pending_bytes: 0, total_speed: 0,
@@ -74,6 +75,14 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
   // Add URL modal
   const [addUrlOpen, setAddUrlOpen] = useState(false);
   const [pastedUrl, setPastedUrl] = useState<string | null>(null);
+
+  // A newer build has been installed by the service worker and is waiting.
+  const [updateReady, setUpdateReady] = useState(false);
+  useEffect(() => {
+    const onUpdate = () => setUpdateReady(true);
+    window.addEventListener('downlee:update-ready', onUpdate);
+    return () => window.removeEventListener('downlee:update-ready', onUpdate);
+  }, []);
 
   // Connection state (driven by the realtime socket)
   const [connected, setConnected] = useState(false);
@@ -284,6 +293,29 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
       <div className="pt-14 sm:pt-16">
         <Outlet context={context} />
       </div>
+
+      {/* New version installed - applied on the user's say-so, so a download
+          being watched isn't interrupted by a surprise reload. */}
+      {updateReady && (
+        <div className="fixed inset-x-0 bottom-0 z-50 flex justify-center p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] pointer-events-none">
+          <div className="pointer-events-auto flex items-center gap-3 rounded-full border border-cyan-500/50 bg-slate-900/95 px-4 py-2 text-sm text-slate-200 shadow-xl backdrop-blur">
+            <RefreshCw className="h-4 w-4 shrink-0 text-cyan-400" />
+            <span>A new version of DownLee is ready.</span>
+            <button
+              onClick={applyUpdate}
+              className="rounded-full bg-cyan-500 px-3 py-1 text-xs font-semibold text-slate-900 transition hover:bg-cyan-400"
+            >
+              Reload
+            </button>
+            <button
+              onClick={() => setUpdateReady(false)}
+              className="text-xs text-slate-400 transition hover:text-slate-200"
+            >
+              Later
+            </button>
+          </div>
+        </div>
+      )}
 
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
     </div>

@@ -101,3 +101,43 @@ def token_required(f):
 
         return f(*args, **kwargs)
     return decorated
+
+
+def media_token_required(f):
+    """Auth for routes a browser loads directly (<video src>, <img src>).
+
+    Those elements cannot set an Authorization header, so the token rides in
+    the query string. Accepted there is only a `typ: 'media'` token - scoped
+    to these routes and separately expiring - so a full API token never ends
+    up in a URL, browser history or an access log. Callers that *can* set a
+    header (fetch, curl) may still present a normal access token.
+
+    Either way the user's `token_version` is checked, so revoking a session
+    also cuts off in-flight media.
+    """
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        header = request.headers.get('Authorization', '')
+        if header.startswith('Bearer '):
+            token, expected = header.split(' ', 1)[1], 'access'
+        else:
+            token, expected = request.args.get('token'), 'media'
+
+        if not token:
+            return jsonify({'error': 'Token is missing', 'code': 'token_missing'}), 401
+
+        claims, error = decode_token(token, expected_type=expected)
+        if error:
+            payload, status = error
+            return jsonify(payload), status
+
+        state = get_db().get_auth_state(claims.get('user_id'))
+        if not state:
+            return jsonify({'error': 'Invalid token', 'code': 'token_invalid'}), 401
+        if int(claims.get('tv', 0)) != int(state['token_version']):
+            return jsonify({'error': 'Token has been revoked', 'code': 'token_revoked'}), 401
+
+        request.user = claims
+        request.auth_state = state
+        return f(*args, **kwargs)
+    return decorated

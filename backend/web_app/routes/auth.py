@@ -2,7 +2,9 @@ import secrets
 import jwt
 from datetime import datetime, timedelta
 from flask import jsonify, request
-from backend.config import JWT_SECRET, ACCESS_TOKEN_MINUTES, REFRESH_TOKEN_DAYS
+from backend.config import (
+    JWT_SECRET, ACCESS_TOKEN_MINUTES, REFRESH_TOKEN_DAYS, MEDIA_TOKEN_HOURS,
+)
 from backend.database import get_db
 from backend.web_app.base import token_required, decode_token
 from backend.web_app.ratelimit import login_limiter, login_keys, client_ip
@@ -47,6 +49,19 @@ def _token_pair(user, token_version, request_obj):
         'refresh_token': _issue_refresh_token(user['id'], session_id, jti, expires_at),
         'expires_in': ACCESS_TOKEN_MINUTES * 60,
     }
+
+
+def _issue_media_token(user_id, token_version):
+    """Token for <video>/<img> URLs: usable only on the streaming and
+    thumbnail routes, and expiring on its own schedule."""
+    now = datetime.utcnow()
+    return jwt.encode({
+        'typ': 'media',
+        'user_id': user_id,
+        'tv': token_version,
+        'iat': now,
+        'exp': now + timedelta(hours=MEDIA_TOKEN_HOURS),
+    }, JWT_SECRET, algorithm='HS256')
 
 
 class AuthRoutesMixin:
@@ -168,6 +183,15 @@ class AuthRoutesMixin:
             if not ok:
                 return jsonify({"error": "Session not found"}), 404
             return jsonify({"success": True})
+
+        @self.app.route("/api/auth/media-token", methods=["GET"])
+        @token_required
+        def media_token():
+            state = request.auth_state
+            return jsonify({
+                "media_token": _issue_media_token(state['id'], state['token_version']),
+                "expires_in": MEDIA_TOKEN_HOURS * 3600,
+            })
 
         @self.app.route("/api/auth/verify", methods=["GET"])
         @token_required

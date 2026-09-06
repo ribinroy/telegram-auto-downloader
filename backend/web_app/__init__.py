@@ -13,6 +13,7 @@ helpers, WebApp, ...) are re-exported here so existing
 `from backend.web_app import X` imports keep working.
 """
 import asyncio
+import mimetypes
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 from flask_socketio import SocketIO
@@ -44,6 +45,11 @@ from backend.web_app.routes.vps_settings import VpsSettingsRoutesMixin
 from backend.web_app.routes.torrent import TorrentRoutesMixin
 from backend.web_app.routes.vps_browse import VpsBrowseRoutesMixin
 from backend.web_app.routes.media import MediaRoutesMixin
+
+
+# Python's mimetypes table predates .webmanifest on most distros; without this
+# the manifest is served as octet-stream and Chrome refuses to install the PWA.
+mimetypes.add_type('application/manifest+json', '.webmanifest')
 
 
 def _socketio_origin_allowed(origin, environ=None):
@@ -354,6 +360,25 @@ class WebApp(
         @self.app.route('/')
         def serve_index():
             return send_from_directory(self.app.static_folder, 'index.html')
+
+        @self.app.after_request
+        def _static_cache_headers(response):
+            """Cache policy for the PWA.
+
+            Build output under /assets is content-hashed, so it can be cached
+            forever. The app shell and the service worker must not be, or a
+            deployed update would never be picked up.
+            """
+            path = request.path
+            if path.startswith('/assets/'):
+                response.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
+            elif path in ('/sw.js', '/index.html', '/') or path == '/manifest.webmanifest':
+                response.headers['Cache-Control'] = 'no-cache'
+                # Keep the worker's scope at the site root even though it is
+                # served from /sw.js.
+                if path == '/sw.js':
+                    response.headers['Service-Worker-Allowed'] = '/'
+            return response
 
         @self.app.errorhandler(404)
         def not_found(e):

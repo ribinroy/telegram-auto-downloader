@@ -136,8 +136,13 @@ Main Thread
 - `auto_sync` (hourly auto-download of new files), `folder` (local destination), `is_secured`
 
 **`users`** - Authentication
-- `id` (PK), `username` (unique), `password_hash` (SHA-256)
-- Default credentials: admin/admin (created on first run)
+- `id` (PK), `username` (unique), `password_hash` (bcrypt; legacy SHA-256 auto-upgraded on login)
+- `token_version` - bumped to invalidate every outstanding access token
+- Default credentials: admin/admin (created on first run, forced change)
+
+**`user_sessions`** - One row per signed-in device (refresh-token backing)
+- `id` (PK), `user_id`, `refresh_jti` (unique, rotated on each use), `expires_at`, `revoked_at`
+- `user_agent`, `ip`, `created_at`, `last_used_at`
 
 Note: legacy `labels`/`source_labels` tables and `downloads.label_id` may still exist in older DBs but are unused (the labels feature was reverted; see `_migrate_labels_to_specs()`).
 
@@ -148,9 +153,15 @@ Note: legacy `labels`/`source_labels` tables and `downloads.label_id` may still 
 ## API Routes
 
 ### Auth
-- `POST /api/auth/login` - Returns JWT (30-day expiry)
+Access/refresh token pair. Access tokens are short (`ACCESS_TOKEN_MINUTES`, default 30) and carry a `tv` claim compared against `users.token_version` on every request, so revocation is instant. Refresh tokens (`REFRESH_TOKEN_DAYS`, default 30) are backed by a `user_sessions` row and rotate on each use; replaying a superseded one revokes the session (theft detection). Passwords are bcrypt (cost 12, SHA-256 pre-hash), with legacy SHA-256 digests upgraded transparently on next successful login.
+- `POST /api/auth/login` - `{token, refresh_token, expires_in, user, must_change_password}`; rate limited per IP + username (`web_app/ratelimit.py`)
+- `POST /api/auth/refresh` - Rotate; returns a new pair
+- `POST /api/auth/logout` - Revoke this session (takes `refresh_token`)
+- `POST /api/auth/logout-all` - Bump `token_version` + revoke all sessions
+- `GET /api/auth/sessions` / `DELETE /api/auth/sessions/<id>` - Active devices
+- `GET /api/auth/media-token` - `typ:'media'` token, valid only on the stream/thumb routes (`media_token_required`), so no API token ends up in a URL
 - `GET /api/auth/verify` - Validate token
-- `POST /api/auth/password` - Change password
+- `POST /api/auth/password` - Change password (min 8 chars; bumps `token_version`, revokes other sessions, returns a fresh pair)
 
 ### Downloads
 - `GET /api/downloads` - List (search, filter, sort, paginate, `include_hidden`); each item is annotated with computed `hidden` + `dest_folder`
@@ -274,13 +285,20 @@ All API access goes through **React Query** (`@tanstack/react-query`):
 - Live panels use `refetchInterval` (torrent list 20s) instead of `setInterval`.
 - Imperative/on-demand calls stay direct (FolderBrowser `browseVps`/`browseLocal`, `checkVideoFile`, URL builders, `setToken`).
 
+## PWA
+
+The frontend is an installable PWA. `frontend/vite.config.ts` holds a small build-time plugin (`serviceWorker()`) that emits `dist/sw.js` with the real content-hashed precache list and a cache name derived from it. Strategies: `/api`, `/socket.io` and `/metrics` are never cached (auth, live progress, range-request video); navigations are network-first with the cached shell as offline fallback; `/assets/*` is cache-first (immutable); everything else same-origin is stale-while-revalidate.
+
+Registration lives in `frontend/src/lib/pwa.ts` (skipped in dev). A waiting worker fires `downlee:update-ready`; `Layout` shows a Reload pill rather than auto-refreshing. Manifest + icons are in `frontend/public/` (regenerate icons from `logo.png`). Flask sets the cache headers and the `.webmanifest` MIME type in `WebApp.setup_routes`.
+
 ## Key Patterns
 
 - **Shared state**: `download_tasks = {}` dict passed to all handlers
 - **WebSocket broadcast**: `get_socketio().emit(event, data)` from any module
 - **Soft deletes**: `deleted_at` timestamp, never hard delete
 - **Progress throttling**: 1-second minimum interval between updates
-- **JWT auth**: All API routes use `@token_required` decorator (except `/metrics`)
+- **JWT auth**: All API routes use `@token_required` (except `/metrics`); media routes use `@media_token_required`, which also accepts a `?token=` media token
+- **CORS**: closed by default to `CORS_ORIGINS` (Vite dev ports); Socket.IO uses a callable origin check so same-origin handshakes always pass (`_socketio_origin_allowed`)
 - **Frontend serves from Flask**: Built `frontend/dist/` served as static files
 
 ## Development Commands

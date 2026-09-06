@@ -46,6 +46,20 @@ class RateLimiter:
                 self._failures.pop(key, None)
                 self._locked_until.pop(key, None)
 
+        # A flood of distinct keys (spoofed usernames) can outrun the decay, so
+        # enforce a hard ceiling by evicting the least recently seen. Losing an
+        # unlocked counter costs an attacker nothing they didn't already have.
+        excess = len(self._failures) - MAX_TRACKED_KEYS
+        if excess > 0:
+            stale = sorted(self._failures, key=lambda k: self._failures[k][-1])
+            for key in stale:
+                if excess <= 0:
+                    break
+                if self._locked_until.get(key, 0) > now:
+                    continue  # never evict an active lockout
+                self._failures.pop(key, None)
+                excess -= 1
+
     def retry_after(self, keys):
         """Seconds the caller must wait, or 0 if the attempt may proceed."""
         now = time.time()
