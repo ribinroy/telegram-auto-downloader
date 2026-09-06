@@ -11,7 +11,10 @@ from datetime import datetime
 from telethon import TelegramClient, events, utils as tg_utils
 from telethon.errors import SessionPasswordNeededError
 from telethon.tl.types import User as TgUser
-from backend.config import API_ID, API_HASH, CHAT_ID, DOWNLOAD_DIR, MAX_RETRIES, SESSION_FILE
+from backend.config import (
+    API_ID, API_HASH, CHAT_ID, DOWNLOAD_DIR, MAX_RETRIES, SESSION_FILE,
+    SKIP_STARTUP_GREETING, SKIP_GREETING_FILE,
+)
 from backend.database import get_db
 from backend.utils import human_readable_size, get_media_folder
 from backend.web_app import get_socketio
@@ -50,8 +53,32 @@ DEFAULT_QUERIES = [
 
 
 class TelegramDownloader:
-    def __init__(self, download_tasks):
+    @staticmethod
+    def _consume_greeting_sentinel() -> bool:
+        """True if a .skip-greeting file is present, removing it as we go.
+
+        This is the only mute that survives `systemctl restart`, which runs the
+        unit's ExecStart and never sees command-line flags. Deleting it here
+        makes it one-shot: the next restart greets normally.
+        """
+        try:
+            if SKIP_GREETING_FILE.exists():
+                SKIP_GREETING_FILE.unlink()
+                return True
+        except OSError as e:
+            logging.warning(f"Could not consume {SKIP_GREETING_FILE}: {e}")
+        return False
+
+    def __init__(self, download_tasks, skip_greeting=False):
         self.download_tasks = download_tasks
+
+        # Mute the "reporting for duty" message for this start only. Consumed
+        # once, so a later web login in the same process still greets.
+        self.skip_greeting = (
+            skip_greeting
+            or SKIP_STARTUP_GREETING
+            or self._consume_greeting_sentinel()
+        )
 
         self.last_broadcast = 0
         self.authorized = False
@@ -1199,6 +1226,14 @@ class TelegramDownloader:
 
     async def send_startup_greeting(self):
         """Send a greeting message to each monitored chat when service starts"""
+        if self.skip_greeting:
+            # One-shot: a later re-authorization in this same process greets
+            # normally, so only the restart that asked for silence is silent.
+            self.skip_greeting = False
+            print("🔇 Startup greeting skipped for this start")
+            logging.info("Startup greeting suppressed for this start")
+            return
+
         hour = datetime.now().hour
         if 5 <= hour < 12:
             greeting = "Good Morning"

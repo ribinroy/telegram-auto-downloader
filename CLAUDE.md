@@ -340,6 +340,16 @@ sudo systemctl start telegram_downloader
 sudo systemctl status telegram_downloader
 ```
 
+## Startup Greeting
+
+`send_startup_greeting()` announces the service in every monitored chat on each authorization. Three ways to mute one start, all folded into `TelegramDownloader.skip_greeting` in `__init__`:
+
+1. `python main.py --no-greeting` / `-n` (argparse in `backend/main.py`)
+2. `SKIP_STARTUP_GREETING=1` (env, via `backend/config`)
+3. `touch .skip-greeting` then restart — `_consume_greeting_sentinel()` deletes the file as it reads it
+
+Only (3) works with `systemctl restart`, which runs the unit's `ExecStart` and never sees CLI flags. The flag is one-shot: `send_startup_greeting` clears it after suppressing once, so a later web login in the same process still greets.
+
 ## Deployment
 
 - Runs as systemd service (`telegram_downloader.service`)

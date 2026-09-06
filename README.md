@@ -176,6 +176,20 @@ Files sent to the configured Telegram chat/channel are automatically downloaded.
 ### Per-Source Settings
 Configure each source's destination folder, default quality, and hidden flag in **Settings → Sources**. Hidden sources/folders are filtered from the default view; reveal them with a triple-click on the connection status pill or **Ctrl+X**.
 
+### Silencing the Startup Greeting
+
+DownLee greets every monitored chat when it starts (`Good Evening, reporting for duty 🫡`). While you're restarting repeatedly that gets noisy. To mute **just the next restart**:
+
+```bash
+touch .skip-greeting && sudo systemctl restart telegram-downloader
+```
+
+The file is consumed at startup, so the restart after that greets normally — nothing to remember to undo. Running the app by hand, `python main.py --no-greeting` (or `-n`) does the same thing.
+
+> A command-line flag can't work with `systemctl restart`, which runs the unit's own `ExecStart` and never sees your arguments — that's why the file exists.
+
+To mute it permanently, set `SKIP_STARTUP_GREETING=true` in `.env`.
+
 ## Install as an App (PWA)
 
 DownLee ships as an installable Progressive Web App — useful on a phone, where the dashboard is mostly used to check on downloads.
