@@ -4,6 +4,7 @@ import {
   FolderOpen, Loader2, AlertTriangle, X, Download, Copy, Scissors, ClipboardPaste,
   Pencil, Trash2, Info, Eye, Link as LinkIcon, CheckSquare, HardDrive, Search,
 } from 'lucide-react';
+import { useLayoutContext } from '../components/Layout';
 import { ExplorerSidebar } from '../components/explorer/ExplorerSidebar';
 import { ExplorerToolbar } from '../components/explorer/ExplorerToolbar';
 import { FileList, type SortKey, type ViewMode } from '../components/explorer/FileList';
@@ -38,11 +39,6 @@ function loadPrefs(): Prefs {
   }
 }
 
-// Touch devices have no double-click worth the name, so a tap opens and
-// selection happens through the row's ⋮ menu instead.
-const coarsePointer = typeof window !== 'undefined'
-  && window.matchMedia?.('(pointer: coarse)').matches;
-
 export function ExplorerPage() {
   const [params, setParams] = useSearchParams();
   const requestedPath = params.get('path') ?? '';
@@ -65,7 +61,10 @@ export function ExplorerPage() {
   const [dragging, setDragging] = useState(false);
   const uploadRef = useRef<HTMLInputElement>(null);
 
-  const rootsQuery = useFileRoots();
+  // Secured sources are hidden app-wide until the secured toggle is on; their
+  // destination folders follow the same rule in the sidebar.
+  const { showSecured } = useLayoutContext();
+  const rootsQuery = useFileRoots(showSecured);
   const listing = useFileList(requestedPath, prefs.showHidden, prefs.autoRefresh ? AUTO_REFRESH_MS : 0);
   const currentPath = listing.data?.path ?? requestedPath;
   const search = useFileSearch(currentPath, searchQuery ?? '', prefs.showHidden, !!searchQuery);
@@ -117,11 +116,23 @@ export function ExplorerPage() {
 
   // --- Selection ----------------------------------------------------------
 
-  const handleSelect = (entry: FileEntry, e: MouseEvent) => {
-    if (coarsePointer && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
-      open(entry);
-      return;
-    }
+  const toggle = (entry: FileEntry) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(entry.path)) next.delete(entry.path);
+      else next.add(entry.path);
+      return next;
+    });
+    anchorRef.current = entry.path;
+  };
+
+  /**
+   * A plain click opens. Selection is the deliberate gesture: press and hold,
+   * or ctrl/shift-click with a mouse. Once anything is selected the list is in
+   * selection mode, so further clicks tick items off instead of navigating
+   * away mid-selection.
+   */
+  const handleActivate = (entry: FileEntry, e: MouseEvent) => {
     if (e.shiftKey && anchorRef.current) {
       const from = visible.findIndex(x => x.path === anchorRef.current);
       const to = visible.findIndex(x => x.path === entry.path);
@@ -131,18 +142,14 @@ export function ExplorerPage() {
         return;
       }
     }
-    if (e.ctrlKey || e.metaKey) {
-      setSelected(prev => {
-        const next = new Set(prev);
-        if (next.has(entry.path)) next.delete(entry.path);
-        else next.add(entry.path);
-        return next;
-      });
-    } else {
-      setSelected(new Set([entry.path]));
+    if (e.ctrlKey || e.metaKey || selected.size > 0) {
+      toggle(entry);
+      return;
     }
-    anchorRef.current = entry.path;
+    open(entry);
   };
+
+  const handleLongPress = (entry: FileEntry) => toggle(entry);
 
   const open = useCallback((entry: FileEntry) => {
     if (entry.is_dir) navigate(entry.path);
@@ -526,9 +533,11 @@ export function ExplorerPage() {
               renaming={renaming}
               showPath={!!searchQuery}
               onSort={key => patchPrefs({ sortKey: key, sortAsc: prefs.sortKey === key ? !prefs.sortAsc : true })}
-              onSelect={handleSelect}
-              onOpen={open}
+              onActivate={handleActivate}
+              onLongPress={handleLongPress}
               onContext={(entry, x, y) => {
+                // Touch reaches this through the ⋮ button only - a long press
+                // there is the select gesture, not "open the menu".
                 if (!selected.has(entry.path)) setSelected(new Set([entry.path]));
                 setMenu({ entry, x, y });
               }}

@@ -10,8 +10,12 @@ import { qk } from '../api/queryKeys';
 // ['files'] tree rather than trying to patch a row.
 const LIVE = { staleTime: 0, gcTime: 60_000, refetchOnWindowFocus: true } as const;
 
-export function useFileRoots() {
-  return useQuery({ queryKey: qk.fileRoots(), queryFn: fetchFileRoots, staleTime: 30_000 });
+export function useFileRoots(includeHidden = false) {
+  return useQuery({
+    queryKey: qk.fileRoots(includeHidden),
+    queryFn: () => fetchFileRoots(includeHidden),
+    staleTime: 30_000,
+  });
 }
 
 export function useFileList(path: string, showHidden: boolean, autoRefreshMs = 0) {

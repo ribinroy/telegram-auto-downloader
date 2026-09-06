@@ -1,8 +1,8 @@
-import { HardDrive, Home, Download, Loader2, RefreshCw, Trash2 } from 'lucide-react';
+import { HardDrive, Home, Download, Loader2, RefreshCw, Trash2, FolderCog } from 'lucide-react';
 import { formatBytes } from '../../utils/format';
 import type { FileRoot } from '../../api/files';
 
-function usageBar(used: number, total: number) {
+function UsageBar({ used, total }: { used: number; total: number }) {
   const pct = total > 0 ? Math.min(100, (used / total) * 100) : 0;
   // Amber past 80%, red past 95% - a full media drive is the thing you want
   // to notice from across the room.
@@ -17,7 +17,52 @@ function usageBar(used: number, total: number) {
 function rootIcon(kind: FileRoot['kind']) {
   if (kind === 'home') return <Home className="w-4 h-4 text-cyan-400" />;
   if (kind === 'downloads') return <Download className="w-4 h-4 text-green-400" />;
+  if (kind === 'configured') return <FolderCog className="w-4 h-4 text-amber-400" />;
   return <HardDrive className="w-4 h-4 text-purple-400" />;
+}
+
+function RootButton({
+  root, active, onNavigate,
+}: { root: FileRoot; active: boolean; onNavigate: (path: string) => void }) {
+  const isDrive = root.group === 'drive';
+  return (
+    <button
+      onClick={() => onNavigate(root.path)}
+      className={`w-full text-left px-3 py-2 rounded-lg transition-colors ${
+        active ? 'bg-slate-700/60' : 'hover:bg-slate-800/60'
+      }`}
+      title={root.note ? `${root.path} — ${root.note}` : root.path}
+    >
+      <div className="flex items-center gap-2 min-w-0">
+        {rootIcon(root.kind)}
+        <span className={`text-sm truncate ${active ? 'text-white' : 'text-slate-300'}`}>
+          {root.label}
+        </span>
+        {isDrive && root.usage && (
+          <span className="ml-auto text-[11px] text-slate-500 tabular-nums shrink-0">
+            {formatBytes(root.usage.free)} free
+          </span>
+        )}
+      </div>
+      {/* Only drives get a capacity bar: repeating it per folder would just be
+          the same disk's numbers three times over. */}
+      {isDrive && root.usage && <UsageBar used={root.usage.used} total={root.usage.total} />}
+      {root.note && (
+        <div className="text-[11px] text-slate-500 truncate mt-0.5 pl-6">{root.note}</div>
+      )}
+    </button>
+  );
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-1">
+      <span className="block px-2 pt-2 text-xs font-semibold uppercase tracking-wider text-slate-500">
+        {title}
+      </span>
+      {children}
+    </div>
+  );
 }
 
 export function ExplorerSidebar({
@@ -31,10 +76,18 @@ export function ExplorerSidebar({
   refreshing: boolean;
   trashPath: string | null;
 }) {
+  const drives = roots.filter(r => r.group === 'drive');
+  const folders = roots.filter(r => r.group === 'folder');
+  const configured = roots.filter(r => r.group === 'configured');
+
+  const render = (list: FileRoot[]) => list.map(root => (
+    <RootButton key={root.path} root={root} active={currentPath === root.path} onNavigate={onNavigate} />
+  ));
+
   return (
     <aside className="w-full lg:w-64 shrink-0 space-y-1">
-      <div className="flex items-center justify-between px-2 mb-1">
-        <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">Places</span>
+      <div className="flex items-center justify-between px-2">
+        <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">Drives</span>
         <button
           onClick={onRefresh}
           className="p-1 text-slate-500 hover:text-white transition-colors"
@@ -50,46 +103,29 @@ export function ExplorerSidebar({
         </div>
       )}
 
-      {roots.map(root => {
-        const active = currentPath === root.path;
-        return (
-          <button
-            key={root.path}
-            onClick={() => onNavigate(root.path)}
-            className={`w-full text-left px-3 py-2 rounded-lg transition-colors ${
-              active ? 'bg-slate-700/60' : 'hover:bg-slate-800/60'
-            }`}
-            title={root.path}
-          >
-            <div className="flex items-center gap-2 min-w-0">
-              {rootIcon(root.kind)}
-              <span className={`text-sm truncate ${active ? 'text-white' : 'text-slate-300'}`}>
-                {root.label}
-              </span>
-              {root.usage && (
-                <span className="ml-auto text-[11px] text-slate-500 tabular-nums shrink-0">
-                  {formatBytes(root.usage.free)} free
-                </span>
-              )}
-            </div>
-            {root.usage && usageBar(root.usage.used, root.usage.total)}
-          </button>
-        );
-      })}
+      {render(drives)}
+
+      {folders.length > 0 && <Section title="Folders">{render(folders)}</Section>}
+
+      {/* The destinations the rest of DownLee already writes to, so the
+          explorer opens where files actually land. */}
+      {configured.length > 0 && <Section title="DownLee folders">{render(configured)}</Section>}
 
       {trashPath && (
-        <button
-          onClick={() => onNavigate(trashPath)}
-          className={`w-full text-left px-3 py-2 rounded-lg transition-colors ${
-            currentPath === trashPath ? 'bg-slate-700/60' : 'hover:bg-slate-800/60'
-          }`}
-          title={trashPath}
-        >
-          <div className="flex items-center gap-2">
-            <Trash2 className="w-4 h-4 text-slate-400" />
-            <span className="text-sm text-slate-300">Trash</span>
-          </div>
-        </button>
+        <Section title="Trash">
+          <button
+            onClick={() => onNavigate(trashPath)}
+            className={`w-full text-left px-3 py-2 rounded-lg transition-colors ${
+              currentPath === trashPath ? 'bg-slate-700/60' : 'hover:bg-slate-800/60'
+            }`}
+            title={trashPath}
+          >
+            <div className="flex items-center gap-2">
+              <Trash2 className="w-4 h-4 text-slate-400" />
+              <span className="text-sm text-slate-300">Deleted files</span>
+            </div>
+          </button>
+        </Section>
       )}
     </aside>
   );

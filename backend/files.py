@@ -95,35 +95,44 @@ def _mountpoint_for(path):
     return best
 
 
+def describe_root(path, label, kind, group, note=None):
+    """One sidebar place with live capacity, or None if it is not a directory."""
+    try:
+        resolved = str(Path(path).expanduser().resolve())
+    except OSError:
+        return None
+    if not os.path.isdir(resolved):
+        return None
+    return {
+        'path': resolved,
+        'label': label,
+        'kind': kind,
+        'group': group,
+        'note': note,
+        'device': None,
+        'fstype': None,
+        'usage': _usage(resolved),
+        'writable': os.access(resolved, os.W_OK),
+    }
+
+
 def list_roots():
-    """Places for the explorer sidebar: shortcuts first, then real disks.
+    """Sidebar places straight off the filesystem: every mounted disk first,
+    then the general-purpose folders.
 
     Read fresh from /proc/mounts on every call, so plugging in a drive only
-    costs the user a refresh.
+    costs the user a refresh. DownLee's own configured destinations are added
+    on top of this by the route, which has the database at hand.
     """
-    roots = []
-    seen = set()
+    roots, seen = [], set()
 
-    def add(path, label, kind, device=None, fstype=None):
-        try:
-            resolved = str(Path(path).expanduser().resolve())
-        except OSError:
+    def add(path, label, kind, group, note=None, device=None, fstype=None):
+        root = describe_root(path, label, kind, group, note)
+        if not root or root['path'] in seen:
             return
-        if resolved in seen or not os.path.isdir(resolved):
-            return
-        seen.add(resolved)
-        roots.append({
-            'path': resolved,
-            'label': label,
-            'kind': kind,
-            'device': device,
-            'fstype': fstype,
-            'usage': _usage(resolved),
-            'writable': os.access(resolved, os.W_OK),
-        })
-
-    add(Path.home(), 'Home', 'home')
-    add(DOWNLOAD_DIR, 'Downloads', 'downloads')
+        seen.add(root['path'])
+        root['device'], root['fstype'] = device, fstype
+        roots.append(root)
 
     for device, mountpoint, fstype in _read_mounts():
         if fstype in PSEUDO_FS:
@@ -135,7 +144,10 @@ def list_roots():
         if any(mountpoint == r or mountpoint.startswith(r + '/') for r in PROTECTED_ROOTS):
             continue
         label = 'Filesystem' if mountpoint == '/' else (Path(mountpoint).name or mountpoint)
-        add(mountpoint, label, 'disk', device=device, fstype=fstype)
+        add(mountpoint, label, 'disk', 'drive', device=device, fstype=fstype)
+
+    add(Path.home(), 'Home', 'home', 'folder')
+    add(DOWNLOAD_DIR, 'Downloads', 'downloads', 'folder')
 
     return roots
 

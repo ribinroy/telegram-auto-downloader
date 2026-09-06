@@ -220,7 +220,7 @@ Access/refresh token pair. Access tokens are short (`ACCESS_TOKEN_MINUTES`, defa
 
 ### File Explorer (local disks)
 Live filesystem access - every call reads the disk, nothing is indexed or cached.
-- `GET /api/files/roots` - Sidebar places: Home, `DOWNLOAD_DIR`, and every real mount from `/proc/mounts` with live capacity
+- `GET /api/files/roots` - Sidebar places, grouped `drive` / `folder` / `configured`: every real mount from `/proc/mounts` with live capacity, then Home + `DOWNLOAD_DIR`, then DownLee's own destination folders (source mappings, VPS watch-folder destinations, torrent `local_dir`); `?include_hidden=true` includes secured ones
 - `POST /api/files/list` - `{path?, show_hidden?}` -> entries + `writable`, `usage`, `mount`, `trash`
 - `POST /api/files/mkdir` / `rename` / `delete` (`{paths, permanent?}`) / `transfer` (`{paths, dest, move}`) / `upload` (multipart)
 - `POST /api/files/search` (recursive, capped by results **and** a wall-clock deadline), `POST /api/files/size` (on-demand `du`), `POST /api/files/text` (preview head)
@@ -337,9 +337,18 @@ a pulled USB drive disappears from the sidebar.
 - `backend/files.py` is the whole filesystem layer: mounts, listings, mutations,
   search, sizes, thumbnails. `web_app/routes/files.py` is transport only - parse,
   dispatch, map `FsError` to a status code.
-- **Roots** come from `/proc/mounts` on every call, minus pseudo filesystems,
-  snap loop mounts and OS partitions, plus Home and `DOWNLOAD_DIR`. Each carries
-  live `shutil.disk_usage`, which the sidebar draws as a capacity bar.
+- **Roots** are grouped for the sidebar. `drive`: every real mount from
+  `/proc/mounts` (minus pseudo filesystems, snap loop mounts and OS partitions),
+  each with live `shutil.disk_usage` drawn as a capacity bar. `folder`: Home and
+  `DOWNLOAD_DIR`. `configured`: the destinations the rest of DownLee writes to -
+  per-source mapping folders, VPS watched-folder destinations, a torrent client's
+  `local_dir` - assembled in the route (`_configured_roots()`), which has the DB
+  at hand, so `files.py` stays pure filesystem. Folders that no longer exist are
+  dropped, duplicates merge and list what points at them ("youtube.com, vimeo.com").
+  Destinations of `is_secured` sources/watched folders are omitted unless
+  `?include_hidden=true` (the page passes the Layout's `showSecured`), and a
+  folder that a plain source also points at still shows but drops the secured
+  name from its note.
 - **Reads go anywhere** the service account can reach. **Writes** go through
   `guard_write()`: anything on a mount other than `/` is fair game (that is where
   a media library lives), while `PROTECTED_ROOTS` on the root filesystem
@@ -366,10 +375,15 @@ a pulled USB drive disappears from the sidebar.
   stale; every mutation invalidates the whole `['files']` tree), `api/files.ts`
   transport, and `components/explorer/*`. The current directory lives in the URL
   (`/files?path=...`), so browser back/forward is the explorer's history.
-  Desktop behaviour throughout: click/ctrl-click/shift-click selection, double-click
-  to open, right-click menu, F2 rename, Delete to trash (Shift+Delete permanent),
-  Ctrl+A/C/X/V, Backspace for up, drag-and-drop upload. On coarse pointers a single
-  tap opens and the row's ⋮ menu replaces right-click.
+  **Click opens; press-and-hold selects** (`useRowPress` in `FileList.tsx`, 450 ms,
+  cancelled by any real pointer movement, and it swallows the `click` that follows
+  the hold). Once anything is selected the list is in selection mode, so further
+  clicks toggle items rather than navigating away mid-selection; ctrl-click and
+  shift-click still select directly with a mouse. Everything else is desktop
+  standard: right-click menu, F2 rename, Delete to trash (Shift+Delete permanent),
+  Ctrl+A/C/X/V, Enter to open, Backspace for up, drag-and-drop upload. On coarse
+  pointers the native contextmenu is suppressed (the hold is the select gesture)
+  and the row's ⋮ button opens the menu instead.
 
 ## Key Patterns
 

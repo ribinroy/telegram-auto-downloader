@@ -16,8 +16,60 @@ from pathlib import Path
 from flask import jsonify, request, send_file
 
 from backend import files as fs
+from backend.database import get_db
 from backend.web_app.base import token_required, media_token_required
 from backend.web_app.helpers import range_response
+
+
+def _configured_roots(seen, include_hidden=False):
+    """DownLee's own destination folders, as sidebar places.
+
+    These are the folders the rest of the app already writes to - per-source
+    mappings, VPS watched-folder destinations, a torrent client's local dir -
+    so the explorer opens where the files actually land instead of making the
+    user remember the path.
+
+    A source or watched folder marked `is_secured` is hidden everywhere else in
+    the app, so its destination stays out of this list too unless the caller
+    asks for hidden entries. A folder shared by a secured and a plain source
+    still shows - it is not a secret address - but the secured source is left
+    out of the "what points here" note, which otherwise leaks the name.
+
+    Never fatal: a database hiccup just means the section is empty.
+    """
+    contributors = {}
+
+    def note(path, label, secured=False):
+        path = (path or '').strip()
+        if path:
+            contributors.setdefault(path, []).append((label, bool(secured)))
+
+    try:
+        db = get_db()
+        for mapping in db.get_all_download_type_maps():
+            note(mapping.get('folder'), mapping.get('downloaded_from') or 'source',
+                 mapping.get('is_secured'))
+        for folder in db.get_vps_watch_folders():
+            note(folder.get('folder'), f"VPS {folder.get('path') or ''}".strip(),
+                 folder.get('is_secured'))
+        from backend.web_app.torrent import read_torrent_settings
+        settings = read_torrent_settings()
+        for client in ('transmission', 'qbittorrent'):
+            note((settings.get(client) or {}).get('local_dir'), client)
+    except Exception as e:  # noqa: BLE001 - the sidebar must still render
+        print(f"file explorer: could not read configured folders: {e}")
+
+    roots = []
+    for path, labels in contributors.items():
+        visible = [label for label, secured in labels if include_hidden or not secured]
+        if not visible:
+            continue
+        root = fs.describe_root(path, Path(path).name or path, 'configured',
+                                'configured', ', '.join(dict.fromkeys(visible)))
+        if root and root['path'] not in seen:
+            seen.add(root['path'])
+            roots.append(root)
+    return roots
 
 
 def _fs_error(e):
@@ -30,10 +82,19 @@ class FilesRoutesMixin:
         @self.app.route("/api/files/roots", methods=["GET"])
         @token_required
         def files_roots():
-            """Sidebar places: Home, the download dir, and every mounted disk
-            with its live capacity."""
+            """Sidebar places, grouped: every mounted disk, the general
+            folders (Home, the download dir), then DownLee's own configured
+            destinations. All read live.
+
+            `include_hidden=true` also lists destinations belonging to secured
+            sources and watched folders, matching the downloads list and the
+            VPS page.
+            """
+            include_hidden = request.args.get("include_hidden", "false").lower() == "true"
+            roots = fs.list_roots()
+            roots += _configured_roots({r["path"] for r in roots}, include_hidden)
             return jsonify({
-                "roots": fs.list_roots(),
+                "roots": roots,
                 "readonly": fs.EXPLORER_READONLY,
                 "home": str(Path.home()),
                 "default": str(fs.DOWNLOAD_DIR),

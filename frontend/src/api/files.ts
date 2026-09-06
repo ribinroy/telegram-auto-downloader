@@ -40,7 +40,11 @@ export interface FileListing {
 export interface FileRoot {
   path: string;
   label: string;
-  kind: 'home' | 'downloads' | 'disk';
+  kind: 'home' | 'downloads' | 'disk' | 'configured';
+  /** Sidebar section: mounted disks, general folders, DownLee's destinations. */
+  group: 'drive' | 'folder' | 'configured';
+  /** For configured folders: what points here ("youtube.com", "VPS /watch"). */
+  note: string | null;
   device: string | null;
   fstype: string | null;
   usage: DiskUsage | null;
@@ -93,7 +97,9 @@ async function filesRequest<T>(path: string, body?: unknown): Promise<T> {
   return data as T;
 }
 
-export const fetchFileRoots = () => filesRequest<FileRootsResponse>('/roots');
+/** `includeHidden` also lists destinations of secured sources/watch folders. */
+export const fetchFileRoots = (includeHidden = false) =>
+  filesRequest<FileRootsResponse>(`/roots?include_hidden=${includeHidden}`);
 
 export const listFiles = (path?: string, showHidden = false) =>
   filesRequest<FileListing>('/list', { path: path ?? '', show_hidden: showHidden });

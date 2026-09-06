@@ -1,4 +1,4 @@
-import { useEffect, useRef, type MouseEvent } from 'react';
+import { useEffect, useRef, type MouseEvent, type PointerEvent } from 'react';
 import {
   Folder, Film, Image as ImageIcon, Music, FileArchive, FileText, FileType, File as FileIcon,
   Link2, ArrowUp, ArrowDown, MoreVertical,
@@ -45,7 +45,7 @@ function NameEditor({
       ref={ref}
       defaultValue={initial}
       onClick={e => e.stopPropagation()}
-      onDoubleClick={e => e.stopPropagation()}
+      onPointerDown={e => e.stopPropagation()}
       onBlur={e => onSubmit(e.currentTarget.value)}
       onKeyDown={e => {
         e.stopPropagation();
@@ -57,6 +57,72 @@ function NameEditor({
   );
 }
 
+
+const LONG_PRESS_MS = 450;
+const MOVE_TOLERANCE = 10;
+
+/**
+ * Touch has no right-click: there, a long press is the select gesture, so the
+ * browser's own contextmenu event (which Android fires on the same hold) must
+ * not also pop our menu. The ⋮ button is the touch route to it.
+ */
+const coarsePointer = typeof window !== 'undefined'
+  && !!window.matchMedia?.('(pointer: coarse)').matches;
+
+/**
+ * Click opens, press-and-hold selects.
+ *
+ * The hold has to swallow the `click` the browser fires on release, or every
+ * selection would immediately open what it just selected. Any real movement
+ * cancels the timer, so a drag or a scroll is not mistaken for a hold.
+ */
+function useRowPress(
+  onActivate: (entry: FileEntry, e: MouseEvent) => void,
+  onLongPress: (entry: FileEntry) => void,
+) {
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const held = useRef(false);
+  const origin = useRef<{ x: number; y: number } | null>(null);
+
+  const cancel = () => {
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = null;
+  };
+
+  useEffect(() => cancel, []);
+
+  return (entry: FileEntry) => ({
+    onPointerDown: (e: PointerEvent) => {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      held.current = false;
+      origin.current = { x: e.clientX, y: e.clientY };
+      cancel();
+      timer.current = setTimeout(() => {
+        held.current = true;
+        timer.current = null;
+        navigator.vibrate?.(15);
+        onLongPress(entry);
+      }, LONG_PRESS_MS);
+    },
+    onPointerMove: (e: PointerEvent) => {
+      if (!timer.current || !origin.current) return;
+      if (Math.hypot(e.clientX - origin.current.x, e.clientY - origin.current.y) > MOVE_TOLERANCE) cancel();
+    },
+    onPointerUp: cancel,
+    onPointerLeave: cancel,
+    onPointerCancel: cancel,
+    onClick: (e: MouseEvent) => {
+      if (held.current) {
+        held.current = false;
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+      onActivate(entry, e);
+    },
+  });
+}
+
 interface FileListProps {
   entries: FileEntry[];
   selected: Set<string>;
@@ -66,8 +132,10 @@ interface FileListProps {
   renaming: string | null;
   showPath?: boolean;
   onSort: (key: SortKey) => void;
-  onSelect: (entry: FileEntry, e: MouseEvent) => void;
-  onOpen: (entry: FileEntry) => void;
+  /** Plain click: open, or toggle selection while a selection is active. */
+  onActivate: (entry: FileEntry, e: MouseEvent) => void;
+  /** Press and hold: start (or extend) a selection. */
+  onLongPress: (entry: FileEntry) => void;
   onContext: (entry: FileEntry, x: number, y: number) => void;
   onRename: (entry: FileEntry, name: string) => void;
   onRenameCancel: () => void;
@@ -99,8 +167,9 @@ function SortHeader({
 
 function ListView({
   entries, selected, sortKey, sortAsc, renaming, showPath,
-  onSort, onSelect, onOpen, onContext, onRename, onRenameCancel,
+  onSort, onActivate, onLongPress, onContext, onRename, onRenameCancel,
 }: FileListProps) {
+  const press = useRowPress(onActivate, onLongPress);
   return (
     <div className="rounded-xl border border-slate-700/50 overflow-hidden">
       <div className="flex items-center gap-3 px-3 py-2 bg-slate-800/60 border-b border-slate-700/50">
@@ -116,9 +185,12 @@ function ListView({
           return (
             <div
               key={entry.path}
-              onClick={e => onSelect(entry, e)}
-              onDoubleClick={() => onOpen(entry)}
-              onContextMenu={e => { e.preventDefault(); e.stopPropagation(); onContext(entry, e.clientX, e.clientY); }}
+              {...press(entry)}
+              onContextMenu={e => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (!coarsePointer) onContext(entry, e.clientX, e.clientY);
+              }}
               className={`flex items-center gap-3 px-3 py-2 cursor-default select-none transition-colors ${
                 isSelected ? 'bg-cyan-500/15' : 'hover:bg-slate-800/50'
               }`}
@@ -136,7 +208,6 @@ function ListView({
                     <span
                       className={`truncate text-sm ${entry.hidden ? 'text-slate-500' : 'text-white'}`}
                       title={entry.path}
-                      onDoubleClick={() => onOpen(entry)}
                     >
                       {entry.name}
                     </span>
@@ -154,6 +225,7 @@ function ListView({
                 {entry.modified ? <ReactTimeAgo date={new Date(entry.modified)} locale="en-US" timeStyle="twitter" /> : '--'}
               </span>
               <button
+                onPointerDown={e => e.stopPropagation()}
                 onClick={e => { e.stopPropagation(); onContext(entry, e.clientX, e.clientY); }}
                 className="w-8 flex justify-center text-slate-500 hover:text-white transition-colors"
                 title="Actions"
@@ -169,8 +241,9 @@ function ListView({
 }
 
 function GridView({
-  entries, selected, renaming, onSelect, onOpen, onContext, onRename, onRenameCancel,
+  entries, selected, renaming, onActivate, onLongPress, onContext, onRename, onRenameCancel,
 }: FileListProps) {
+  const press = useRowPress(onActivate, onLongPress);
   return (
     <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
       {entries.map(entry => {
@@ -182,9 +255,12 @@ function GridView({
         return (
           <div
             key={entry.path}
-            onClick={e => onSelect(entry, e)}
-            onDoubleClick={() => onOpen(entry)}
-            onContextMenu={e => { e.preventDefault(); e.stopPropagation(); onContext(entry, e.clientX, e.clientY); }}
+            {...press(entry)}
+            onContextMenu={e => {
+              e.preventDefault();
+              e.stopPropagation();
+              if (!coarsePointer) onContext(entry, e.clientX, e.clientY);
+            }}
             className={`rounded-xl border p-2 cursor-default select-none transition-colors ${
               isSelected
                 ? 'border-cyan-500/60 bg-cyan-500/10'
