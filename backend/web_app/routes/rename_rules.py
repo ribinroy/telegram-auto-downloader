@@ -12,9 +12,15 @@ from backend.rename import (
 PREVIEW_SAMPLE_SIZE = 40
 
 
-def _rule_payload(data):
-    """Pull a rule out of a request body, normalised."""
-    return {
+def _rule_payload(data, with_position=False):
+    """Pull a rule out of a request body, normalised.
+
+    `position` is only honoured on create, where the presets use it to drop
+    themselves into the right place in the chain - order is semantic here, and
+    clicking presets in a random sequence would otherwise build a chain that
+    silently defeats itself.
+    """
+    payload = {
         'name': (data.get('name') or '').strip() or None,
         'pattern': (data.get('pattern') or '').strip(),
         'replacement': data.get('replacement') or '',
@@ -22,6 +28,12 @@ def _rule_payload(data):
         'source': (data.get('source') or '').strip() or None,
         'stop_on_match': bool(data.get('stop_on_match', False)),
     }
+    if with_position and data.get('position') is not None:
+        try:
+            payload['position'] = int(data['position'])
+        except (TypeError, ValueError):
+            pass
+    return payload
 
 
 class RenameRulesRoutesMixin:
@@ -34,7 +46,7 @@ class RenameRulesRoutesMixin:
         @self.app.route("/api/settings/rename-rules", methods=["POST"])
         @token_required
         def create_rename_rule():
-            payload = _rule_payload(request.json or {})
+            payload = _rule_payload(request.json or {}, with_position=True)
             try:
                 validate_rule(payload['pattern'], payload['replacement'])
             except InvalidPattern as e:
@@ -107,7 +119,7 @@ class RenameRulesRoutesMixin:
                 db = get_db()
                 downloads = [d for d in db.get_all_downloads() if d.get('file')]
                 downloads.sort(key=lambda d: d.get('created_at') or '', reverse=True)
-                # Distinct names only - a preview of 40 near-identical rows
+                # Distinct names only - a preview full of near-identical rows
                 # from one series isn't informative.
                 seen, rows = set(), []
                 for d in downloads:
@@ -115,17 +127,28 @@ class RenameRulesRoutesMixin:
                         continue
                     seen.add(d['file'])
                     rows.append(d)
-                    if len(rows) >= PREVIEW_SAMPLE_SIZE:
-                        break
 
+            # Score the whole library, not just the newest page of it. A rule
+            # scoped to one source, or one that only targets older filenames,
+            # otherwise previews as "matches nothing" purely because the recent
+            # rows happen to come from somewhere else.
             results = [
                 preview_rules(row['file'], row.get('downloaded_from'), rules=rules)
                 for row in rows
             ]
+            changed = [r for r in results if r['changed']]
+
+            # Lead with the matches - they are what the user is checking - then
+            # pad with untouched names so it is visible what is left alone.
+            shown = changed[:PREVIEW_SAMPLE_SIZE]
+            if len(shown) < PREVIEW_SAMPLE_SIZE:
+                shown += [r for r in results if not r['changed']][:PREVIEW_SAMPLE_SIZE - len(shown)]
+
             return jsonify({
-                'results': results,
-                'changed': sum(1 for r in results if r['changed']),
+                'results': shown,
+                'changed': len(changed),
                 'total': len(results),
+                'scanned': len(results),
             })
 
         @self.app.route("/api/settings/rename-rules/apply", methods=["POST"])

@@ -14,12 +14,21 @@ const BLANK: RenameRuleInput = {
   name: '', pattern: '', replacement: '', enabled: true, source: null, stop_on_match: false,
 };
 
-/** Starting points, so the first rule doesn't have to be written from scratch. */
-const PRESETS: { label: string; rule: Partial<RenameRuleInput> }[] = [
+/**
+ * Starting points, so the first rule doesn't have to be written from scratch.
+ *
+ * `position` matters: the chain is order-sensitive and some rules destroy what
+ * a later one needs. "Dots to spaces" turns @Movie_Tamizhaa into
+ * "@Movie Tamizhaa", after which the leading-tag rule can no longer reach the
+ * separator — so the tag rule has to run first. Spaced weights let presets be
+ * clicked in any order and still land in a working sequence.
+ */
+const PRESETS: { label: string; rule: Partial<RenameRuleInput> & { position: number } }[] = [
   {
     label: 'Strip quality tags',
     rule: {
       name: 'Strip quality tags',
+      position: 20,
       pattern: '[.\\s_-]*\\b(2160p|1080p|720p|480p|4K|WEB-?DL|WEBRip|BluRay|BRRip|HDRip|HDTV|DVDRip|x26[45]|H\\.?26[45]|HEVC|AVC|10bit|AAC|AC3|E?AC-?3|DTS|DDP?\\+?\\s?5\\.1|ATMOS|TrueHD)\\b',
       replacement: '',
     },
@@ -34,6 +43,7 @@ const PRESETS: { label: string; rule: Partial<RenameRuleInput> }[] = [
     label: 'Drop leading tag / site',
     rule: {
       name: 'Drop leading tag / site',
+      position: 10,
       pattern:
         '^(?:www\\.[\\w.-]+' +
         '|[\\w-]+\\.(?:com|org|net|info|biz|tv|to|me|cc|io|in|is|se|nu|ru|la|st|ws|sx' +
@@ -46,15 +56,18 @@ const PRESETS: { label: string; rule: Partial<RenameRuleInput> }[] = [
   },
   {
     label: 'Dots to spaces',
-    rule: { name: 'Dots to spaces', pattern: '(?<=\\w)[._](?=\\w)', replacement: ' ' },
+    rule: { name: 'Dots to spaces',
+      position: 30, pattern: '(?<=\\w)[._](?=\\w)', replacement: ' ' },
   },
   {
     label: 'Drop release group',
-    rule: { name: 'Drop release group', pattern: '-[A-Za-z0-9]+$', replacement: '' },
+    rule: { name: 'Drop release group',
+      position: 40, pattern: '-[A-Za-z0-9]+$', replacement: '' },
   },
   {
     label: 'Year in brackets',
-    rule: { name: 'Year in brackets', pattern: '[.\\s](19|20)(\\d{2})\\b', replacement: ' (\\1\\2)' },
+    rule: { name: 'Year in brackets',
+      position: 50, pattern: '[.\\s](19|20)(\\d{2})\\b', replacement: ' (\\1\\2)' },
   },
 ];
 
@@ -71,15 +84,20 @@ function RuleEditor({
   const [preview, setPreview] = useState<{ original: string; new: string }[] | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [previewing, setPreviewing] = useState(false);
+  const [matchCount, setMatchCount] = useState<number | null>(null);
 
   // Preview this rule on its own, against real filenames from the library.
   const runPreview = async () => {
     setPreviewing(true);
     setPreviewError(null);
+    setMatchCount(null);
     try {
       const res = await testRenameRules(value);
       setPreview(res.results.filter(r => r.changed).slice(0, 8));
-      if (res.changed === 0) setPreviewError('This rule matches none of your filenames');
+      setMatchCount(res.changed);
+      if (res.changed === 0) {
+        setPreviewError(`No match in any of your ${res.total} filenames`);
+      }
     } catch (err) {
       setPreview(null);
       setPreviewError(err instanceof Error ? err.message : 'Preview failed');
@@ -188,7 +206,9 @@ function RuleEditor({
       {previewError && <p className="text-xs text-amber-400">{previewError}</p>}
       {preview && preview.length > 0 && (
         <div className="border-t border-slate-600/50 pt-3 space-y-1">
-          <p className="text-xs text-slate-400 mb-2">Effect on your files:</p>
+          <p className="text-xs text-slate-400 mb-2">
+            Matches {matchCount} file{matchCount === 1 ? '' : 's'} — showing the first {preview.length}:
+          </p>
           {preview.map((row, i) => (
             <div key={i} className="text-xs font-mono flex items-start gap-2 min-w-0">
               <span className="text-slate-500 line-through truncate flex-1">{row.original}</span>
@@ -379,7 +399,7 @@ export function RenameRulesSettings() {
             <Plus className="w-4 h-4" /> Add rule
           </button>
           <span className="text-xs text-slate-500">or start from:</span>
-          {PRESETS.map(p => (
+          {[...PRESETS].sort((a, b) => a.rule.position - b.rule.position).map(p => (
             <button key={p.label} onClick={() => startNew(p.rule)}
                     className="flex items-center gap-1.5 text-xs bg-slate-700/50 hover:bg-slate-700 text-slate-300 rounded-lg px-2.5 py-1.5 transition-colors">
               <Wand2 className="w-3 h-3" /> {p.label}
@@ -395,7 +415,7 @@ export function RenameRulesSettings() {
           <p className="text-slate-400 text-sm mb-3">
             {previewFetching ? 'Checking…'
               : preview
-                ? `${preview.changed} of your last ${preview.total} filenames would be rewritten by these rules.`
+                ? `${preview.changed} of ${preview.total} filenames in your library would be rewritten by these rules.`
                 : ''}
           </p>
           <div className="space-y-1 max-h-52 overflow-y-auto">
