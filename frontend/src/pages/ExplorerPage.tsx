@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } fr
 import { useSearchParams } from 'react-router-dom';
 import {
   FolderOpen, Loader2, AlertTriangle, X, Download, Copy, Scissors, ClipboardPaste,
-  Pencil, Trash2, Info, Eye, Link as LinkIcon, CheckSquare, HardDrive, Search,
+  Pencil, Trash2, Info, Eye, Link as LinkIcon, CheckSquare, HardDrive, Search, Menu,
 } from 'lucide-react';
 import { useLayoutContext } from '../components/Layout';
 import { ExplorerSidebar } from '../components/explorer/ExplorerSidebar';
@@ -59,12 +59,21 @@ export function ExplorerPage() {
   const [searchQuery, setSearchQuery] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ kind: 'error' | 'info'; text: string } | null>(null);
   const [dragging, setDragging] = useState(false);
+  // Below lg the places list is a drawer: on a phone it was eating the top of
+  // every folder before you could see a single file.
+  const [placesOpen, setPlacesOpen] = useState(false);
   const uploadRef = useRef<HTMLInputElement>(null);
 
   // Secured sources are hidden app-wide until the secured toggle is on; their
   // destination folders follow the same rule in the sidebar.
   const { showSecured } = useLayoutContext();
   const rootsQuery = useFileRoots(showSecured);
+
+  useEffect(() => {
+    if (!placesOpen) return;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = ''; };
+  }, [placesOpen]);
   const listing = useFileList(requestedPath, prefs.showHidden, prefs.autoRefresh ? AUTO_REFRESH_MS : 0);
   const currentPath = listing.data?.path ?? requestedPath;
   const search = useFileSearch(currentPath, searchQuery ?? '', prefs.showHidden, !!searchQuery);
@@ -76,6 +85,7 @@ export function ExplorerPage() {
   const uploadMut = useUploadFiles();
 
   const navigate = useCallback((path: string) => {
+    setPlacesOpen(false);
     setSelected(new Set());
     setSearchQuery(null);
     setFilter('');
@@ -331,7 +341,8 @@ export function ExplorerPage() {
       } else if (e.key === 'Delete' && selectedEntries.length && writable) {
         setConfirmDelete({ entries: selectedEntries, permanent: e.shiftKey });
       } else if (e.key === 'Escape') {
-        setSelected(new Set());
+        if (placesOpen) setPlacesOpen(false);
+        else setSelected(new Set());
       }
     };
     window.addEventListener('keydown', onKey);
@@ -353,6 +364,14 @@ export function ExplorerPage() {
   return (
     <div className="max-w-[1600px] mx-auto px-3 sm:px-4 pt-2 sm:pt-4 pb-24 w-full">
       <div className="flex items-center gap-2 mb-3">
+        <button
+          onClick={() => setPlacesOpen(true)}
+          className="lg:hidden p-2 -ml-1 rounded-lg bg-slate-800/60 text-slate-300 hover:text-white hover:bg-slate-700/60 transition-colors"
+          title="Drives and folders"
+          aria-label="Open places"
+        >
+          <Menu className="w-4 h-4" />
+        </button>
         <HardDrive className="w-5 h-5 text-cyan-400 shrink-0" />
         <h1 className="text-lg sm:text-xl font-semibold text-white">Files</h1>
         {rootsQuery.data?.readonly && (
@@ -362,16 +381,18 @@ export function ExplorerPage() {
         )}
       </div>
 
-      <div className="flex flex-col lg:flex-row gap-4">
-        <ExplorerSidebar
-          roots={rootsQuery.data?.roots ?? []}
-          loading={rootsQuery.isLoading}
-          currentPath={currentPath}
-          onNavigate={navigate}
-          onRefresh={() => rootsQuery.refetch()}
-          refreshing={rootsQuery.isFetching}
-          trashPath={trashPath}
-        />
+      <div className="flex gap-4">
+        <div className="hidden lg:block w-64 shrink-0">
+          <ExplorerSidebar
+            roots={rootsQuery.data?.roots ?? []}
+            loading={rootsQuery.isLoading}
+            currentPath={currentPath}
+            onNavigate={navigate}
+            onRefresh={() => rootsQuery.refetch()}
+            refreshing={rootsQuery.isFetching}
+            trashPath={trashPath}
+          />
+        </div>
 
         <div
           className={`flex-1 min-w-0 rounded-xl transition-colors ${dragging ? 'ring-2 ring-cyan-500 ring-offset-2 ring-offset-slate-900' : ''}`}
@@ -545,6 +566,48 @@ export function ExplorerPage() {
               onRenameCancel={() => setRenaming(null)}
             />
           )}
+        </div>
+      </div>
+
+      {/* Places drawer (below lg). Kept mounted so it slides rather than
+          blinking into place, and inert while closed. */}
+      <div
+        className={`fixed inset-0 z-[90] lg:hidden ${placesOpen ? '' : 'pointer-events-none'}`}
+        aria-hidden={!placesOpen}
+        inert={!placesOpen}
+      >
+        <div
+          onClick={() => setPlacesOpen(false)}
+          className={`absolute inset-0 bg-black/70 backdrop-blur-sm transition-opacity duration-200 ${
+            placesOpen ? 'opacity-100' : 'opacity-0'
+          }`}
+        />
+        <div
+          className={`absolute inset-y-0 left-0 w-[80%] max-w-xs bg-slate-900 border-r border-slate-700 shadow-2xl overflow-y-auto transition-transform duration-200 ${
+            placesOpen ? 'translate-x-0' : '-translate-x-full'
+          }`}
+        >
+          <div className="flex items-center justify-between px-3 py-3 border-b border-slate-800 sticky top-0 bg-slate-900 z-10">
+            <span className="text-sm font-medium text-white">Places</span>
+            <button
+              onClick={() => setPlacesOpen(false)}
+              className="p-1 text-slate-400 hover:text-white transition-colors"
+              aria-label="Close places"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+          <div className="p-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))]">
+            <ExplorerSidebar
+              roots={rootsQuery.data?.roots ?? []}
+              loading={rootsQuery.isLoading}
+              currentPath={currentPath}
+              onNavigate={navigate}
+              onRefresh={() => rootsQuery.refetch()}
+              refreshing={rootsQuery.isFetching}
+              trashPath={trashPath}
+            />
+          </div>
         </div>
       </div>
 

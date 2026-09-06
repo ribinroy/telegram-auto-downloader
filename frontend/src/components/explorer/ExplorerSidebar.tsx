@@ -85,7 +85,7 @@ export function ExplorerSidebar({
   ));
 
   return (
-    <aside className="w-full lg:w-64 shrink-0 space-y-1">
+    <nav className="space-y-1">
       <div className="flex items-center justify-between px-2">
         <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">Drives</span>
         <button
@@ -127,6 +127,6 @@ export function ExplorerSidebar({
           </button>
         </Section>
       )}
-    </aside>
+    </nav>
   );
 }

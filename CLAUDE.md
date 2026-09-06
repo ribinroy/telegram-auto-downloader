@@ -378,7 +378,10 @@ a pulled USB drive disappears from the sidebar.
   ever lands in a URL.
 - Frontend: `hooks/useFiles.ts` (React Query, `staleTime: 0` - a disk is always
   stale; every mutation invalidates the whole `['files']` tree), `api/files.ts`
-  transport, and `components/explorer/*`. The current directory lives in the URL
+  transport, and `components/explorer/*`. `ExplorerSidebar` renders bare content;
+  the page supplies the chrome - a pinned 64-wide column at `lg`, a hamburger
+  drawer below it (kept mounted so it slides, `inert` while closed), since stacked
+  above the list it ate the top of every folder on a phone. The current directory lives in the URL
   (`/files?path=...`), so browser back/forward is the explorer's history.
   **Click opens; press-and-hold selects** (`useRowPress` in `FileList.tsx`, 450 ms,
   cancelled by any real pointer movement, and it swallows the `click` that follows
