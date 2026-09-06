@@ -12,6 +12,7 @@ export const qk = {
   mappings: () => ['mappings'] as const,
   cookies: () => ['cookies'] as const,
   ytdlpVersion: () => ['ytdlp', 'version'] as const,
+  jobSchedules: () => ['jobs', 'schedules'] as const,
   users: () => ['users'] as const,
   botQueries: () => ['bot', 'queries'] as const,
   renameRules: () => ['rename-rules'] as const,
@@ -22,6 +23,13 @@ export const qk = {
 
   torrentConfig: () => ['torrent', 'config'] as const,
   torrentList: (client: TorrentClient) => ['torrent', 'list', client] as const,
+
+  fileRoots: (includeHidden: boolean) => ['files', 'roots', includeHidden] as const,
+  fileList: (path: string, showHidden: boolean) => ['files', 'list', path, showHidden] as const,
+  fileSearch: (path: string, query: string, showHidden: boolean) =>
+    ['files', 'search', path, query, showHidden] as const,
+  fileSize: (path: string) => ['files', 'size', path] as const,
+  fileText: (path: string) => ['files', 'text', path] as const,
 
   telegramStatus: () => ['telegram', 'status'] as const,
   telegramApiConfig: () => ['telegram', 'api'] as const,

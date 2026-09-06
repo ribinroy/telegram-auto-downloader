@@ -1,6 +1,6 @@
 import type { DownloadsResponse, Stats, UrlCheckResult, Download, SourceMapping, AnalyticsData } from '../types';
 
-const API_BASE = import.meta.env.DEV ? (import.meta.env.VITE_API_BASE || 'http://localhost:4444') : '';
+export const API_BASE = import.meta.env.DEV ? (import.meta.env.VITE_API_BASE || 'http://localhost:4444') : '';
 const TOKEN_KEY = 'auth_token';
 const REFRESH_KEY = 'refresh_token';
 const MEDIA_TOKEN_KEY = 'media_token';
@@ -1085,6 +1085,49 @@ export interface SyncThumbnailsResult {
   no_duration: number;
   not_video: number;
   failed: number;
+  /** File-explorer thumbnail cache sweep (sources deleted, moved or replaced). */
+  explorer_pruned: number;
+  explorer_kept: number;
+  explorer_freed: number;
+}
+
+/** Monday = 0 ... Sunday = 6, matching the backend's datetime.weekday(). */
+export interface JobSchedule {
+  enabled: boolean;
+  time: string;           // 'HH:MM', server local time
+  days: number[];
+  last_run: string | null;
+  last_status: 'ok' | 'error' | null;
+  last_summary: string | null;
+  next_run: string | null;
+}
+
+export interface JobSchedulesResponse {
+  jobs: { id: string; label: string }[];
+  schedules: Record<string, JobSchedule>;
+  tz: string | null;
+  server_time: string;
+}
+
+export async function fetchJobSchedules(): Promise<JobSchedulesResponse> {
+  const response = await authFetch(`/api/jobs/schedules`);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error((data as { error?: string }).error || 'Failed to load schedules');
+  return data as JobSchedulesResponse;
+}
+
+export async function saveJobSchedule(
+  jobId: string,
+  update: { enabled?: boolean; time?: string; days?: number[] },
+): Promise<JobSchedule> {
+  const response = await authFetch(`/api/jobs/schedules/${jobId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(update),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error((data as { error?: string }).error || 'Failed to save schedule');
+  return (data as { schedule: JobSchedule }).schedule;
 }
 
 export async function syncThumbnails(): Promise<SyncThumbnailsResult> {

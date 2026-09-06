@@ -1,5 +1,6 @@
 export const ROUTES = {
   DOWNLOADS: '/',
+  FILES: '/files',
   ANALYTICS: '/analytics',
   SETTINGS: '/settings',
   SETTINGS_VPS: '/settings/vps',

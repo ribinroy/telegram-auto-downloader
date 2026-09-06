@@ -2,7 +2,11 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Loader2, AlertCircle, CheckCircle, Key, Globe, Cookie, Wrench, Server, Send, TerminalSquare, Users, Wand2 } from 'lucide-react';
 import type { SyncThumbnailsResult } from '../api';
-import { useCookies, useSaveCookies, useSyncThumbnails, useYtdlpVersion, useUpgradeYtdlp } from '../hooks/useSettings';
+import {
+  useCookies, useSaveCookies, useSyncThumbnails, useYtdlpVersion, useUpgradeYtdlp,
+  useJobSchedules,
+} from '../hooks/useSettings';
+import { JobSchedule } from '../components/JobSchedule';
 import { useUpdatePassword } from '../hooks/useMisc';
 import { VpsSettings } from '../components/VpsSettings';
 import { SourcesSettings } from '../components/SourcesSettings';
@@ -14,6 +18,7 @@ import { settingsTab } from '../routes';
 import { RenameRulesSettings } from '../components/RenameRulesSettings';
 import { SessionsSettings } from '../components/SessionsSettings';
 import { clearToken } from '../api';
+import { formatBytes } from '../utils/format';
 
 type TabType = 'password' | 'sources' | 'renaming' | 'cookies' | 'jobs' | 'vps' | 'telegram' | 'queries' | 'users';
 const TAB_IDS: TabType[] = ['password', 'sources', 'renaming', 'cookies', 'telegram', 'queries', 'users', 'vps', 'jobs'];
@@ -41,6 +46,7 @@ export function SettingsPage() {
   const saveCookiesMut = useSaveCookies();
   const syncMut = useSyncThumbnails();
   const ytdlpQuery = useYtdlpVersion(activeTab === 'jobs');
+  const schedulesQuery = useJobSchedules(activeTab === 'jobs');
   const upgradeMut = useUpgradeYtdlp();
 
   // Password state
@@ -388,6 +394,12 @@ export function SettingsPage() {
                   </span>
                 </div>
               )}
+
+              <JobSchedule
+                jobId="ytdlp_upgrade"
+                schedule={schedulesQuery.data?.schedules.ytdlp_upgrade}
+                tz={schedulesQuery.data?.tz ?? null}
+              />
             </div>
 
             {/* Sync Thumbnails */}
@@ -454,12 +466,24 @@ export function SettingsPage() {
                     {syncResult.not_video > 0 && (
                       <div className="text-slate-500">Not video: {syncResult.not_video}</div>
                     )}
-                    {syncResult.generated === 0 && syncResult.orphan_deleted === 0 && syncResult.db_count_fixed === 0 && syncResult.meta_extracted === 0 && syncResult.failed === 0 && (
+                    {syncResult.explorer_pruned > 0 && (
+                      <div className="text-amber-400">
+                        Explorer thumbs pruned: {syncResult.explorer_pruned}
+                        {syncResult.explorer_freed > 0 && ` (${formatBytes(syncResult.explorer_freed)})`}
+                      </div>
+                    )}
+                    {syncResult.generated === 0 && syncResult.orphan_deleted === 0 && syncResult.db_count_fixed === 0 && syncResult.meta_extracted === 0 && syncResult.failed === 0 && syncResult.explorer_pruned === 0 && (
                       <div className="col-span-2 text-slate-400">Everything is already in sync.</div>
                     )}
                   </div>
                 </div>
               )}
+
+              <JobSchedule
+                jobId="sync_thumbnails"
+                schedule={schedulesQuery.data?.schedules.sync_thumbnails}
+                tz={schedulesQuery.data?.tz ?? null}
+              />
             </div>
           </>
         )}

@@ -69,11 +69,14 @@ Main Thread
 |  |  |- vps.py                     # VPS SSH/SFTP connection helpers
 |  |  |- helpers.py                 # Misc helpers (candidate_file_paths)
 |  |  '- routes/                    # Per-domain Flask route mixins (auth, downloads, url,
-|  |                                #   analytics, settings, vps_settings, torrent, vps_browse, media)
+|  |                                #   analytics, settings, vps_settings, torrent, vps_browse, media,
+|  |                                #   rename_rules, files)
 |  |- telegram_handler/__init__.py  # Telethon download handler (~436 lines)
 |  |- ytdlp_handler/__init__.py     # yt-dlp subprocess handler (~604 lines)
 |  |- vps_handler/__init__.py       # SFTP download handler + hourly autoSync
 |  |- utils/__init__.py             # Helpers (resolve_spec, encryption, MIME types)
+|  |- files.py                      # Filesystem service for the file explorer (mounts, listing, ops, thumbs)
+|  |- jobs.py                       # Maintenance job bodies + schedule store + JobScheduler thread
 |  |- file_meta.py                  # Video metadata extraction (ffprobe)
 |  |- browser_downloader.py         # Playwright fallback for yt-dlp
 |  '- metrics/__init__.py           # Prometheus counters
@@ -87,12 +90,14 @@ Main Thread
 |     |- routes.ts                  # Route constants
 |     |- api/
 |     |  |- index.ts               # REST API client functions
+|     |  |- files.ts               # File explorer transport + media URL builders
 |     |  '- socket.ts              # WebSocket connection & event handlers
 |     |- types/index.ts            # TypeScript interfaces
 |     |- utils/format.ts           # Formatting helpers
 |     |- pages/
 |     |  |- DownloadsPage.tsx       # Main download list
 |     |  |- VpsPage.tsx             # VPS file browser (watched folders)
+|     |  |- ExplorerPage.tsx        # Local file explorer (all disks, live)
 |     |  |- SettingsPage.tsx        # Settings tabs (password/sources/cookies/vps/jobs)
 |     |  '- AnalyticsPage.tsx       # Charts & analytics
 |     '- components/
@@ -102,6 +107,8 @@ Main Thread
 |        |- SourcesSettings.tsx     # Per-source specs (folder/quality/hidden)
 |        |- VpsSettings.tsx         # SSH connection, torrent client, watched folders
 |        |- FolderBrowser.tsx       # Reusable remote/local folder picker
+|        |- explorer/               # File explorer: Sidebar, Toolbar, FileList,
+|        |                          #   ContextMenu, PreviewModal, PropertiesModal
 |        |- LoginPage.tsx           # JWT auth login
 |        |- StatsHeader.tsx         # Stats bar
 |        |- VideoPlayerModal.tsx    # Video playback
@@ -212,6 +219,42 @@ Access/refresh token pair. Access tokens are short (`ACCESS_TOKEN_MINUTES`, defa
 - Temp folder: `apply_torrent_session()` pushes the incomplete/temp dir (Transmission `session-set incomplete-dir`; qBittorrent `setPreferences temp_path`), applied on config save + re-applied before each add. The client downloads into the temp dir, then moves to the torrent's download dir on completion.
 - Frontend: Settings → VPS shows a `TorrentClientCard` per client; the VPS page has per-client tabs (Files · Transmission · qBittorrent), each its own `TorrentStatusPanel` (hash-based multi-select). Pasted magnets pick the client in `AddUrlModal`.
 
+### Scheduled Jobs
+
+Maintenance jobs can run unattended on a time of day plus a set of weekdays.
+`backend/jobs.py` owns all of it; `backend/main.py` starts a `JobScheduler`
+daemon thread alongside the Flask/asyncio/VPS threads.
+
+- **The job bodies live in `jobs.py`, not in the route.** `run_job(job_id)` backs
+  both the "Run now" button and a scheduled run, so the two can never drift -
+  a scheduled job behaving differently from its manual twin would be a miserable
+  bug to chase. `JOBS` maps id -> `{label, run, summarize}`; adding a job means
+  adding an entry there and rendering `<JobSchedule jobId=...>` next to its button.
+- **Schedules are one JSON blob** in the settings table (`job_schedules`), keyed
+  by job id: `{enabled, time 'HH:MM', days [0-6], last_run, last_status,
+  last_summary, armed_at}`. Monday = 0, matching `datetime.weekday()`. Times are
+  the **server's** local wall clock (the API returns `tz` so the UI can say which).
+- **Catch-up**: a slot missed while the service was down runs on the next tick
+  after startup. On a home server, "the 3 AM sweep never happened because you
+  rebooted at 2:55" is worse than it running late.
+- **`armed_at` vs `last_run`**: every save marks an already-passed slot as handled,
+  so enabling a job at 22:00 with a 03:00 time (or moving the time earlier) waits
+  for tomorrow instead of firing on the spot. That marker is deliberately *not*
+  `last_run`, which would make the UI report a run that never happened.
+- The scheduler ticks every 30s, survives a failing job (logged, recorded as
+  `last_status: 'error'`, other jobs still run), and records every outcome.
+- UI: `components/JobSchedule.tsx` under each job in Settings -> Jobs - a toggle,
+  a `<input type="time">`, seven day chips, and next/last run. Every control saves
+  on change; the server echoes back the recomputed next run.
+
+## File Explorer (local disks)
+Live filesystem access - every call reads the disk, nothing is indexed or cached.
+- `GET /api/files/roots` - Sidebar places, grouped `drive` / `folder` / `configured`: every real mount from `/proc/mounts` with live capacity, then Home + `DOWNLOAD_DIR`, then DownLee's own destination folders (source mappings, VPS watch-folder destinations, torrent `local_dir`); `?include_hidden=true` includes secured ones
+- `POST /api/files/list` - `{path?, show_hidden?}` -> entries + `writable`, `usage`, `mount`, `trash`
+- `POST /api/files/mkdir` / `rename` / `delete` (`{paths, permanent?}`) / `transfer` (`{paths, dest, move}`) / `upload` (multipart)
+- `POST /api/files/search` (recursive, capped by results **and** a wall-clock deadline), `POST /api/files/size` (on-demand `du`), `POST /api/files/text` (preview head)
+- `GET /api/files/stream|download|thumb?path=` - `@media_token_required`, range-streamed; `thumb` is a cached JPEG (Pillow for images, an ffmpeg frame grab for video)
+
 ### Video Streaming
 - `GET /api/video/stream/<id>` - Range-request video streaming
 - `GET /api/video/thumbs/<id>` - Thumbnail list
@@ -219,7 +262,9 @@ Access/refresh token pair. Access tokens are short (`ACCESS_TOKEN_MINUTES`, defa
 
 ### Settings
 - `GET/POST /api/settings/cookies` - yt-dlp cookies
-- `POST /api/jobs/sync-thumbnails` - Regenerate thumbnails
+- `POST /api/jobs/sync-thumbnails` - Regenerate download thumbnails, clean orphans, and prune the file explorer's thumbnail cache
+- `GET /api/jobs/schedules` - Every job with its schedule, last outcome and next fire time (plus the server's `tz`)
+- `PUT /api/jobs/schedules/<job_id>` - `{enabled?, time? 'HH:MM', days?: [0-6]}` (Monday = 0)
 
 ### Monitoring
 - `GET /metrics` - Prometheus (no auth)
@@ -250,6 +295,7 @@ All config via `.env` file at project root (loaded by python-dotenv):
 | `MAX_RETRIES` | `6` | Download retry attempts |
 | `SCREENSHOTS_DIR` | `DOWNLOAD_DIR/.thumbs` | Thumbnail storage |
 | `JWT_SECRET` | auto-generated, persisted to `.jwt_secret` | App secret: JWT signing + Fernet key for stored secrets |
+| `EXPLORER_READONLY` | `0` | Refuse every file-explorer write (rename/delete/move/copy/upload/mkdir) |
 
 ## Download Flow
 
@@ -311,6 +357,75 @@ User-defined regexes rewrite a download's filename **before the transfer starts*
 - `apply_to_existing(dry_run)` replays the chain over **completed downloads only**, so it can never race a running transfer. Collisions resolve via `unique_name()` (" (2)") rather than aborting the batch.
 
 Routes in `web_app/routes/rename_rules.py`; UI in `frontend/src/components/RenameRulesSettings.tsx` (Settings → Renaming), which previews rules against real filenames from the library and requires a dry run before it will touch anything.
+
+## File Explorer
+
+A real file manager over the home server's own disks, at `/files` (`ExplorerPage`).
+Everything is read **live from disk on every request** - there is no index, no DB
+table and no cache, so a file dropped in over SMB shows up on the next listing and
+a pulled USB drive disappears from the sidebar.
+
+- `backend/files.py` is the whole filesystem layer: mounts, listings, mutations,
+  search, sizes, thumbnails. `web_app/routes/files.py` is transport only - parse,
+  dispatch, map `FsError` to a status code.
+- **Roots** are grouped for the sidebar. `drive`: every real mount from
+  `/proc/mounts` (minus pseudo filesystems, snap loop mounts and OS partitions),
+  each with live `shutil.disk_usage` drawn as a capacity bar. `folder`: Home and
+  `DOWNLOAD_DIR`. `configured`: the destinations the rest of DownLee writes to -
+  per-source mapping folders, VPS watched-folder destinations, a torrent client's
+  `local_dir` - assembled in the route (`_configured_roots()`), which has the DB
+  at hand, so `files.py` stays pure filesystem. Folders that no longer exist are
+  dropped, duplicates merge and list what points at them ("youtube.com, vimeo.com").
+  Destinations of `is_secured` sources/watched folders are omitted unless
+  `?include_hidden=true` (the page passes the Layout's `showSecured`), and a
+  folder that a plain source also points at still shows but drops the secured
+  name from its note.
+- **Reads go anywhere** the service account can reach. **Writes** go through
+  `guard_write()`: anything on a mount other than `/` is fair game (that is where
+  a media library lives), while `PROTECTED_ROOTS` on the root filesystem
+  (`/usr`, `/etc`, `/boot`, ...) is refused. `guard_target()` additionally refuses
+  to unlink or rename a mount point itself. `EXPLORER_READONLY=1` refuses every
+  write outright.
+- **Delete is a trash move by default**, into `<mount>/.downlee-trash` - per mount,
+  so it stays a rename instead of copying 50 GB across drives, and stays
+  recoverable. Root-filesystem deletes park in `BASE_DIR/.trash`. `permanent: true`
+  unlinks for real. The trash path is reported by `/api/files/list` (only once it
+  exists) and linked in the sidebar.
+- **Bounded work**: recursive search and folder sizes both stop on a wall-clock
+  deadline as well as a result cap, because "search from the root of a 20 TB array"
+  is a reasonable thing to ask a web request to do exactly once.
+- **Thumbnails** (`/api/files/thumb`) are cached under `SCREENSHOTS_DIR/.explorer`,
+  keyed by `(path, mtime, size)` so replacing a file in place invalidates its own
+  thumbnail. That name is a one-way hash, so each `<sha1>.jpg` gets a `<sha1>.json`
+  sidecar naming its source - without it nothing could ever tell a live entry from
+  a dead one. `prune_thumb_cache()`, run by `POST /api/jobs/sync-thumbnails`
+  (`explorer_pruned`/`explorer_kept`/`explorer_freed` in its stats), drops every
+  thumbnail whose source is gone, moved or changed, plus any entry with no sidecar
+  and any sidecar with no thumbnail. Images go through Pillow; videos get an ffmpeg frame grab (~1s each),
+  which is why they are only requested in **grid** view - a 500-file list would
+  otherwise start 500 ffmpeg processes.
+- **Streaming/download by path** reuse `helpers.range_response()` (shared with the
+  per-download video route) and sit behind `@media_token_required`, so no API token
+  ever lands in a URL.
+- Frontend: `hooks/useFiles.ts` (React Query, `staleTime: 0` - a disk is always
+  stale; every mutation invalidates the whole `['files']` tree), `api/files.ts`
+  transport, and `components/explorer/*`. `ExplorerSidebar` renders bare content;
+  the page supplies the chrome - a pinned 64-wide column at `lg`, a hamburger
+  drawer below it (kept mounted so it slides, `inert` while closed), since stacked
+  above the list it ate the top of every folder on a phone. Below `sm` the toolbar's
+  seven action buttons collapse the same way, into one overflow menu (reusing
+  `FileContextMenu`, whose items gained an `active` flag for the toggles) that also
+  carries sorting - the list header can only sort by name at that width. The current directory lives in the URL
+  (`/files?path=...`), so browser back/forward is the explorer's history.
+  **Click opens; press-and-hold selects** (`useRowPress` in `FileList.tsx`, 450 ms,
+  cancelled by any real pointer movement, and it swallows the `click` that follows
+  the hold). Once anything is selected the list is in selection mode, so further
+  clicks toggle items rather than navigating away mid-selection; ctrl-click and
+  shift-click still select directly with a mouse. Everything else is desktop
+  standard: right-click menu, F2 rename, Delete to trash (Shift+Delete permanent),
+  Ctrl+A/C/X/V, Enter to open, Backspace for up, drag-and-drop upload. On coarse
+  pointers the native contextmenu is suppressed (the hold is the select gesture)
+  and the row's ⋮ button opens the menu instead.
 
 ## Key Patterns
 

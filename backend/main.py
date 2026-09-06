@@ -11,6 +11,7 @@ from backend.telegram_handler import TelegramDownloader
 from backend.ytdlp_handler import YtdlpDownloader
 from backend.vps_handler import VpsDownloader
 from backend.web_app import WebApp
+from backend.jobs import JobScheduler
 
 
 def setup_logging():
@@ -110,6 +111,10 @@ def main(argv=None):
     # Start VPS autoSync scheduler (hourly check of watched folders)
     vps_downloader.start_autosync()
     print("🗄️  VPS autoSync scheduler started")
+
+    # Start the maintenance job scheduler (thumbnail sync, yt-dlp upgrade)
+    JobScheduler().start()
+    print("⏰ Job scheduler started")
 
     # Start Telegram client (this will block)
     telegram_downloader.start()

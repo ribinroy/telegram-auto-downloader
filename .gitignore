@@ -63,3 +63,6 @@ cookies.txt
 .env.test.local
 .env.production.local
 .skip-greeting
+
+# Explorer trash for files deleted from the root filesystem
+.trash/
