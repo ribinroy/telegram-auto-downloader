@@ -1,10 +1,13 @@
 """
 Database module for DownLee
 """
+import base64
 import json
 import hashlib
+import secrets
 import uuid
 from datetime import datetime
+import bcrypt
 from sqlalchemy import create_engine, Column, Integer, BigInteger, String, Float, DateTime, Text, Boolean
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, scoped_session
@@ -15,6 +18,11 @@ Base = declarative_base()
 def generate_uuid():
     """Generate a UUID string for download tracking"""
     return str(uuid.uuid4())
+
+
+# Verified against when the username is unknown, so failed logins take the
+# same time whether or not the account exists.
+_DUMMY_HASH = bcrypt.hashpw(b'downlee-timing-equalizer', bcrypt.gensalt(rounds=12))
 
 
 class Download(Base):
@@ -120,11 +128,14 @@ class User(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     username = Column(String(100), unique=True, nullable=False)
-    password_hash = Column(String(64), nullable=True)  # SHA-256 hash; null for Telegram-only users
+    password_hash = Column(String(255), nullable=True)  # bcrypt hash; null for Telegram-only users
     role = Column(String(20), default='user')  # 'admin' or 'user'
     telegram_id = Column(BigInteger, nullable=True)  # set for Telegram users
     display_name = Column(String(200), nullable=True)
     must_change_password = Column(Boolean, default=False)  # force a new password on next web login
+    # Bumped to invalidate every access token already issued to this user
+    # (password change, "sign out everywhere"). Carried in the JWT as `tv`.
+    token_version = Column(Integer, default=0, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     def to_dict(self):
@@ -140,14 +151,100 @@ class User(Base):
             'created_at': f"{self.created_at.isoformat()}Z" if self.created_at else None
         }
 
+    # bcrypt cost factor. 12 is ~250ms on modern hardware - slow enough to
+    # make offline cracking expensive, fast enough for an interactive login.
+    BCRYPT_ROUNDS = 12
+
     @staticmethod
-    def hash_password(password: str) -> str:
-        """Hash a password using SHA-256"""
+    def _prehash(password: str) -> bytes:
+        """bcrypt silently truncates at 72 bytes (and 5.x raises instead), so
+        run the password through SHA-256 + base64 first. Same scheme Django's
+        BCryptSHA256PasswordHasher uses; yields a fixed 44-byte input."""
+        digest = hashlib.sha256(password.encode('utf-8')).digest()
+        return base64.b64encode(digest)
+
+    @staticmethod
+    def legacy_sha256(password: str) -> str:
+        """The pre-bcrypt hash format. Kept only to verify (and then upgrade)
+        credentials stored by older versions."""
         return hashlib.sha256(password.encode()).hexdigest()
 
+    @staticmethod
+    def is_legacy_hash(password_hash: str) -> bool:
+        """True for the old bare SHA-256 hex digests."""
+        if not password_hash or len(password_hash) != 64:
+            return False
+        try:
+            int(password_hash, 16)
+            return True
+        except ValueError:
+            return False
+
+    @staticmethod
+    def hash_password(password: str) -> str:
+        """Hash a password with bcrypt (salted, work-factored)."""
+        return bcrypt.hashpw(
+            User._prehash(password),
+            bcrypt.gensalt(rounds=User.BCRYPT_ROUNDS),
+        ).decode('ascii')
+
     def check_password(self, password: str) -> bool:
-        """Check if provided password matches"""
-        return self.password_hash == self.hash_password(password)
+        """Verify a password against either the bcrypt hash or a legacy
+        SHA-256 one. Always constant-time on the stored value."""
+        stored = self.password_hash
+        if not stored:
+            return False
+        if self.is_legacy_hash(stored):
+            return secrets.compare_digest(stored, self.legacy_sha256(password))
+        try:
+            return bcrypt.checkpw(self._prehash(password), stored.encode('ascii'))
+        except (ValueError, TypeError):
+            return False
+
+    def needs_rehash(self) -> bool:
+        """Whether the stored hash should be upgraded on next successful login
+        (legacy format, or bcrypt below the current cost factor)."""
+        stored = self.password_hash
+        if not stored:
+            return False
+        if self.is_legacy_hash(stored):
+            return True
+        try:
+            return int(stored.split('$')[2]) < self.BCRYPT_ROUNDS
+        except (IndexError, ValueError):
+            return True
+
+
+class UserSession(Base):
+    """A logged-in device/browser, addressed by the refresh token it holds.
+
+    Access tokens are short-lived and stateless; the long-lived half of the
+    pair is this row, so a session can be revoked server-side (logout, "sign
+    out everywhere", password change) without waiting for expiry."""
+    __tablename__ = 'user_sessions'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, nullable=False, index=True)
+    # jti of the refresh token currently valid for this session. Rotated on
+    # every refresh; presenting a superseded jti means the token leaked.
+    refresh_jti = Column(String(64), unique=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    last_used_at = Column(DateTime, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=False)
+    revoked_at = Column(DateTime, nullable=True)
+    user_agent = Column(String(300), nullable=True)
+    ip = Column(String(64), nullable=True)
+
+    def to_dict(self, current=False):
+        return {
+            'id': self.id,
+            'created_at': f"{self.created_at.isoformat()}Z" if self.created_at else None,
+            'last_used_at': f"{self.last_used_at.isoformat()}Z" if self.last_used_at else None,
+            'expires_at': f"{self.expires_at.isoformat()}Z" if self.expires_at else None,
+            'user_agent': self.user_agent,
+            'ip': self.ip,
+            'current': current,
+        }
 
 
 class BotQuery(Base):
@@ -266,10 +363,25 @@ class DatabaseManager:
                 if 'must_change_password' not in user_columns:
                     conn.execute(text('ALTER TABLE users ADD COLUMN must_change_password BOOLEAN DEFAULT FALSE'))
                     # Existing installs still on the default 'admin' password
-                    # must pick a real one on next login.
+                    # must pick a real one on next login. Only legacy SHA-256
+                    # hashes can be matched by equality; bcrypt ones are salted
+                    # and get caught at login time by check_password instead.
                     conn.execute(
                         text('UPDATE users SET must_change_password = TRUE WHERE password_hash = :h'),
-                        {'h': User.hash_password('admin')})
+                        {'h': User.legacy_sha256('admin')})
+                    conn.commit()
+                if 'token_version' not in user_columns:
+                    conn.execute(text('ALTER TABLE users ADD COLUMN token_version INTEGER DEFAULT 0'))
+                    conn.execute(text('UPDATE users SET token_version = 0 WHERE token_version IS NULL'))
+                    conn.commit()
+                # Legacy SHA-256 digests are 64 chars; bcrypt needs 60 and
+                # future schemes more. Widen before any rehash can run.
+                pw_col = next((c for c in inspector.get_columns('users')
+                               if c['name'] == 'password_hash'), None)
+                if (pw_col is not None
+                        and getattr(pw_col['type'], 'length', None) not in (None, 255)
+                        and conn.dialect.name == 'postgresql'):
+                    conn.execute(text('ALTER TABLE users ALTER COLUMN password_hash TYPE VARCHAR(255)'))
                     conn.commit()
 
             # Migrate is_deleted boolean to deleted_at timestamp
@@ -648,13 +760,46 @@ class DatabaseManager:
             self.close_session()
 
     def authenticate_user(self, username: str, password: str):
-        """Authenticate a user by username and password"""
+        """Authenticate a user by username and password.
+
+        On success, transparently upgrades a legacy SHA-256 hash (or one below
+        the current bcrypt cost) to the current format - the plaintext is only
+        available here, so this is the one place the upgrade can happen."""
         session = self.get_session()
         try:
             user = session.query(User).filter_by(username=username).first()
-            if user and user.check_password(password):
-                return user.to_dict()
-            return None
+            if not user or not user.password_hash:
+                # Verify against a throwaway hash anyway, so an unknown
+                # username is not distinguishable by response latency.
+                bcrypt.checkpw(User._prehash(password), _DUMMY_HASH)
+                return None
+            if not user.check_password(password):
+                return None
+            if user.needs_rehash():
+                user.password_hash = User.hash_password(password)
+                session.commit()
+            result = user.to_dict()
+            result['token_version'] = user.token_version or 0
+            return result
+        finally:
+            self.close_session()
+
+    def get_auth_state(self, user_id: int):
+        """Everything token validation needs, in one query: whether the user
+        still exists, their current token_version, and the forced-password-
+        change flag."""
+        session = self.get_session()
+        try:
+            user = session.query(User).filter_by(id=user_id).first()
+            if not user:
+                return None
+            return {
+                'id': user.id,
+                'username': user.username,
+                'role': user.role or 'user',
+                'token_version': user.token_version or 0,
+                'must_change_password': bool(user.must_change_password),
+            }
         finally:
             self.close_session()
 
@@ -686,8 +831,123 @@ class DatabaseManager:
                 return {'error': 'Current password is incorrect'}
             user.password_hash = User.hash_password(new_password)
             user.must_change_password = False  # forced change satisfied
+            # Invalidate every access token already issued and kill all
+            # refresh sessions: a password change signs out other devices.
+            user.token_version = (user.token_version or 0) + 1
+            session.query(UserSession).filter(
+                UserSession.user_id == user_id,
+                UserSession.revoked_at.is_(None),
+            ).update({'revoked_at': datetime.utcnow()}, synchronize_session=False)
             session.commit()
-            return {'success': True}
+            return {'success': True, 'token_version': user.token_version}
+        finally:
+            self.close_session()
+
+    def bump_token_version(self, user_id: int):
+        """Sign the user out everywhere: invalidate outstanding access tokens
+        and revoke every refresh session."""
+        session = self.get_session()
+        try:
+            user = session.query(User).filter_by(id=user_id).first()
+            if not user:
+                return None
+            user.token_version = (user.token_version or 0) + 1
+            session.query(UserSession).filter(
+                UserSession.user_id == user_id,
+                UserSession.revoked_at.is_(None),
+            ).update({'revoked_at': datetime.utcnow()}, synchronize_session=False)
+            session.commit()
+            return user.token_version
+        finally:
+            self.close_session()
+
+    # --- Refresh sessions -------------------------------------------------
+
+    def create_user_session(self, user_id: int, refresh_jti: str, expires_at,
+                            user_agent: str = None, ip: str = None):
+        """Register a new logged-in device. Returns its session id."""
+        session = self.get_session()
+        try:
+            row = UserSession(
+                user_id=user_id, refresh_jti=refresh_jti, expires_at=expires_at,
+                user_agent=(user_agent or None) and user_agent[:300], ip=ip)
+            session.add(row)
+            session.commit()
+            return row.id
+        finally:
+            self.close_session()
+
+    def rotate_user_session(self, session_id: int, user_id: int, old_jti: str,
+                            new_jti: str, expires_at, ip: str = None):
+        """Swap the refresh token held by a session.
+
+        Returns {'ok': True} on success, or {'error': ...}. Presenting a jti
+        that the session has already rotated past means the old token leaked -
+        the whole session is revoked rather than refreshed."""
+        session = self.get_session()
+        try:
+            row = session.query(UserSession).filter_by(id=session_id, user_id=user_id).first()
+            now = datetime.utcnow()
+            if not row or row.revoked_at is not None:
+                return {'error': 'revoked'}
+            if row.expires_at and row.expires_at <= now:
+                return {'error': 'expired'}
+            if not secrets.compare_digest(row.refresh_jti or '', old_jti or ''):
+                row.revoked_at = now
+                session.commit()
+                return {'error': 'reuse_detected'}
+            row.refresh_jti = new_jti
+            row.last_used_at = now
+            row.expires_at = expires_at
+            if ip:
+                row.ip = ip
+            session.commit()
+            return {'ok': True}
+        finally:
+            self.close_session()
+
+    def revoke_user_session(self, session_id: int, user_id: int = None):
+        """Revoke one session (single-device logout)."""
+        session = self.get_session()
+        try:
+            q = session.query(UserSession).filter_by(id=session_id)
+            if user_id is not None:
+                q = q.filter_by(user_id=user_id)
+            row = q.first()
+            if not row:
+                return False
+            if row.revoked_at is None:
+                row.revoked_at = datetime.utcnow()
+                session.commit()
+            return True
+        finally:
+            self.close_session()
+
+    def get_user_sessions(self, user_id: int):
+        """Active (unrevoked, unexpired) sessions for the user."""
+        session = self.get_session()
+        try:
+            rows = session.query(UserSession).filter(
+                UserSession.user_id == user_id,
+                UserSession.revoked_at.is_(None),
+                UserSession.expires_at > datetime.utcnow(),
+            ).order_by(UserSession.last_used_at.desc()).all()
+            return [r.to_dict() for r in rows]
+        finally:
+            self.close_session()
+
+    def purge_expired_sessions(self, keep_days: int = 7):
+        """Drop session rows that expired or were revoked a while ago."""
+        from datetime import timedelta
+        session = self.get_session()
+        try:
+            cutoff = datetime.utcnow() - timedelta(days=keep_days)
+            deleted = session.query(UserSession).filter(
+                (UserSession.expires_at < cutoff) |
+                (UserSession.revoked_at.isnot(None) & (UserSession.revoked_at < cutoff))
+            ).delete(synchronize_session=False)
+            session.commit()
+            return deleted
         finally:
             self.close_session()
 

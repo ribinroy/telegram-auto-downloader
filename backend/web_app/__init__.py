@@ -16,13 +16,13 @@ import asyncio
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 from flask_socketio import SocketIO
-from backend.config import WEB_PORT, WEB_HOST
+from backend.config import WEB_PORT, WEB_HOST, CORS_ORIGINS
 from backend.database import get_db
 from backend import metrics
 
 from backend.web_app import base as _base
 from backend.web_app.base import (
-    get_socketio, get_web_app, token_required,
+    get_socketio, get_web_app, token_required, decode_token,
     JWT_EXPIRY_DAYS, FRONTEND_DIST, PASSWORD_CHANGE_ALLOWED_PATHS,
 )
 from backend.web_app.torrent import (
@@ -46,6 +46,31 @@ from backend.web_app.routes.vps_browse import VpsBrowseRoutesMixin
 from backend.web_app.routes.media import MediaRoutesMixin
 
 
+def _socketio_origin_allowed(origin, environ=None):
+    """Origin check for the Socket.IO handshake.
+
+    Engine.IO's list form would reject the app's own origin unless it happens
+    to be spelled out in CORS_ORIGINS, which breaks the WebSocket for anyone
+    reaching DownLee on a hostname it can't know in advance. A callable lets
+    us accept same-origin requests plus whatever CORS_ORIGINS adds.
+    """
+    if CORS_ORIGINS == '*':
+        return True
+    if not origin:
+        return True  # non-browser client; no Origin header to police
+    if origin in CORS_ORIGINS:
+        return True
+    if environ and 'HTTP_HOST' in environ:
+        host = environ['HTTP_HOST']
+        scheme = environ.get('HTTP_X_FORWARDED_PROTO',
+                             environ.get('wsgi.url_scheme', 'http')).split(',')[0].strip()
+        forwarded_host = environ.get('HTTP_X_FORWARDED_HOST', host).split(',')[0].strip()
+        if origin in (f'{scheme}://{host}', f'{scheme}://{forwarded_host}',
+                      f'http://{host}', f'https://{host}'):
+            return True
+    return False
+
+
 class WebApp(
     AuthRoutesMixin, DownloadRoutesMixin, UrlRoutesMixin, AnalyticsRoutesMixin,
     SettingsRoutesMixin, VpsSettingsRoutesMixin, TorrentRoutesMixin,
@@ -58,10 +83,20 @@ class WebApp(
         self.vps_downloader = vps_downloader
         self.event_loop = event_loop
         self.app = Flask(__name__, static_folder=str(FRONTEND_DIST), static_url_path='')
-        CORS(self.app, resources={r"/*": {"origins": "*"}})
+        # The built frontend is served by this same process, so cross-origin
+        # access is only needed for the Vite dev server. CORS_ORIGINS defaults
+        # to localhost dev ports; widen it via the CORS_ORIGINS env var rather
+        # than falling back to "*" (see backend/config).
+        CORS(self.app, resources={r"/api/*": {"origins": CORS_ORIGINS}},
+             supports_credentials=False, allow_headers=["Content-Type", "Authorization"],
+             methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
+        if CORS_ORIGINS == '*':
+            print("⚠️  CORS is open to every origin (CORS_ORIGINS=*) - do not "
+                  "expose this instance to the internet.")
         # socketio/_web_app live on the shared base module so other modules can
         # reach them via get_socketio()/get_web_app().
-        _base.socketio = SocketIO(self.app, cors_allowed_origins="*", async_mode='threading')
+        _base.socketio = SocketIO(self.app, cors_allowed_origins=_socketio_origin_allowed,
+                                  async_mode='threading')
         self.socketio = _base.socketio
         _base._web_app = self
         self.setup_routes()
