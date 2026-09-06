@@ -6,6 +6,8 @@ export interface MenuItem {
   icon: ReactNode;
   onClick: () => void;
   danger?: boolean;
+  /** Renders the row as "on" - for toggles living in a menu. */
+  active?: boolean;
   disabled?: boolean;
   separated?: boolean;
 }
@@ -49,7 +51,7 @@ export function FileContextMenu({
       style={{ left: pos.x, top: pos.y }}
       onClick={e => e.stopPropagation()}
       onContextMenu={e => { e.preventDefault(); e.stopPropagation(); }}
-      className="fixed z-[110] min-w-[190px] py-1 rounded-xl border border-slate-700 bg-slate-900/95 backdrop-blur shadow-2xl"
+      className="fixed z-[110] min-w-[190px] max-h-[80vh] overflow-y-auto py-1 rounded-xl border border-slate-700 bg-slate-900/95 backdrop-blur shadow-2xl"
     >
       {items.map((item, i) => (
         <div key={item.label}>
@@ -60,7 +62,9 @@ export function FileContextMenu({
             className={`w-full flex items-center gap-2.5 px-3 py-1.5 text-sm text-left transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
               item.danger
                 ? 'text-red-400 hover:bg-red-500/15'
-                : 'text-slate-200 hover:bg-slate-700/60'
+                : item.active
+                  ? 'text-cyan-400 hover:bg-slate-700/60'
+                  : 'text-slate-200 hover:bg-slate-700/60'
             }`}
           >
             {item.icon}

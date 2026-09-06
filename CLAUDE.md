@@ -381,7 +381,10 @@ a pulled USB drive disappears from the sidebar.
   transport, and `components/explorer/*`. `ExplorerSidebar` renders bare content;
   the page supplies the chrome - a pinned 64-wide column at `lg`, a hamburger
   drawer below it (kept mounted so it slides, `inert` while closed), since stacked
-  above the list it ate the top of every folder on a phone. The current directory lives in the URL
+  above the list it ate the top of every folder on a phone. Below `sm` the toolbar's
+  seven action buttons collapse the same way, into one overflow menu (reusing
+  `FileContextMenu`, whose items gained an `active` flag for the toggles) that also
+  carries sorting - the list header can only sort by name at that width. The current directory lives in the URL
   (`/files?path=...`), so browser back/forward is the explorer's history.
   **Click opens; press-and-hold selects** (`useRowPress` in `FileList.tsx`, 450 ms,
   cancelled by any real pointer movement, and it swallows the `click` that follows
