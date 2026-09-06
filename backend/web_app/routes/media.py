@@ -194,6 +194,10 @@ class MediaRoutesMixin:
                 'no_duration': 0,
                 'not_video': 0,
                 'failed': 0,
+                # File-explorer thumbnail cache (filled in at the end)
+                'explorer_pruned': 0,
+                'explorer_kept': 0,
+                'explorer_freed': 0,
             }
 
             import asyncio as _asyncio
@@ -256,5 +260,15 @@ class MediaRoutesMixin:
                     stats['failed'] += 1
 
             loop.close()
+
+            # The explorer's own thumbnail cache is keyed by path, not by
+            # download id, so it needs its own sweep: drop anything whose
+            # source file has since been deleted, moved or replaced.
+            from backend.files import prune_thumb_cache
+            explorer = prune_thumb_cache()
+            stats['explorer_pruned'] = explorer['deleted']
+            stats['explorer_kept'] = explorer['kept']
+            stats['explorer_freed'] = explorer['freed']
+
             return jsonify(stats)
 

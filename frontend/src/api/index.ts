@@ -1085,6 +1085,10 @@ export interface SyncThumbnailsResult {
   no_duration: number;
   not_video: number;
   failed: number;
+  /** File-explorer thumbnail cache sweep (sources deleted, moved or replaced). */
+  explorer_pruned: number;
+  explorer_kept: number;
+  explorer_freed: number;
 }
 
 export async function syncThumbnails(): Promise<SyncThumbnailsResult> {

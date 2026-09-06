@@ -233,7 +233,7 @@ Live filesystem access - every call reads the disk, nothing is indexed or cached
 
 ### Settings
 - `GET/POST /api/settings/cookies` - yt-dlp cookies
-- `POST /api/jobs/sync-thumbnails` - Regenerate thumbnails
+- `POST /api/jobs/sync-thumbnails` - Regenerate download thumbnails, clean orphans, and prune the file explorer's thumbnail cache
 
 ### Monitoring
 - `GET /metrics` - Prometheus (no auth)
@@ -365,7 +365,12 @@ a pulled USB drive disappears from the sidebar.
   is a reasonable thing to ask a web request to do exactly once.
 - **Thumbnails** (`/api/files/thumb`) are cached under `SCREENSHOTS_DIR/.explorer`,
   keyed by `(path, mtime, size)` so replacing a file in place invalidates its own
-  thumbnail. Images go through Pillow; videos get an ffmpeg frame grab (~1s each),
+  thumbnail. That name is a one-way hash, so each `<sha1>.jpg` gets a `<sha1>.json`
+  sidecar naming its source - without it nothing could ever tell a live entry from
+  a dead one. `prune_thumb_cache()`, run by `POST /api/jobs/sync-thumbnails`
+  (`explorer_pruned`/`explorer_kept`/`explorer_freed` in its stats), drops every
+  thumbnail whose source is gone, moved or changed, plus any entry with no sidecar
+  and any sidecar with no thumbnail. Images go through Pillow; videos get an ffmpeg frame grab (~1s each),
   which is why they are only requested in **grid** view - a 500-file list would
   otherwise start 500 ffmpeg processes.
 - **Streaming/download by path** reuse `helpers.range_response()` (shared with the

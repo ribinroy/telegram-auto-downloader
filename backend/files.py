@@ -12,6 +12,7 @@ a browser tab must never be able to unlink /usr. Data disks mounted outside /
 where a media library lives.
 """
 import hashlib
+import json
 import os
 import shutil
 import stat as stat_module
@@ -546,11 +547,69 @@ def _thumb_key(path, st):
     return hashlib.sha1(raw).hexdigest() + '.jpg'
 
 
+def _write_sidecar(cached, source, st):
+    """Record which file a thumbnail came from.
+
+    The cache name is a one-way hash, so without this a cleanup pass could
+    never tell whether a thumbnail's source still exists. Best-effort: a
+    thumbnail that fails to get one is simply treated as stale later.
+    """
+    try:
+        cached.with_suffix('.json').write_text(json.dumps({
+            'path': str(source), 'mtime_ns': st.st_mtime_ns, 'size': st.st_size,
+        }))
+    except OSError:
+        pass
+
+
+def prune_thumb_cache():
+    """Delete explorer thumbnails whose source file is gone or has changed.
+
+    Run by the sync-thumbnails job. Each thumbnail is checked against its
+    sidecar; one that has no sidecar (written before sidecars existed, or a
+    half-finished write) counts as stale and goes too - it costs one ffmpeg
+    frame grab to come back the next time someone looks at that folder.
+    """
+    stats = {'checked': 0, 'deleted': 0, 'kept': 0, 'freed': 0}
+    if not THUMB_CACHE.is_dir():
+        return stats
+
+    for thumb in THUMB_CACHE.glob('*.jpg'):
+        stats['checked'] += 1
+        sidecar = thumb.with_suffix('.json')
+        try:
+            meta = json.loads(sidecar.read_text())
+            st = os.stat(meta['path'])
+            stale = st.st_mtime_ns != meta.get('mtime_ns') or st.st_size != meta.get('size')
+        except (OSError, ValueError, KeyError, TypeError):
+            stale = True
+        if not stale:
+            stats['kept'] += 1
+            continue
+        try:
+            stats['freed'] += thumb.stat().st_size
+            thumb.unlink(missing_ok=True)
+            sidecar.unlink(missing_ok=True)
+            stats['deleted'] += 1
+        except OSError:
+            continue
+
+    # Sidecars whose thumbnail is already gone.
+    for sidecar in THUMB_CACHE.glob('*.json'):
+        if not sidecar.with_suffix('.jpg').exists():
+            try:
+                sidecar.unlink(missing_ok=True)
+            except OSError:
+                pass
+    return stats
+
+
 def thumbnail(raw_path):
     """Path to a cached JPEG preview for an image or video, or None.
 
     Keyed by (path, mtime, size), so replacing a file in place invalidates its
-    thumbnail without anyone having to clear a cache.
+    thumbnail without anyone having to clear a cache. Each entry gets a JSON
+    sidecar naming its source, which is what makes prune_thumb_cache() possible.
     """
     path = resolve_path(raw_path)
     if path.is_dir():
@@ -569,9 +628,10 @@ def thumbnail(raw_path):
     if cached.exists():
         return cached
 
-    if kind == 'image':
-        return _image_thumb(path, cached)
-    return _video_thumb(path, cached)
+    made = _image_thumb(path, cached) if kind == 'image' else _video_thumb(path, cached)
+    if made == cached:
+        _write_sidecar(cached, path, st)
+    return made
 
 
 def _image_thumb(path, cached):

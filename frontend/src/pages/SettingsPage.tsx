@@ -14,6 +14,7 @@ import { settingsTab } from '../routes';
 import { RenameRulesSettings } from '../components/RenameRulesSettings';
 import { SessionsSettings } from '../components/SessionsSettings';
 import { clearToken } from '../api';
+import { formatBytes } from '../utils/format';
 
 type TabType = 'password' | 'sources' | 'renaming' | 'cookies' | 'jobs' | 'vps' | 'telegram' | 'queries' | 'users';
 const TAB_IDS: TabType[] = ['password', 'sources', 'renaming', 'cookies', 'telegram', 'queries', 'users', 'vps', 'jobs'];
@@ -454,7 +455,13 @@ export function SettingsPage() {
                     {syncResult.not_video > 0 && (
                       <div className="text-slate-500">Not video: {syncResult.not_video}</div>
                     )}
-                    {syncResult.generated === 0 && syncResult.orphan_deleted === 0 && syncResult.db_count_fixed === 0 && syncResult.meta_extracted === 0 && syncResult.failed === 0 && (
+                    {syncResult.explorer_pruned > 0 && (
+                      <div className="text-amber-400">
+                        Explorer thumbs pruned: {syncResult.explorer_pruned}
+                        {syncResult.explorer_freed > 0 && ` (${formatBytes(syncResult.explorer_freed)})`}
+                      </div>
+                    )}
+                    {syncResult.generated === 0 && syncResult.orphan_deleted === 0 && syncResult.db_count_fixed === 0 && syncResult.meta_extracted === 0 && syncResult.failed === 0 && syncResult.explorer_pruned === 0 && (
                       <div className="col-span-2 text-slate-400">Everything is already in sync.</div>
                     )}
                   </div>
