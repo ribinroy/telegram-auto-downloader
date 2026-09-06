@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Loader2, AlertCircle, KeyRound } from 'lucide-react';
-import { setToken } from '../api';
+import { setTokens, ensureMediaToken } from '../api';
 import { useLogin, useUpdatePassword } from '../hooks/useMisc';
 
 interface LoginPageProps {
@@ -23,10 +23,11 @@ export function LoginPage({ onLogin }: LoginPageProps) {
     setError(null);
     try {
       const response = await loginMut.mutateAsync({ username, password });
-      setToken(response.token);
+      setTokens(response.token, response.refresh_token);
       if (response.must_change_password) {
         setStep('change-password');
       } else {
+        await ensureMediaToken(true);
         onLogin();
       }
     } catch (err) {
@@ -46,9 +47,14 @@ export function LoginPage({ onLogin }: LoginPageProps) {
       setError("The default password 'admin' is not allowed");
       return;
     }
+    if (newPassword.length < 8) {
+      setError('Password must be at least 8 characters');
+      return;
+    }
 
     try {
       await passwordMut.mutateAsync({ currentPassword: password, newPassword });
+      await ensureMediaToken(true);
       onLogin();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to update password');

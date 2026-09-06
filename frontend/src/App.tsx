@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Routes, Route } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
-import { verifyToken, clearToken, getToken } from './api';
+import { verifyToken, clearToken, getToken, logout, ensureMediaToken, setSessionExpiredHandler } from './api';
 import { LoginPage } from './components/LoginPage';
 import { Layout } from './components/Layout';
 import { DownloadsPage } from './pages/DownloadsPage';
@@ -12,6 +12,17 @@ import { ROUTES } from './routes';
 
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
+
+  // Reached when the refresh token is gone, expired or revoked. Drop straight
+  // to the login screen instead of reloading the page.
+  const handleSessionExpired = useCallback(() => {
+    clearToken();
+    setIsAuthenticated(false);
+  }, []);
+
+  useEffect(() => {
+    setSessionExpiredHandler(handleSessionExpired);
+  }, [handleSessionExpired]);
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -25,13 +36,22 @@ function App() {
         return;
       }
       setIsAuthenticated(valid);
-      if (!valid) clearToken();
+      if (valid) {
+        // Media URLs need their own token; mint it before anything renders.
+        await ensureMediaToken();
+      } else {
+        clearToken();
+      }
     };
     checkAuth();
   }, []);
 
   const handleLogin = () => setIsAuthenticated(true);
-  const handleLogout = () => { clearToken(); setIsAuthenticated(false); };
+  const handleLogout = async () => {
+    // Revoke the session server-side, not just locally.
+    await logout();
+    setIsAuthenticated(false);
+  };
 
   if (isAuthenticated === null) {
     return (

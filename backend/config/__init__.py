@@ -89,6 +89,48 @@ def _resolve_jwt_secret():
 
 JWT_SECRET = _resolve_jwt_secret()
 
+
+def _env_bool(name, default=False):
+    raw = (os.getenv(name) or '').strip().lower()
+    if not raw:
+        return default
+    return raw in ('1', 'true', 'yes', 'on')
+
+
+# --- Auth token lifetimes -------------------------------------------------
+# Access tokens are sent with every request, so they are short-lived; the
+# client silently exchanges its refresh token for a new one via
+# POST /api/auth/refresh. Refresh tokens are backed by a `user_sessions` row,
+# so they can be revoked server-side (logout, password change).
+ACCESS_TOKEN_MINUTES = int(os.getenv('ACCESS_TOKEN_MINUTES', '30'))
+REFRESH_TOKEN_DAYS = int(os.getenv('REFRESH_TOKEN_DAYS', '30'))
+# <video>/<img> elements can't send an Authorization header, so media URLs
+# carry a token in the query string. That token is scoped to the streaming and
+# thumbnail routes only, and lives long enough to watch something through.
+MEDIA_TOKEN_HOURS = int(os.getenv('MEDIA_TOKEN_HOURS', '12'))
+
+# --- Reverse proxy --------------------------------------------------------
+# Only trust X-Forwarded-For / X-Real-IP when DownLee actually sits behind a
+# proxy you control: those headers are trivially forged otherwise, and the
+# login rate limiter keys off the client address.
+TRUST_PROXY_HEADERS = _env_bool('TRUST_PROXY_HEADERS', False)
+TRUSTED_PROXY_COUNT = int(os.getenv('TRUSTED_PROXY_COUNT', '1'))
+
+# --- CORS -----------------------------------------------------------------
+# In production the React app is served by this same Flask process, so no
+# cross-origin access is needed at all. The defaults only allow the Vite dev
+# server. Set CORS_ORIGINS to a comma-separated list to add your own origins
+# (e.g. https://downlee.example.com); "*" is honoured but disables the
+# protection - don't use it on an internet-facing instance.
+_cors_env = (os.getenv('CORS_ORIGINS') or '').strip()
+if _cors_env:
+    CORS_ORIGINS = '*' if _cors_env == '*' else [o.strip() for o in _cors_env.split(',') if o.strip()]
+else:
+    CORS_ORIGINS = [
+        'http://localhost:5173', 'http://127.0.0.1:5173',
+        'http://localhost:4173', 'http://127.0.0.1:4173',
+    ]
+
 # Download Configuration
 MAX_RETRIES = int(os.getenv('MAX_RETRIES', '6'))
 

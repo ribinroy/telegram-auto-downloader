@@ -8,6 +8,7 @@ import en from 'javascript-time-ago/locale/en'
 import './index.css'
 import App from './App.tsx'
 import { queryClient } from './lib/queryClient'
+import { registerServiceWorker } from './lib/pwa'
 
 // Initialize TimeAgo
 TimeAgo.addDefaultLocale(en)
@@ -23,6 +24,10 @@ console.log(
   '%c━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
   'color: #06b6d4;'
 )
+
+// Installable/offline app shell. Dispatches an event the UI listens for so a
+// new build can be applied without yanking the page out from under the user.
+registerServiceWorker(() => window.dispatchEvent(new Event('downlee:update-ready')))
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

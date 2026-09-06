@@ -11,6 +11,8 @@ import { QueriesSettings } from '../components/QueriesSettings';
 import { UsersSettings } from '../components/UsersSettings';
 import { useLayoutContext } from '../components/Layout';
 import { settingsTab } from '../routes';
+import { SessionsSettings } from '../components/SessionsSettings';
+import { clearToken } from '../api';
 
 type TabType = 'password' | 'sources' | 'cookies' | 'jobs' | 'vps' | 'telegram' | 'queries' | 'users';
 const TAB_IDS: TabType[] = ['password', 'sources', 'cookies', 'telegram', 'queries', 'users', 'vps', 'jobs'];
@@ -119,8 +121,8 @@ export function SettingsPage() {
       return;
     }
 
-    if (newPassword.length < 3) {
-      setPasswordError('Password must be at least 3 characters');
+    if (newPassword.length < 8) {
+      setPasswordError('Password must be at least 8 characters');
       return;
     }
 
@@ -259,6 +261,8 @@ export function SettingsPage() {
                 )}
               </button>
             </form>
+
+            <SessionsSettings onSignedOut={() => { clearToken(); window.location.reload(); }} />
           </>
         )}
 
