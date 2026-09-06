@@ -1091,6 +1091,45 @@ export interface SyncThumbnailsResult {
   explorer_freed: number;
 }
 
+/** Monday = 0 ... Sunday = 6, matching the backend's datetime.weekday(). */
+export interface JobSchedule {
+  enabled: boolean;
+  time: string;           // 'HH:MM', server local time
+  days: number[];
+  last_run: string | null;
+  last_status: 'ok' | 'error' | null;
+  last_summary: string | null;
+  next_run: string | null;
+}
+
+export interface JobSchedulesResponse {
+  jobs: { id: string; label: string }[];
+  schedules: Record<string, JobSchedule>;
+  tz: string | null;
+  server_time: string;
+}
+
+export async function fetchJobSchedules(): Promise<JobSchedulesResponse> {
+  const response = await authFetch(`/api/jobs/schedules`);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error((data as { error?: string }).error || 'Failed to load schedules');
+  return data as JobSchedulesResponse;
+}
+
+export async function saveJobSchedule(
+  jobId: string,
+  update: { enabled?: boolean; time?: string; days?: number[] },
+): Promise<JobSchedule> {
+  const response = await authFetch(`/api/jobs/schedules/${jobId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(update),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error((data as { error?: string }).error || 'Failed to save schedule');
+  return (data as { schedule: JobSchedule }).schedule;
+}
+
 export async function syncThumbnails(): Promise<SyncThumbnailsResult> {
   const response = await authFetch(`/api/jobs/sync-thumbnails`, {
     method: 'POST',

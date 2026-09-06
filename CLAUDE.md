@@ -76,6 +76,7 @@ Main Thread
 |  |- vps_handler/__init__.py       # SFTP download handler + hourly autoSync
 |  |- utils/__init__.py             # Helpers (resolve_spec, encryption, MIME types)
 |  |- files.py                      # Filesystem service for the file explorer (mounts, listing, ops, thumbs)
+|  |- jobs.py                       # Maintenance job bodies + schedule store + JobScheduler thread
 |  |- file_meta.py                  # Video metadata extraction (ffprobe)
 |  |- browser_downloader.py         # Playwright fallback for yt-dlp
 |  '- metrics/__init__.py           # Prometheus counters
@@ -218,7 +219,35 @@ Access/refresh token pair. Access tokens are short (`ACCESS_TOKEN_MINUTES`, defa
 - Temp folder: `apply_torrent_session()` pushes the incomplete/temp dir (Transmission `session-set incomplete-dir`; qBittorrent `setPreferences temp_path`), applied on config save + re-applied before each add. The client downloads into the temp dir, then moves to the torrent's download dir on completion.
 - Frontend: Settings → VPS shows a `TorrentClientCard` per client; the VPS page has per-client tabs (Files · Transmission · qBittorrent), each its own `TorrentStatusPanel` (hash-based multi-select). Pasted magnets pick the client in `AddUrlModal`.
 
-### File Explorer (local disks)
+### Scheduled Jobs
+
+Maintenance jobs can run unattended on a time of day plus a set of weekdays.
+`backend/jobs.py` owns all of it; `backend/main.py` starts a `JobScheduler`
+daemon thread alongside the Flask/asyncio/VPS threads.
+
+- **The job bodies live in `jobs.py`, not in the route.** `run_job(job_id)` backs
+  both the "Run now" button and a scheduled run, so the two can never drift -
+  a scheduled job behaving differently from its manual twin would be a miserable
+  bug to chase. `JOBS` maps id -> `{label, run, summarize}`; adding a job means
+  adding an entry there and rendering `<JobSchedule jobId=...>` next to its button.
+- **Schedules are one JSON blob** in the settings table (`job_schedules`), keyed
+  by job id: `{enabled, time 'HH:MM', days [0-6], last_run, last_status,
+  last_summary, armed_at}`. Monday = 0, matching `datetime.weekday()`. Times are
+  the **server's** local wall clock (the API returns `tz` so the UI can say which).
+- **Catch-up**: a slot missed while the service was down runs on the next tick
+  after startup. On a home server, "the 3 AM sweep never happened because you
+  rebooted at 2:55" is worse than it running late.
+- **`armed_at` vs `last_run`**: every save marks an already-passed slot as handled,
+  so enabling a job at 22:00 with a 03:00 time (or moving the time earlier) waits
+  for tomorrow instead of firing on the spot. That marker is deliberately *not*
+  `last_run`, which would make the UI report a run that never happened.
+- The scheduler ticks every 30s, survives a failing job (logged, recorded as
+  `last_status: 'error'`, other jobs still run), and records every outcome.
+- UI: `components/JobSchedule.tsx` under each job in Settings -> Jobs - a toggle,
+  a `<input type="time">`, seven day chips, and next/last run. Every control saves
+  on change; the server echoes back the recomputed next run.
+
+## File Explorer (local disks)
 Live filesystem access - every call reads the disk, nothing is indexed or cached.
 - `GET /api/files/roots` - Sidebar places, grouped `drive` / `folder` / `configured`: every real mount from `/proc/mounts` with live capacity, then Home + `DOWNLOAD_DIR`, then DownLee's own destination folders (source mappings, VPS watch-folder destinations, torrent `local_dir`); `?include_hidden=true` includes secured ones
 - `POST /api/files/list` - `{path?, show_hidden?}` -> entries + `writable`, `usage`, `mount`, `trash`
@@ -234,6 +263,8 @@ Live filesystem access - every call reads the disk, nothing is indexed or cached
 ### Settings
 - `GET/POST /api/settings/cookies` - yt-dlp cookies
 - `POST /api/jobs/sync-thumbnails` - Regenerate download thumbnails, clean orphans, and prune the file explorer's thumbnail cache
+- `GET /api/jobs/schedules` - Every job with its schedule, last outcome and next fire time (plus the server's `tz`)
+- `PUT /api/jobs/schedules/<job_id>` - `{enabled?, time? 'HH:MM', days?: [0-6]}` (Monday = 0)
 
 ### Monitoring
 - `GET /metrics` - Prometheus (no auth)

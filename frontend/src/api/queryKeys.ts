@@ -12,6 +12,7 @@ export const qk = {
   mappings: () => ['mappings'] as const,
   cookies: () => ['cookies'] as const,
   ytdlpVersion: () => ['ytdlp', 'version'] as const,
+  jobSchedules: () => ['jobs', 'schedules'] as const,
   users: () => ['users'] as const,
   botQueries: () => ['bot', 'queries'] as const,
   renameRules: () => ['rename-rules'] as const,

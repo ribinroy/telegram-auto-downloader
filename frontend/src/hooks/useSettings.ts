@@ -2,7 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   fetchMappings, createMapping, updateMapping, deleteMapping,
   fetchCookies, saveCookies,
-  getYtdlpVersion, upgradeYtdlp, syncThumbnails,
+  getYtdlpVersion, upgradeYtdlp, syncThumbnails, fetchJobSchedules, saveJobSchedule,
   fetchUsers, syncUsers, updateUserRole,
   fetchBotQueries, saveBotQuery, deleteBotQuery, testBotQuery,
   fetchRenameRules, createRenameRule, updateRenameRule, deleteRenameRule,
@@ -174,5 +174,25 @@ export function useApplyRenameRules() {
         qc.invalidateQueries({ queryKey: ['rename-preview'] });
       }
     },
+  });
+}
+
+export function useJobSchedules(enabled = true) {
+  return useQuery({
+    queryKey: qk.jobSchedules(),
+    queryFn: fetchJobSchedules,
+    enabled,
+    // Scheduled runs happen behind the app's back, so "last run" is refreshed
+    // while the tab is open rather than only on mount.
+    refetchInterval: enabled ? 60_000 : false,
+  });
+}
+
+export function useSaveJobSchedule() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { jobId: string; update: { enabled?: boolean; time?: string; days?: number[] } }) =>
+      saveJobSchedule(vars.jobId, vars.update),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.jobSchedules() }),
   });
 }

@@ -19,6 +19,7 @@ from backend.web_app.torrent import (
 )
 from backend.web_app.vps import load_vps_credentials, annotate_vps_folders, open_vps_sftp
 from backend.web_app.helpers import candidate_file_paths, range_response
+from backend.jobs import JOBS, read_schedules, save_schedule, next_run, run_job
 
 
 class MediaRoutesMixin:
@@ -137,138 +138,59 @@ class MediaRoutesMixin:
         @self.app.route("/api/jobs/ytdlp-upgrade", methods=["POST"])
         @token_required
         def api_ytdlp_upgrade():
-            """Upgrade yt-dlp in the venv"""
-            import subprocess
-            venv_pip = str(Path(__file__).parent.parent.parent.parent / 'venv' / 'bin' / 'pip')
+            """Upgrade yt-dlp in the venv (same body the scheduler runs)."""
             try:
-                # Get current version
-                old_ver = subprocess.run(
-                    [self.ytdlp_downloader.YTDLP_PATH, '--version'],
-                    capture_output=True, text=True, timeout=10
-                ).stdout.strip()
-
-                # Run pip upgrade
-                result = subprocess.run(
-                    [venv_pip, 'install', '--upgrade', 'yt-dlp'],
-                    capture_output=True, text=True, timeout=120
-                )
-                if result.returncode != 0:
-                    return jsonify({"error": result.stderr.strip()[:500]}), 500
-
-                # Get new version
-                new_ver = subprocess.run(
-                    [self.ytdlp_downloader.YTDLP_PATH, '--version'],
-                    capture_output=True, text=True, timeout=10
-                ).stdout.strip()
-
-                return jsonify({
-                    "old_version": old_ver,
-                    "new_version": new_ver,
-                    "upgraded": old_ver != new_ver,
-                })
+                return jsonify(run_job('ytdlp_upgrade'))
             except Exception as e:
                 return jsonify({"error": str(e)}), 500
 
         @self.app.route("/api/jobs/sync-thumbnails", methods=["POST"])
         @token_required
         def api_sync_thumbnails():
-            """Run thumbnail sync job - generates missing thumbnails, cleans orphans."""
-            import json as _json
-            import shutil
-            from backend.config import SCREENSHOTS_DIR
-            from backend.file_meta import (
-                find_file, is_video_file, generate_thumbnails as gen_thumbs,
-                probe_video, extract_meta
-            )
+            """Thumbnail sync job - same body the scheduler runs."""
+            try:
+                return jsonify(run_job('sync_thumbnails'))
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
 
-            db = get_db()
-            downloads = db.get_all_downloads()
-            completed = [d for d in downloads if d['status'] == 'done' and not d.get('deleted_at')]
+        # --- Job schedules ---------------------------------------------
 
-            stats = {
-                'generated': 0,
-                'skipped': 0,
-                'orphan_deleted': 0,
-                'db_count_fixed': 0,
-                'meta_extracted': 0,
-                'no_duration': 0,
-                'not_video': 0,
-                'failed': 0,
-                # File-explorer thumbnail cache (filled in at the end)
-                'explorer_pruned': 0,
-                'explorer_kept': 0,
-                'explorer_freed': 0,
-            }
+        @self.app.route("/api/jobs/schedules", methods=["GET"])
+        @token_required
+        def api_job_schedules():
+            """Every job with its schedule, last outcome and next fire time.
 
-            import asyncio as _asyncio
-            loop = _asyncio.new_event_loop()
+            Times are the server's local wall clock, which is what `tz` names
+            so the UI can say so rather than implying the browser's zone.
+            """
+            schedules = read_schedules()
+            for entry in schedules.values():
+                upcoming = next_run(entry)
+                entry['next_run'] = upcoming.isoformat() if upcoming else None
+            return jsonify({
+                "jobs": [{"id": job_id, "label": job["label"]} for job_id, job in JOBS.items()],
+                "schedules": schedules,
+                "tz": datetime.now().astimezone().tzname(),
+                "server_time": datetime.now().isoformat(),
+            })
 
-            for dl in completed:
-                file_name = dl.get('file')
-                if not file_name or not is_video_file(file_name):
-                    stats['not_video'] += 1
-                    continue
-
-                dl_id = dl['id']
-                thumb_dir = SCREENSHOTS_DIR / str(dl_id)
-                has_thumbs = thumb_dir.exists() and any(thumb_dir.glob('*.jpg'))
-                file_path = find_file(file_name, dl.get('downloaded_from'), dl.get('url'))
-
-                # File missing, thumbnails exist → delete orphans
-                if not file_path and has_thumbs:
-                    shutil.rmtree(thumb_dir, ignore_errors=True)
-                    db.update_download_by_id(dl_id, thumb_count=0)
-                    stats['orphan_deleted'] += 1
-                    continue
-
-                # File missing, no thumbnails → skip
-                if not file_path:
-                    continue
-
-                # File exists, thumbnails exist → sync DB count
-                if has_thumbs:
-                    actual_count = len([f for f in thumb_dir.iterdir() if f.suffix == '.jpg'])
-                    if dl.get('thumb_count') != actual_count:
-                        db.update_download_by_id(dl_id, thumb_count=actual_count)
-                        stats['db_count_fixed'] += 1
-                    stats['skipped'] += 1
-                    continue
-
-                # File exists, thumbnails missing → generate
-                duration = None
-                file_meta = dl.get('file_meta')
-                if file_meta:
-                    duration = file_meta.get('duration') if isinstance(file_meta, dict) else None
-
-                if not duration:
-                    probe_data = loop.run_until_complete(probe_video(str(file_path)))
-                    if probe_data:
-                        meta = extract_meta(probe_data)
-                        if meta.get('video'):
-                            db.update_download_by_id(dl_id, file_meta=_json.dumps(meta))
-                            duration = meta.get('duration')
-                            stats['meta_extracted'] += 1
-
-                if not duration or duration <= 0:
-                    stats['no_duration'] += 1
-                    continue
-
-                count = loop.run_until_complete(gen_thumbs(dl_id, str(file_path), duration))
-                if count:
-                    stats['generated'] += 1
-                else:
-                    stats['failed'] += 1
-
-            loop.close()
-
-            # The explorer's own thumbnail cache is keyed by path, not by
-            # download id, so it needs its own sweep: drop anything whose
-            # source file has since been deleted, moved or replaced.
-            from backend.files import prune_thumb_cache
-            explorer = prune_thumb_cache()
-            stats['explorer_pruned'] = explorer['deleted']
-            stats['explorer_kept'] = explorer['kept']
-            stats['explorer_freed'] = explorer['freed']
-
-            return jsonify(stats)
+        @self.app.route("/api/jobs/schedules/<job_id>", methods=["PUT"])
+        @token_required
+        def api_save_job_schedule(job_id):
+            """Body: {enabled?, time? 'HH:MM', days?: [0-6]} (Monday = 0)."""
+            data = request.json or {}
+            try:
+                entry = save_schedule(
+                    job_id,
+                    enabled=data.get("enabled"),
+                    at=data.get("time"),
+                    days=data.get("days"),
+                )
+            except KeyError:
+                return jsonify({"error": "Unknown job"}), 404
+            except (ValueError, TypeError) as e:
+                return jsonify({"error": str(e)}), 400
+            upcoming = next_run(entry)
+            entry['next_run'] = upcoming.isoformat() if upcoming else None
+            return jsonify({"schedule": entry})
 
