@@ -25,6 +25,26 @@ const PRESETS: { label: string; rule: Partial<RenameRuleInput> }[] = [
     },
   },
   {
+    // Uploader prefixes, all anchored to the start so separators elsewhere in
+    // the title are untouched:
+    //   www.UIndex.org -  |  1337x.to -  |  @Movie_Tamizhaa ~  |  RF -
+    // The bare-domain branch needs a real TLD and the short-tag branch is
+    // uppercase-only, so dotted scene names ("Movie.Name - Extra") and real
+    // titles ("Movie - The Return") survive intact.
+    label: 'Drop leading tag / site',
+    rule: {
+      name: 'Drop leading tag / site',
+      pattern:
+        '^(?:www\\.[\\w.-]+' +
+        '|[\\w-]+\\.(?:com|org|net|info|biz|tv|to|me|cc|io|in|is|se|nu|ru|la|st|ws|sx' +
+        '|xyz|site|club|co|uk|us|top|link|online|pro|app|mx|ph|id)' +
+        '|@[\\w.]+' +
+        '|[A-Z0-9]{2,5})' +
+        '\\s*[-~|:]\\s*',
+      replacement: '',
+    },
+  },
+  {
     label: 'Dots to spaces',
     rule: { name: 'Dots to spaces', pattern: '(?<=\\w)[._](?=\\w)', replacement: ' ' },
   },
@@ -34,7 +54,7 @@ const PRESETS: { label: string; rule: Partial<RenameRuleInput> }[] = [
   },
   {
     label: 'Year in brackets',
-    rule: { name: 'Year in brackets', pattern: '[.\\s](19|20)(\\d{2})\\b', replacement: ' ($1$2)' },
+    rule: { name: 'Year in brackets', pattern: '[.\\s](19|20)(\\d{2})\\b', replacement: ' (\\1\\2)' },
   },
 ];
 
@@ -98,6 +118,10 @@ function RuleEditor({
             onChange={(e) => onChange({ ...value, replacement: e.target.value })}
             spellCheck={false}
           />
+          <p className="text-[11px] text-slate-500 mt-1">
+            Captured groups are <code className="text-slate-400">\1</code>,{' '}
+            <code className="text-slate-400">\2</code> — not <code>$1</code>.
+          </p>
         </div>
       </div>
 

@@ -119,6 +119,14 @@ def validate_rule(pattern: str, replacement: str = ''):
         compiled.sub(replacement or '', '')
     except re.error as e:
         raise InvalidPattern(f'Invalid replacement: {e}')
+
+    # Python's re uses \1, not the $1 of JavaScript/sed. A $1 alongside actual
+    # capture groups compiles fine and silently writes a literal "$1" into the
+    # filename, so catch it here rather than letting it reach a real file.
+    if compiled.groups and re.search(r'\$\d', replacement or ''):
+        raise InvalidPattern(
+            'Use \\1, \\2 for captured groups (Python syntax), not $1, $2')
+
     return compiled
 
 
