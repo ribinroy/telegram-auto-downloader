@@ -427,14 +427,14 @@ export function VpsSettings({ onChange }: { onChange?: () => void }) {
               return (
                 <div
                   key={f.id}
-                  className={`flex items-center gap-2 rounded-lg p-2.5 ${inactive ? 'bg-slate-800/30 opacity-60' : 'bg-slate-700/30'}`}
+                  className={`flex items-center gap-2 rounded-lg p-2.5 ${inactive ? 'bg-slate-800/30' : 'bg-slate-700/30'}`}
                 >
                   <Folder className={`w-4 h-4 shrink-0 ${inactive ? 'text-slate-500' : 'text-cyan-400'}`} />
                   <div className="flex-1 min-w-0">
                     <span className={`block text-sm truncate ${inactive ? 'text-slate-400' : 'text-slate-200'}`} title={f.path}>{f.path}</span>
                     {inactive ? (
                       <span className="text-[11px] text-slate-500">
-                        {f.username ? `${f.username}@${f.host}` : f.host} — connect to this VPS to manage
+                        {f.username ? `${f.username}@${f.host}` : f.host} — connect to this VPS to change its settings
                       </span>
                     ) : (
                       <span className="block text-[11px] text-slate-500 truncate" title={f.folder || undefined}>
@@ -478,11 +478,15 @@ export function VpsSettings({ onChange }: { onChange?: () => void }) {
                     <span className={`w-2 h-2 rounded-full ${f.auto_sync && !inactive ? 'bg-purple-400' : 'bg-slate-500'}`} />
                     autoSync
                   </button>
+                  {/* Always available: removing a watched folder only deletes a
+                      database row (and an in-memory autoSync baseline), so it
+                      must not require reaching the VPS it belongs to -
+                      otherwise a folder on a server you no longer have is
+                      stuck in the list forever. */}
                   <button
                     onClick={() => handleDeleteFolder(f.id)}
-                    disabled={inactive}
-                    className="p-1.5 bg-slate-600/50 hover:bg-red-500/20 text-slate-400 hover:text-red-400 rounded-lg transition-colors shrink-0 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-slate-600/50 disabled:hover:text-slate-400"
-                    title="Remove folder"
+                    className="p-1.5 bg-slate-600/50 hover:bg-red-500/20 text-slate-400 hover:text-red-400 rounded-lg transition-colors shrink-0"
+                    title={inactive ? 'Remove folder (no connection needed)' : 'Remove folder'}
                   >
                     <Trash2 className="w-4 h-4" />
                   </button>
