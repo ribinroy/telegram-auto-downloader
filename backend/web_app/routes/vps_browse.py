@@ -17,7 +17,9 @@ from backend.web_app.torrent import (
     load_torrent_config, apply_torrent_session, transmission_add_magnet,
     transmission_rpc, normalize_transmission_url,
 )
-from backend.web_app.vps import load_vps_credentials, annotate_vps_folders, open_vps_sftp
+from backend.web_app.vps import (
+    load_vps_credentials, annotate_vps_folders, open_vps_sftp, vps_disk_usage,
+)
 from backend.web_app.helpers import candidate_file_paths
 
 
@@ -175,6 +177,67 @@ class VpsBrowseRoutesMixin:
                 else:
                     self.vps_downloader.forget_folder(updated["path"])
             return jsonify({"folder": updated, "folders": annotate_vps_folders(db.get_vps_watch_folders())})
+
+        # Account usage is two SSH/HTTP round-trips to a box across the
+        # internet, so it is cached briefly - several panels (and a poll) asking
+        # at once should not mean several SSH logins.
+        _usage_cache = {"at": 0.0, "data": None}
+        USAGE_TTL = 60
+
+        @self.app.route("/api/vps/usage", methods=["GET"])
+        @token_required
+        def vps_usage():
+            """Seedbox account usage: disk (per-user quota) + per-client traffic.
+
+            {host, disk:{used,limit,percent,filesystem,source}|null,
+             disk_error?, clients:[{client, downloaded, uploaded, ratio,
+             session_downloaded, session_uploaded, free_space, error?}],
+             traffic:{downloaded, uploaded}, cached_at}
+
+            Traffic is what the torrent clients themselves report, not the
+            provider's metered figure - seedhost exposes no per-account counter
+            on the box (no vnstat, no traffic file), so this is the honest
+            closest thing and is labelled as such in the UI.
+            """
+            import time
+            from backend.web_app.torrent import CLIENTS, torrent_stats
+
+            now = time.time()
+            if not request.args.get("refresh") and _usage_cache["data"] \
+                    and now - _usage_cache["at"] < USAGE_TTL:
+                return jsonify(_usage_cache["data"])
+
+            creds = load_vps_credentials()
+            payload = {
+                "host": creds["host"] if creds else None,
+                "disk": None,
+                "clients": [],
+                "traffic": {"downloaded": 0, "uploaded": 0},
+                "cached_at": now,
+            }
+
+            if creds:
+                try:
+                    payload["disk"] = vps_disk_usage()
+                except Exception as e:
+                    payload["disk_error"] = str(e)
+            else:
+                payload["disk_error"] = "VPS connection is not configured"
+
+            for client in CLIENTS:
+                if not load_torrent_config(client):
+                    continue
+                try:
+                    st = torrent_stats(client)
+                    payload["clients"].append({"client": client, **st})
+                    payload["traffic"]["downloaded"] += st.get("downloaded") or 0
+                    payload["traffic"]["uploaded"] += st.get("uploaded") or 0
+                except Exception as e:
+                    # One client being down must not hide the other's numbers.
+                    payload["clients"].append({"client": client, "error": str(e)})
+
+            _usage_cache.update(at=now, data=payload)
+            return jsonify(payload)
 
         @self.app.route("/api/vps/files", methods=["GET"])
         @token_required

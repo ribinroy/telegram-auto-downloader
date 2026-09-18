@@ -20,6 +20,7 @@ export const qk = {
   vpsConfig: () => ['vps', 'config'] as const,
   vpsFolders: () => ['vps', 'folders'] as const,
   vpsFiles: (showSecured: boolean) => ['vps', 'files', showSecured] as const,
+  vpsUsage: () => ['vps', 'usage'] as const,
 
   torrentConfig: () => ['torrent', 'config'] as const,
   torrentList: (client: TorrentClient) => ['torrent', 'list', client] as const,

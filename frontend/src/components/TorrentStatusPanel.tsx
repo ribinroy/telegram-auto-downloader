@@ -334,7 +334,6 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
                   <Tooltip content="Already downloaded to DownLee" position="top">
                     <span className="flex items-center gap-1.5 py-1.5 px-2.5 rounded-lg bg-green-500/15 text-green-400 border border-green-500/30 cursor-default">
                       <CheckCircle className="w-4 h-4" />
-                      <span className="text-xs hidden sm:inline">Downloaded</span>
                     </span>
                   </Tooltip>
                 )}

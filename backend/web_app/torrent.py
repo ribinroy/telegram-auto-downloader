@@ -278,6 +278,23 @@ def transmission_control(cfg, action, hashes, delete_data=False):
     transmission_rpc(method, args, config=cfg)
 
 
+def transmission_stats(cfg):
+    """Global transfer counters in the shared stats shape."""
+    res = transmission_rpc("session-stats", {}, config=cfg)
+    cum = res.get("cumulative-stats") or {}
+    cur = res.get("current-stats") or {}
+    down = cum.get("downloadedBytes") or 0
+    up = cum.get("uploadedBytes") or 0
+    return {
+        "downloaded": down,
+        "uploaded": up,
+        "session_downloaded": cur.get("downloadedBytes") or 0,
+        "session_uploaded": cur.get("uploadedBytes") or 0,
+        "ratio": round(up / down, 2) if down else None,
+        "free_space": None,
+    }
+
+
 def transmission_set_location(cfg, hashes, location):
     transmission_rpc("torrent-set-location",
                      {"ids": hashes, "location": location, "move": True}, config=cfg)
@@ -336,6 +353,16 @@ def torrent_get(client, torrent_hash, config=None):
         from backend.web_app.qbittorrent import qbit_get
         return qbit_get(cfg, torrent_hash)
     return transmission_get(cfg, torrent_hash)
+
+
+def torrent_stats(client, config=None):
+    """Global up/down counters for a client: {downloaded, uploaded, ratio,
+    session_downloaded, session_uploaded, free_space}."""
+    cfg = _resolve(client, config)
+    if client == "qbittorrent":
+        from backend.web_app.qbittorrent import qbit_stats
+        return qbit_stats(cfg)
+    return transmission_stats(cfg)
 
 
 def torrent_control(client, action, hashes, delete_data=False, config=None):

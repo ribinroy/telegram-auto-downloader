@@ -749,6 +749,40 @@ export async function deleteVpsConfig(): Promise<{ status?: string; configured?:
   return response.json();
 }
 
+/** Seedbox account usage: per-user disk quota + per-client traffic counters. */
+export interface VpsClientStats {
+  client: TorrentClient;
+  downloaded?: number;
+  uploaded?: number;
+  ratio?: number | null;
+  session_downloaded?: number;
+  session_uploaded?: number;
+  free_space?: number | null;
+  error?: string;
+}
+
+export interface VpsUsage {
+  host: string | null;
+  disk: {
+    used: number;
+    limit: number;
+    percent: number | null;
+    filesystem: string;
+    /** 'quota' = the per-account limit; 'df' = the shared volume (a fallback). */
+    source: 'quota' | 'df';
+  } | null;
+  disk_error?: string;
+  clients: VpsClientStats[];
+  traffic: { downloaded: number; uploaded: number };
+  cached_at: number;
+}
+
+export async function fetchVpsUsage(refresh = false): Promise<VpsUsage> {
+  const response = await authFetch(`/api/vps/usage${refresh ? '?refresh=1' : ''}`);
+  if (response.status === 401) { clearToken(); window.location.reload(); }
+  return response.json();
+}
+
 // Torrent client (Transmission on the VPS) API
 export type TorrentClient = 'transmission' | 'qbittorrent';
 

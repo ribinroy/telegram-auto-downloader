@@ -193,6 +193,32 @@ def qbit_get(cfg, torrent_hash):
     return _normalize(data[0]) if data else None
 
 
+def qbit_stats(cfg):
+    """Global transfer counters in the shared stats shape.
+
+    `alltime_*` survives restarts (qBittorrent persists it); `dl_info_data` /
+    `up_info_data` are this session only, so both are reported - a seedbox's
+    allowance cares about the former, "what has it moved today" about the latter.
+    """
+    opener, base = qbit_login(cfg)
+    info = _qbit_request(cfg, "/api/v2/transfer/info", expect_json=True,
+                         opener=opener, base=base) or {}
+    state = (_qbit_request(cfg, "/api/v2/sync/maindata?rid=0", expect_json=True,
+                           opener=opener, base=base) or {}).get("server_state") or {}
+    try:
+        ratio = float(state.get("global_ratio"))
+    except (TypeError, ValueError):
+        ratio = None
+    return {
+        "downloaded": state.get("alltime_dl") or info.get("dl_info_data") or 0,
+        "uploaded": state.get("alltime_ul") or info.get("up_info_data") or 0,
+        "session_downloaded": info.get("dl_info_data") or 0,
+        "session_uploaded": info.get("up_info_data") or 0,
+        "ratio": ratio,
+        "free_space": state.get("free_space_on_disk"),
+    }
+
+
 def qbit_add_magnet(cfg, magnet, download_dir=None, incomplete_dir=None, paused=False):
     """Add a magnet. Applies the temp dir first when given (session-wide). Returns
     {name, hash, duplicate}; name is None until metadata arrives."""

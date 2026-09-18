@@ -80,3 +80,85 @@ def open_vps_sftp(timeout=10):
         transport.set_keepalive(30)
     return client, client.open_sftp()
 
+
+
+def _parse_quota(text: str):
+    """Parse `quota -w` output into (used_bytes, limit_bytes, filesystem).
+
+    The interesting line is the one starting with a device path:
+
+        Filesystem  blocks   quota   limit   grace   files  quota  limit  grace
+          /dev/sdu1 384836764  1953125000      0            302      0      0
+
+    Numbers are 1K blocks. `quota` is the soft limit and `limit` the hard one;
+    a seedbox usually sets only the soft one, and either may be 0 for "none",
+    so the cap is whichever is set (the smaller when both are). A `*` suffix on
+    the used figure means over quota - stripped rather than choked on.
+    """
+    for line in (text or "").splitlines():
+        parts = line.split()
+        if len(parts) < 4 or not parts[0].startswith("/"):
+            continue
+        try:
+            used = int(parts[1].rstrip("*"))
+            soft = int(parts[2].rstrip("*"))
+            hard = int(parts[3].rstrip("*"))
+        except ValueError:
+            continue
+        caps = [c for c in (soft, hard) if c > 0]
+        limit = min(caps) if caps else 0
+        return used * 1024, limit * 1024, parts[0]
+    return None
+
+
+def _parse_df(text: str):
+    """Fallback for a box without quotas: `df -Pk $HOME`'s data line."""
+    lines = [l for l in (text or "").splitlines() if l.strip()]
+    for line in lines[1:]:
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+        try:
+            used, avail = int(parts[2]), int(parts[3])
+        except ValueError:
+            continue
+        # A shared seedbox volume's total is the whole array, which says nothing
+        # about the account - but used+avail is at least an honest ceiling.
+        return used * 1024, (used + avail) * 1024, parts[0]
+    return None
+
+
+def vps_disk_usage(timeout=15):
+    """Account disk usage on the VPS: {used, limit, percent, filesystem, source}.
+
+    Prefers the per-user quota, which is what a seedbox actually bills against;
+    `df` only sees the shared volume, so it is a clearly-labelled fallback.
+    """
+    client, sftp = open_vps_sftp(timeout=timeout)
+    try:
+        try:
+            sftp.close()
+        except Exception:
+            pass
+
+        def run(cmd):
+            _, out, err = client.exec_command(cmd, timeout=timeout)
+            return out.read().decode(errors="replace") + err.read().decode(errors="replace")
+
+        parsed, source = _parse_quota(run("quota -w 2>/dev/null")), "quota"
+        if not parsed or not parsed[1]:
+            df = _parse_df(run('df -Pk "$HOME" 2>/dev/null'))
+            if df:
+                parsed, source = df, "df"
+        if not parsed:
+            return None
+        used, limit, fs = parsed
+        return {
+            "used": used,
+            "limit": limit,
+            "percent": round(used / limit * 100, 1) if limit else None,
+            "filesystem": fs,
+            "source": source,
+        }
+    finally:
+        client.close()
