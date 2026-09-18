@@ -59,6 +59,21 @@ class RedactSecretsFilter(logging.Filter):
         return True
 
 
+class PrivateRotatingFileHandler(RotatingFileHandler):
+    """RotatingFileHandler that keeps every file it creates owner-only.
+
+    Chmod'ing once at startup is not enough: a rollover creates a brand new
+    file, which lands with whatever the process umask says - 644 here - so the
+    log quietly became world-readable again the first time it rotated. `_open`
+    runs on startup *and* after every rollover, which is exactly the hook needed.
+    """
+
+    def _open(self):
+        stream = super()._open()
+        _chmod(self.baseFilename, LOG_MODE)
+        return stream
+
+
 def _chmod(path, mode):
     """Best effort: a permissions failure must never stop the service booting."""
     try:
@@ -71,7 +86,7 @@ def install(log_file, level=logging.INFO,
             fmt="%(asctime)s [%(levelname)s] %(message)s"):
     """Configure root logging: rotating, owner-only, secrets redacted."""
     log_file = str(log_file)
-    handler = RotatingFileHandler(
+    handler = PrivateRotatingFileHandler(
         log_file, maxBytes=MAX_BYTES, backupCount=BACKUP_COUNT, encoding='utf-8')
     handler.setFormatter(logging.Formatter(fmt))
     # On the handler as well as the root logger: a handler added later (or a
