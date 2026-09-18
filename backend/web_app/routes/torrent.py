@@ -217,11 +217,41 @@ class TorrentRoutesMixin:
                 "download_dir": download_dir or None,
             })
 
+        def _annotate_downlee_transfers(torrents):
+            """Tag each torrent with the VPS->DownLee transfer that already pulled it.
+
+            The UI reads this to show "Downloaded" instead of offering the pull
+            again. Matching is by the remote path the download button would use
+            (<download_dir>/<name>), falling back to the basename of the
+            recorded path: a torrent finished through the Telegram flow is
+            pulled from whichever directory it sat in at the time (temp or
+            final), so the exact path can differ from the one it has now.
+            Downloads are newest-first, so the fallback picks the latest attempt."""
+            by_path, by_name = {}, {}
+            for d in get_db().get_all_downloads():
+                if d.get("downloaded_from") != "vps" or not d.get("url"):
+                    continue
+                remote = d["url"]
+                by_path.setdefault(remote, d)
+                by_name.setdefault(posixpath.basename(remote.rstrip("/")), d)
+            for t in torrents:
+                name = t.get("name") or ""
+                path = posixpath.join((t.get("download_dir") or "").rstrip("/"), name)
+                dl = by_path.get(path) or by_name.get(name)
+                t["downlee"] = {
+                    "id": dl["id"],
+                    "message_id": dl.get("message_id"),
+                    "status": dl.get("status"),
+                    "progress": dl.get("progress") or 0,
+                } if dl else None
+            return torrents
+
         @self.app.route("/api/torrent/list", methods=["GET"])
         @token_required
         def list_torrents():
             """List torrents for a client (?client=...) with live status.
-            Returns {configured, torrents:[...]}."""
+            Returns {configured, torrents:[...]}; each torrent carries a
+            `downlee` block when it has already been pulled to DownLee."""
             client = (request.args.get("client") or "transmission").strip()
             if client not in CLIENTS:
                 return jsonify({"error": "Unknown torrent client"}), 400
@@ -231,7 +261,7 @@ class TorrentRoutesMixin:
                 torrents = torrent_list(client)
             except ValueError as e:
                 return jsonify({"configured": True, "error": str(e)}), 502
-            return jsonify({"configured": True, "torrents": torrents})
+            return jsonify({"configured": True, "torrents": _annotate_downlee_transfers(torrents)})
 
         @self.app.route("/api/torrent/action", methods=["POST"])
         @token_required

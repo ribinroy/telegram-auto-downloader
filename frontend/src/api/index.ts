@@ -830,6 +830,8 @@ export interface TorrentStatus {
   seeds_total: number | null;
   leeches_total: number | null;
   added_date: number;
+  /** The VPS->DownLee transfer that already pulled this torrent, if any. */
+  downlee: { id: number; message_id: string | null; status: string | null; progress: number } | null;
 }
 
 export async function fetchTorrentList(client: TorrentClient): Promise<{ configured: boolean; torrents?: TorrentStatus[]; error?: string }> {

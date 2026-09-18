@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Magnet, ArrowDown, ArrowUp, Play, Pause, Trash2, Loader2, Search, X, Check, Sprout, Users, RotateCw,
+  CheckCircle,
 } from 'lucide-react';
 import { type TorrentStatus, type TorrentClient } from '../api';
 import { formatBytes, formatTime } from '../utils/format';
@@ -10,6 +11,7 @@ import { ROUTES } from '../routes';
 import { useNavigate } from 'react-router-dom';
 import { useTorrentList, useTorrentAction } from '../hooks/useTorrents';
 import { useDownloadVpsFile } from '../hooks/useVps';
+import { useLayoutContext } from './Layout';
 
 const STATUS_STYLES: Record<TorrentStatus['status'], { label: string; cls: string }> = {
   downloading: { label: 'Downloading', cls: 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30' },
@@ -24,6 +26,8 @@ const STATUS_STYLES: Record<TorrentStatus['status'], { label: string; cls: strin
 
 export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentClient; onCountChange?: (n: number) => void }) {
   const navigate = useNavigate();
+  // Live transfer progress (WebSocket-backed) for torrents already pulled to DownLee.
+  const { downloads, onRetry } = useLayoutContext();
   const listQuery = useTorrentList(client);
   const actionMut = useTorrentAction();
   const downloadFile = useDownloadVpsFile();
@@ -40,7 +44,8 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [sortBy, setSortBy] = useState<'created' | 'name' | 'status'>('created');
-  // DownLee transfer state: torrents with a transfer being started / already started.
+  // DownLee transfer state: the request in flight, plus an optimistic marker
+  // that bridges the gap until the list refetch carries the server's own answer.
   const [dlBusy, setDlBusy] = useState<Set<string>>(new Set());
   const [dlStarted, setDlStarted] = useState<Set<string>>(new Set());
   // Multi-select: chosen torrent hashes + whether the bulk remove dialog is open.
@@ -288,7 +293,20 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
         const isBusy = busy.has(t.hash);
         const done = t.percent_done >= 100;
         const dlInFlight = dlBusy.has(t.hash);
-        const dlDone = dlStarted.has(t.hash);
+        // The transfer this torrent was already pulled through, if any. The
+        // server's match survives reloads; the shared downloads list (fed by the
+        // WebSocket) overrides it while a transfer is actually running.
+        const transfer = t.downlee;
+        const live = transfer?.message_id
+          ? downloads.find(d => d.message_id === transfer.message_id)
+          : undefined;
+        const dlStatus = live?.status ?? transfer?.status ?? null;
+        const dlProgress = live?.progress ?? transfer?.progress ?? 0;
+        const dlDone = dlStatus === 'done';
+        // dlStarted covers the window between "transfer accepted" and the list
+        // refetch that first reports it.
+        const dlRunning = dlStatus === 'downloading' || (!dlStatus && dlStarted.has(t.hash));
+        const dlRetryable = (dlStatus === 'failed' || dlStatus === 'stopped') && !!transfer;
         return (
           <div
             key={t.hash}
@@ -311,8 +329,36 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
               <span className="text-sm sm:text-base text-white font-medium truncate min-w-0 flex-1" title={t.name}>{t.name}</span>
               <div className="flex items-center gap-2 shrink-0">
                 <span className={`text-xs border rounded-full px-2 py-0.5 ${style.cls}`}>{style.label}</span>
-                {done && (
-                  <Tooltip content={dlDone ? 'Sent to DownLee' : 'Download to DownLee'} position="top">
+                {/* DownLee transfer: already pulled, in flight, retryable, or offered. */}
+                {done && dlDone && (
+                  <Tooltip content="Already downloaded to DownLee" position="top">
+                    <span className="flex items-center gap-1.5 py-1.5 px-2.5 rounded-lg bg-green-500/15 text-green-400 border border-green-500/30 cursor-default">
+                      <CheckCircle className="w-4 h-4" />
+                      <span className="text-xs hidden sm:inline">Downloaded</span>
+                    </span>
+                  </Tooltip>
+                )}
+                {done && !dlDone && dlRunning && (
+                  <Tooltip content="Downloading to DownLee" position="top">
+                    <span className="flex items-center gap-1.5 py-1.5 px-2.5 rounded-lg bg-cyan-500/15 text-cyan-400 border border-cyan-500/30 cursor-default">
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span className="text-xs">{Math.round(dlProgress)}%</span>
+                    </span>
+                  </Tooltip>
+                )}
+                {done && !dlDone && !dlRunning && dlRetryable && (
+                  <Tooltip content={`Transfer to DownLee ${dlStatus} — retry`} position="top">
+                    <button
+                      onClick={() => onRetry(transfer!.id)}
+                      className="flex items-center gap-1.5 py-1.5 px-2.5 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 transition-colors"
+                    >
+                      <RotateCw className="w-4 h-4" />
+                      <ArrowDown className="w-3.5 h-3.5" />
+                    </button>
+                  </Tooltip>
+                )}
+                {done && !dlDone && !dlRunning && !dlRetryable && (
+                  <Tooltip content="Download to DownLee" position="top">
                     <button
                       onClick={() => downloadToDownlee(t)}
                       disabled={dlInFlight}
@@ -320,9 +366,7 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
                     >
                       {dlInFlight
                         ? <Loader2 className="w-4 h-4 animate-spin" />
-                        : dlDone
-                          ? <Check className="w-4 h-4 text-green-400" />
-                          : <img src="/logo.png" alt="" className="w-4 h-4" />}
+                        : <img src="/logo.png" alt="" className="w-4 h-4" />}
                       <ArrowDown className="w-3.5 h-3.5" />
                     </button>
                   </Tooltip>
