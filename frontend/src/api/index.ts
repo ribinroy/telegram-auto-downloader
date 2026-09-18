@@ -906,6 +906,9 @@ export interface TorrentStatus {
   seeds_total: number | null;
   leeches_total: number | null;
   added_date: number;
+  /** Running ahead of the client's queue. null = Transmission, which has no
+   *  persistent forced flag, so "not forced" can't be claimed either way. */
+  force_start: boolean | null;
   /** The VPS->DownLee transfer that already pulled this torrent, if any. */
   downlee: { id: number; message_id: string | null; status: string | null; progress: number } | null;
 }
@@ -916,8 +919,11 @@ export async function fetchTorrentList(client: TorrentClient): Promise<{ configu
   return response.json();
 }
 
+/** 'force-start' jumps the client's own download queue. */
+export type TorrentActionName = 'start' | 'force-start' | 'stop' | 'remove' | 'verify';
+
 export async function torrentAction(
-  client: TorrentClient, action: 'start' | 'stop' | 'remove' | 'verify', hashes: string[], deleteData = false
+  client: TorrentClient, action: TorrentActionName, hashes: string[], deleteData = false
 ): Promise<{ status?: string; error?: string }> {
   const response = await authFetch(`/api/torrent/action`, {
     method: 'POST',

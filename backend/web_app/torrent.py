@@ -237,6 +237,10 @@ def _transmission_normalize(t):
         "peers_connected": t.get("peersConnected") or 0,
         "seeds_connected": t.get("peersSendingToUs") or 0,
         "leeches_connected": t.get("peersGettingFromUs") or 0,
+        # Transmission has no persistent "forced" flag - torrent-start-now
+        # jumps the queue once and nothing records it - so this stays unknown
+        # rather than claiming a torrent is not forced when we cannot tell.
+        "force_start": None,
         "seeds_total": tracker_max(stats, "seederCount"),
         "leeches_total": tracker_max(stats, "leecherCount"),
     }
@@ -271,7 +275,10 @@ def transmission_control(cfg, action, hashes, delete_data=False):
         transmission_rpc("torrent-verify", {"ids": hashes}, config=cfg)
         transmission_rpc("torrent-start", {"ids": hashes}, config=cfg)
         return
-    method = {"start": "torrent-start", "stop": "torrent-stop", "remove": "torrent-remove"}[action]
+    # torrent-start-now jumps the download queue; plain torrent-start just
+    # queues it, which on a busy seedbox can mean nothing visibly happens.
+    method = {"start": "torrent-start", "force-start": "torrent-start-now",
+              "stop": "torrent-stop", "remove": "torrent-remove"}[action]
     args = {"ids": hashes}  # Transmission accepts hash strings as ids
     if action == "remove" and delete_data:
         args["delete-local-data"] = True

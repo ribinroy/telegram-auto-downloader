@@ -3,7 +3,7 @@ import {
   fetchTorrentConfig, fetchTorrentList, saveTorrentConfig, deleteTorrentConfig,
   testTorrentConnection, setTelegramDefault, torrentAction, addTorrent, addTorrentFile,
   setStopOnComplete,
-  type TorrentClient,
+  type TorrentClient, type TorrentActionName,
 } from '../api';
 import { qk } from '../api/queryKeys';
 
@@ -69,7 +69,7 @@ export function useSetStopOnComplete() {
 export function useTorrentAction() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (vars: { client: TorrentClient; action: 'start' | 'stop' | 'remove' | 'verify'; hashes: string[]; deleteData?: boolean }) =>
+    mutationFn: (vars: { client: TorrentClient; action: TorrentActionName; hashes: string[]; deleteData?: boolean }) =>
       torrentAction(vars.client, vars.action, vars.hashes, vars.deleteData),
     onSuccess: (_data, vars) => qc.invalidateQueries({ queryKey: qk.torrentList(vars.client) }),
   });

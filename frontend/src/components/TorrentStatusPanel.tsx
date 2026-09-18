@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Magnet, ArrowDown, ArrowUp, Play, Pause, Trash2, Loader2, Search, X, Check, Sprout, Users, RotateCw,
+  Zap,
   CheckCircle,
 } from 'lucide-react';
-import { type TorrentStatus, type TorrentClient } from '../api';
+import { type TorrentStatus, type TorrentClient, type TorrentActionName } from '../api';
 import { formatBytes, formatTime } from '../utils/format';
 import { ConfirmDialog } from './ConfirmDialog';
 import { Tooltip } from './Tooltip';
@@ -59,7 +60,7 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
   onCountChangeRef.current = onCountChange;
   useEffect(() => { onCountChangeRef.current?.(torrents.length); }, [torrents.length]);
 
-  const runAction = async (action: 'start' | 'stop' | 'remove' | 'verify', t: TorrentStatus, deleteData = false) => {
+  const runAction = async (action: TorrentActionName, t: TorrentStatus, deleteData = false) => {
     setBusy(prev => new Set(prev).add(t.hash));
     setActionError(null);
     try {
@@ -71,7 +72,7 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
   };
 
   // Run an action across all currently-selected torrents in one RPC call.
-  const runBulkAction = async (action: 'start' | 'stop' | 'remove', deleteData = false) => {
+  const runBulkAction = async (action: TorrentActionName, deleteData = false) => {
     const hashes = torrents.filter(t => selected.has(t.hash)).map(t => t.hash);
     if (hashes.length === 0) return;
     setBusy(prev => { const next = new Set(prev); hashes.forEach(h => next.add(h)); return next; });
@@ -229,6 +230,14 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
               <Play className="w-4 h-4" /> <span className="hidden sm:inline">Resume</span>
             </button>
             <button
+              onClick={() => runBulkAction('force-start')}
+              disabled={bulkBusy}
+              title="Force start selected - jump the client's download queue"
+              className="flex items-center gap-1.5 py-2 px-2.5 rounded-lg text-sm bg-amber-500/15 hover:bg-amber-500/30 text-amber-300 transition-colors disabled:opacity-50"
+            >
+              <Zap className="w-4 h-4" /> <span className="hidden sm:inline">Force start</span>
+            </button>
+            <button
               onClick={() => runBulkAction('stop')}
               disabled={bulkBusy}
               title="Pause selected"
@@ -290,6 +299,9 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
         const style = STATUS_STYLES[t.status] ?? STATUS_STYLES.unknown;
         const active = t.status === 'downloading';
         const paused = t.status === 'stopped';
+        // null means the client can't report it (Transmission), which is not
+        // the same as false - don't light the button up on a guess.
+        const forced = t.force_start === true;
         const isBusy = busy.has(t.hash);
         const done = t.percent_done >= 100;
         const dlInFlight = dlBusy.has(t.hash);
@@ -329,6 +341,13 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
               <span className="text-sm sm:text-base text-white font-medium truncate min-w-0 flex-1" title={t.name}>{t.name}</span>
               <div className="flex items-center gap-2 shrink-0">
                 <span className={`text-xs border rounded-full px-2 py-0.5 ${style.cls}`}>{style.label}</span>
+                {/* The status label alone can't show this: a forced torrent
+                    still reads "downloading". */}
+                {forced && (
+                  <span className="flex items-center gap-1 text-xs border border-amber-400/40 bg-amber-400/15 text-amber-200 rounded-full px-2 py-0.5">
+                    <Zap className="w-3 h-3 fill-current" /> Forced
+                  </span>
+                )}
                 {/* DownLee transfer: already pulled, in flight, retryable, or offered. */}
                 {done && dlDone && (
                   <Tooltip content="Already downloaded to DownLee" position="top">
@@ -378,6 +397,26 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
                 >
                   {isBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : paused ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
                 </button>
+                {/* Force start: only worth offering while the torrent still has
+                    data to fetch - on a finished one it would just force seeding. */}
+                {!done && (
+                  <button
+                    // Already forced? The same button turns it back off - a
+                    // plain start is exactly what clears the flag.
+                    onClick={() => runAction(forced ? 'start' : 'force-start', t)}
+                    disabled={isBusy}
+                    title={forced
+                      ? 'Force started - running ahead of the queue. Click to return it to the queue.'
+                      : "Force start - jump the client's download queue"}
+                    className={`p-2 rounded-lg transition-colors disabled:opacity-50 ${
+                      forced
+                        ? 'bg-amber-400/30 text-amber-200 ring-1 ring-amber-300/60'
+                        : 'bg-amber-500/15 hover:bg-amber-500/30 text-amber-300'
+                    }`}
+                  >
+                    <Zap className={`w-4 h-4 ${forced ? 'fill-current' : ''}`} />
+                  </button>
+                )}
                 <button
                   onClick={() => setRemoveTarget(t)}
                   disabled={isBusy}

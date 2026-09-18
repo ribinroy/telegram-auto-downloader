@@ -172,6 +172,9 @@ def _normalize(t):
         "peers_connected": (t.get("num_seeds") or 0) + (t.get("num_leechs") or 0),
         "seeds_connected": t.get("num_seeds") or 0,
         "leeches_connected": t.get("num_leechs") or 0,
+        # Running ahead of the queue. qBittorrent reports it per torrent; the
+        # state is a second witness (a forced torrent reads forcedDL/forcedUP).
+        "force_start": bool(t.get("force_start")) or t.get("state") in ("forcedDL", "forcedUP"),
         "seeds_total": t.get("num_complete") if isinstance(t.get("num_complete"), int) and t.get("num_complete") >= 0 else None,
         "leeches_total": t.get("num_incomplete") if isinstance(t.get("num_incomplete"), int) and t.get("num_incomplete") >= 0 else None,
     }
@@ -249,7 +252,7 @@ def _qbit_start(cfg, joined, opener, base):
 
 
 def qbit_control(cfg, action, hashes, delete_data=False):
-    """start | stop | remove | verify one or more torrents (by hash)."""
+    """start | force-start | stop | remove | verify one or more torrents (by hash)."""
     joined = "|".join(hashes)
     opener, base = qbit_login(cfg)
     if action == "remove":
@@ -264,6 +267,14 @@ def qbit_control(cfg, action, hashes, delete_data=False):
         return
     if action == "start":
         _qbit_start(cfg, joined, opener, base)
+        return
+    if action == "force-start":
+        # Order matters: a plain start *clears* the force flag, so setting it
+        # first and starting after is a silent no-op. Start (to cover a stopped
+        # torrent), then force.
+        _qbit_start(cfg, joined, opener, base)
+        _qbit_request(cfg, "/api/v2/torrents/setForceStart",
+                      data={"hashes": joined, "value": "true"}, opener=opener, base=base)
         return
     # stop: qBittorrent 5.x renamed pause -> stop; try new path then legacy on 404.
     res = _qbit_request(cfg, "/api/v2/torrents/stop", data={"hashes": joined},
