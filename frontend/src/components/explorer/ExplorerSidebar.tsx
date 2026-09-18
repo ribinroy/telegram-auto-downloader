@@ -23,20 +23,39 @@ function rootIcon(kind: FileRoot['kind']) {
 }
 
 function RootButton({
-  root, active, onNavigate,
-}: { root: FileRoot; active: boolean; onNavigate: (path: string) => void }) {
+  root, active, containing, onNavigate,
+}: {
+  root: FileRoot;
+  /** The current folder *is* this root. */
+  active: boolean;
+  /** The current folder lives somewhere under this root. */
+  containing: boolean;
+  onNavigate: (path: string) => void;
+}) {
   const isDrive = root.group === 'drive';
+  const here = active || containing;
   return (
     <button
       onClick={() => onNavigate(root.path)}
-      className={`w-full text-left px-3 py-2 rounded-lg transition-colors ${
-        active ? 'bg-slate-700/60' : 'hover:bg-slate-800/60'
+      className={`relative w-full text-left px-3 py-2 rounded-lg transition-colors ${
+        active ? 'bg-slate-700/60' : containing ? 'bg-slate-800/70' : 'hover:bg-slate-800/60'
       }`}
-      title={root.note ? `${root.path} — ${root.note}` : root.path}
+      title={
+        containing ? `${root.path} — you are viewing a folder on this ${isDrive ? 'drive' : 'location'}`
+          : root.note ? `${root.path} — ${root.note}` : root.path
+      }
     >
+      {/* Accent bar rather than a stronger fill: "the drive you are on" has to
+          be distinguishable at a glance from "the folder you are in", and two
+          shades of slate alone aren't. */}
+      {here && (
+        <span className={`absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-full ${
+          active ? 'bg-cyan-400' : 'bg-cyan-500/50'
+        }`} />
+      )}
       <div className="flex items-center gap-2 min-w-0">
         {rootIcon(root.kind)}
-        <span className={`text-sm truncate ${active ? 'text-white' : 'text-slate-300'}`}>
+        <span className={`text-sm truncate ${active ? 'text-white' : containing ? 'text-slate-200' : 'text-slate-300'}`}>
           {root.label}
         </span>
         {isDrive && root.usage && (
@@ -81,9 +100,37 @@ export function ExplorerSidebar({
   const folders = roots.filter(r => r.group === 'folder');
   const configured = roots.filter(r => r.group === 'configured');
 
-  const render = (list: FileRoot[]) => list.map(root => (
-    <RootButton key={root.path} root={root} active={currentPath === root.path} onNavigate={onNavigate} />
-  ));
+  // The entry a group considers "open": the deepest root the current folder
+  // sits under. Resolved per group and per longest prefix, so browsing
+  // /mnt/disk/Movies marks the drive it lives on *and* the DownLee folder that
+  // points there - without every parent (and '/', prefix of everything)
+  // lighting up at once.
+  const containerOf = (list: FileRoot[]) => {
+    let best: string | null = null;
+    for (const root of list) {
+      const prefix = root.path.endsWith('/') ? root.path : `${root.path}/`;
+      const holds = currentPath === root.path || currentPath.startsWith(prefix);
+      if (holds && (best === null || root.path.length > best.length)) best = root.path;
+    }
+    // Standing on the root itself is `active`, not `containing`. Exact matches
+    // have to win the contest first, though: drop them earlier and sitting at
+    // /mnt/disk would light up '/' instead, which reads as "this drive is on
+    // the root filesystem" - the opposite of true for a mount point.
+    return best === currentPath ? null : best;
+  };
+
+  const render = (list: FileRoot[]) => {
+    const container = containerOf(list);
+    return list.map(root => (
+      <RootButton
+        key={root.path}
+        root={root}
+        active={currentPath === root.path}
+        containing={root.path === container}
+        onNavigate={onNavigate}
+      />
+    ));
+  };
 
   return (
     <nav className="space-y-1">

@@ -468,7 +468,11 @@ a pulled USB drive disappears from the sidebar.
   Destinations of `is_secured` sources/watched folders are omitted unless
   `?include_hidden=true` (the page passes the Layout's `showSecured`), and a
   folder that a plain source also points at still shows but drops the secured
-  name from its note.
+  name from its note. The sidebar marks two things, not one: the root you are
+  *at* (exact path, bright accent) and the root you are *inside* (longest path
+  prefix, dim accent), resolved per group - so a folder deep on a disk lights up
+  both its drive and the DownLee folder pointing there. Exact matches win the
+  prefix contest first, otherwise standing on a mount point would highlight `/`.
 - **Reads go anywhere** the service account can reach. **Writes** go through
   `guard_write()`: anything on a mount other than `/` is fair game (that is where
   a media library lives), while `PROTECTED_ROOTS` on the root filesystem
