@@ -12,15 +12,18 @@ from backend.ytdlp_handler import YtdlpDownloader
 from backend.vps_handler import VpsDownloader
 from backend.web_app import WebApp
 from backend.jobs import JobScheduler
+from backend.netwatch import NetworkWatchdog
 
 
 def setup_logging():
-    """Setup logging configuration"""
-    logging.basicConfig(
-        filename=str(LOG_FILE),
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(message)s"
-    )
+    """Rotating, owner-only log with credentials redacted.
+
+    Werkzeug logs the full request line, so a media token handed to a <video>
+    tag used to land in a world-readable file and stay replayable for hours.
+    See backend/logsafe.py.
+    """
+    from backend import logsafe
+    logsafe.install(LOG_FILE)
 
 
 def validate_credentials():
@@ -115,6 +118,19 @@ def main(argv=None):
     # Start the maintenance job scheduler (thumbnail sync, yt-dlp upgrade)
     JobScheduler().start()
     print("⏰ Job scheduler started")
+
+    # Watch the uplink and resume downloads it interrupted
+    from backend.config import NET_WATCHDOG
+    if NET_WATCHDOG:
+        NetworkWatchdog().start()
+        print("📡 Network watchdog started")
+
+    # Stop completed torrents from seeding (per-client setting)
+    from backend.config import TORRENT_WATCH
+    if TORRENT_WATCH:
+        from backend.torrent_watch import TorrentWatcher
+        TorrentWatcher().start()
+        print("🌱 Torrent watcher started")
 
     # Start Telegram client (this will block)
     telegram_downloader.start()

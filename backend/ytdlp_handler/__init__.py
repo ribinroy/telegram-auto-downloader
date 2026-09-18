@@ -6,6 +6,7 @@ import subprocess
 import json
 import re
 import os
+import time
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -354,6 +355,15 @@ class YtdlpDownloader:
                 '--no-mtime',  # Don't set file modification time
                 '--extractor-args', 'generic:impersonate',  # Cloudflare bypass
                 '--js-runtimes', 'node',  # Use Node.js for YouTube JS extraction
+                # Without a socket timeout a dropped uplink leaves the read
+                # blocking on a dead socket: no output, no error, a download
+                # that just sits at 47% forever. Fail the read instead and let
+                # yt-dlp's own retries ride out a short blip; a longer one
+                # exits and the network watchdog picks it back up.
+                '--socket-timeout', '30',
+                '--retries', '10',
+                '--fragment-retries', '10',
+                '--retry-sleep', '5',
             ]
 
             # Add cookies for authentication/Cloudflare bypass
@@ -588,6 +598,48 @@ class YtdlpDownloader:
             asyncio.run_coroutine_threadsafe(poll_and_extract_meta(message_id), loop)
 
         return new_download
+
+    def resume_download(self, download, loop, force: bool = False) -> bool:
+        """Restart a yt-dlp download, reusing its record (-c resumes the .part).
+
+        With `force` the running process is killed and *waited for* first: its
+        task sets the record to 'stopped' and clears the registry on its way
+        out, so starting the replacement before it has finished would leave the
+        new download untracked and marked stopped."""
+        url = download.get('url')
+        message_id = download.get('message_id')
+        if not url or not message_id or not loop:
+            return False
+
+        task = self.download_tasks.get(message_id)
+        if task is not None and not task.done():
+            if not force:
+                return True  # already running, nothing to recover
+            self.stop_download(message_id)
+            # Waiting on the future itself proves nothing: cancelling a
+            # run_coroutine_threadsafe future marks it cancelled at once, while
+            # the coroutine is still killing its subprocess. The coroutine
+            # deregisters itself last, so that is what we wait for.
+            deadline = time.time() + 20
+            while self.download_tasks.get(message_id) is task and time.time() < deadline:
+                time.sleep(0.2)
+            if self.download_tasks.get(message_id) is task:
+                logger.warning("yt-dlp download %s did not stop; not restarting it", message_id)
+                return False
+
+        # yt-dlp derives the output name from the title, so the stored filename
+        # (already carrying any rename rule) is fed back as the title.
+        filename = download.get('file') or ''
+        custom_title = filename.rsplit('.', 1)[0] if '.' in filename else (filename or None)
+
+        get_db().update_download_by_message_id(
+            message_id, status='downloading', speed=0, error=None)
+        self.emit_status(message_id, 'downloading')
+
+        future = asyncio.run_coroutine_threadsafe(
+            self.download(url, message_id, None, custom_title), loop)
+        self.download_tasks[message_id] = future
+        return True
 
     def stop_download(self, message_id: str):
         """Stop a running download"""

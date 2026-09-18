@@ -1,5 +1,7 @@
 """VPS SSH/SFTP connection helpers."""
 import json
+import threading
+import time
 from backend.database import get_db
 
 
@@ -72,5 +74,272 @@ def open_vps_sftp(timeout=10):
         hostname=creds["host"], port=creds["port"], username=creds["username"],
         password=creds["password"], timeout=timeout, allow_agent=False, look_for_keys=False,
     )
+    # Keepalives so a transfer notices a dead link. Without them paramiko sits
+    # in a blocking read on a socket the other end has long forgotten, and a
+    # download just stops moving instead of failing (and being resumable).
+    transport = client.get_transport()
+    if transport:
+        transport.set_keepalive(30)
     return client, client.open_sftp()
 
+
+
+# ---------------------------------------------------------------------------
+# Pooled session
+# ---------------------------------------------------------------------------
+# Logging in costs ~0.6s against a listing's ~0.15s, so a file browser that
+# reconnects per click spends four fifths of its time on SSH handshakes. One
+# session is kept warm and handed out under a lock (paramiko channels are not
+# safe to share concurrently), dropped after IDLE_TIMEOUT so a laptop that
+# closed the tab is not holding a connection open on the seedbox all day.
+_POOL = {"client": None, "sftp": None, "at": 0.0, "key": None}
+_POOL_LOCK = threading.RLock()
+IDLE_TIMEOUT = 120
+
+
+def _pool_key(creds):
+    return (creds["host"], creds["port"], creds["username"], creds["password"])
+
+
+def close_pooled_session():
+    """Drop the warm session (credentials changed, or it went bad)."""
+    with _POOL_LOCK:
+        client = _POOL["client"]
+        _POOL.update(client=None, sftp=None, at=0.0, key=None)
+    if client:
+        try:
+            client.close()
+        except Exception:
+            pass
+
+
+class vps_session:
+    """Context manager yielding a warm (client, sftp), reconnecting as needed.
+
+    Holds the pool lock for its body, so callers are serialized - the right
+    trade for a file browser, where every operation is short and a second
+    connection would cost more than the wait. A failure inside the body drops
+    the session rather than handing the next caller a half-dead channel.
+    """
+
+    def __init__(self, timeout=15):
+        self.timeout = timeout
+
+    def __enter__(self):
+        _POOL_LOCK.acquire()
+        try:
+            creds = load_vps_credentials()
+            if not creds:
+                raise ValueError("VPS connection is not configured")
+            key = _pool_key(creds)
+            fresh = (
+                _POOL["client"] is not None
+                and _POOL["key"] == key
+                and time.time() - _POOL["at"] < IDLE_TIMEOUT
+            )
+            if fresh:
+                transport = _POOL["client"].get_transport()
+                if transport is None or not transport.is_active():
+                    fresh = False
+            if not fresh:
+                client = _POOL["client"]
+                _POOL.update(client=None, sftp=None, key=None)
+                if client:
+                    try:
+                        client.close()
+                    except Exception:
+                        pass
+                client, sftp = open_vps_sftp(timeout=self.timeout)
+                _POOL.update(client=client, sftp=sftp, key=key)
+            _POOL["at"] = time.time()
+            return _POOL["client"], _POOL["sftp"]
+        except BaseException:
+            _POOL_LOCK.release()
+            raise
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            if exc_type is not None:
+                # Keep a ValueError (config/user error) from throwing away a
+                # perfectly good connection; a transport error must drop it.
+                if not issubclass(exc_type, ValueError):
+                    client = _POOL["client"]
+                    _POOL.update(client=None, sftp=None, at=0.0, key=None)
+                    if client:
+                        try:
+                            client.close()
+                        except Exception:
+                            pass
+            else:
+                _POOL["at"] = time.time()
+        finally:
+            _POOL_LOCK.release()
+        return False
+
+
+def _parse_quota(text: str):
+    """Parse `quota -w` output into (used_bytes, limit_bytes, filesystem).
+
+    The interesting line is the one starting with a device path:
+
+        Filesystem  blocks   quota   limit   grace   files  quota  limit  grace
+          /dev/sdu1 384836764  1953125000      0            302      0      0
+
+    Numbers are 1K blocks. `quota` is the soft limit and `limit` the hard one;
+    a seedbox usually sets only the soft one, and either may be 0 for "none",
+    so the cap is whichever is set (the smaller when both are). A `*` suffix on
+    the used figure means over quota - stripped rather than choked on.
+    """
+    for line in (text or "").splitlines():
+        parts = line.split()
+        if len(parts) < 4 or not parts[0].startswith("/"):
+            continue
+        try:
+            used = int(parts[1].rstrip("*"))
+            soft = int(parts[2].rstrip("*"))
+            hard = int(parts[3].rstrip("*"))
+        except ValueError:
+            continue
+        caps = [c for c in (soft, hard) if c > 0]
+        limit = min(caps) if caps else 0
+        return used * 1024, limit * 1024, parts[0]
+    return None
+
+
+def _parse_df(text: str):
+    """`df -Pk <path>`'s data line -> the volume's figures.
+
+    {filesystem, mount, total, used, avail, percent}. On a seedbox this is the
+    shared array every tenant's home sits on, not the account - which is why it
+    is reported as the server's storage and never as yours.
+    """
+    for line in [l for l in (text or "").splitlines() if l.strip()][1:]:
+        parts = line.split()
+        if len(parts) < 6:
+            continue
+        try:
+            total, used, avail = int(parts[1]), int(parts[2]), int(parts[3])
+        except ValueError:
+            continue
+        return {
+            "filesystem": parts[0],
+            "mount": parts[5],
+            "total": total * 1024,
+            "used": used * 1024,
+            "avail": avail * 1024,
+            "percent": round(used / total * 100, 1) if total else None,
+        }
+    return None
+
+
+def _parse_loadavg(text: str, cores_text: str):
+    """/proc/loadavg + nproc -> {load1, load5, load15, cores, percent}.
+
+    `percent` is load1 against the core count: a 96-core box at load 16 is
+    busy-ish, not on fire, and the raw number alone reads alarming.
+    """
+    parts = (text or "").split()
+    if len(parts) < 3:
+        return None
+    try:
+        load1, load5, load15 = (float(x) for x in parts[:3])
+    except ValueError:
+        return None
+    try:
+        cores = int((cores_text or "").strip().splitlines()[0])
+    except (ValueError, IndexError):
+        cores = 0
+    return {
+        "load1": load1, "load5": load5, "load15": load15,
+        "cores": cores,
+        "percent": round(load1 / cores * 100, 1) if cores else None,
+    }
+
+
+# Virtual/container interfaces carry no real uplink traffic and would otherwise
+# win on a box with a busy docker bridge.
+_SKIP_IFACES = ("lo", "veth", "docker", "br-", "virbr", "tun", "tap")
+
+
+def _parse_netdev(text: str):
+    """/proc/net/dev -> the busiest physical interface's cumulative counters.
+
+    {iface, rx_bytes, tx_bytes}. These are the *machine's* totals since boot -
+    every tenant combined - because the box exposes no per-account accounting.
+    """
+    best = None
+    for line in (text or "").splitlines():
+        if ":" not in line:
+            continue
+        name, _, rest = line.partition(":")
+        name = name.strip()
+        if not name or name.startswith(_SKIP_IFACES):
+            continue
+        fields = rest.split()
+        if len(fields) < 9:
+            continue
+        try:
+            rx, tx = int(fields[0]), int(fields[8])
+        except ValueError:
+            continue
+        if rx + tx == 0:
+            continue
+        if not best or rx + tx > best["rx_bytes"] + best["tx_bytes"]:
+            best = {"iface": name, "rx_bytes": rx, "tx_bytes": tx}
+    return best
+
+
+# One exec, split on markers: four round-trips to a box across the internet for
+# what is one panel would be silly, and SSH login is the expensive part anyway.
+_SNAPSHOT_CMD = (
+    'quota -w 2>/dev/null; echo "@@DF@@"; df -Pk "$HOME" 2>/dev/null; '
+    'echo "@@CPU@@"; nproc 2>/dev/null; cat /proc/loadavg 2>/dev/null; '
+    'echo "@@NET@@"; cat /proc/net/dev 2>/dev/null'
+)
+
+
+def vps_usage_snapshot(timeout=15):
+    """Everything the usage panel reads off the VPS, in one SSH session.
+
+    Returns {disk, volume, load, net} where `disk` is the per-account quota
+    (what a seedbox bills against) and the rest describe the shared machine.
+    Any individual piece is None when the box does not expose it.
+    """
+    client, sftp = open_vps_sftp(timeout=timeout)
+    try:
+        try:
+            sftp.close()
+        except Exception:
+            pass
+        _, out, err = client.exec_command(_SNAPSHOT_CMD, timeout=timeout)
+        text = out.read().decode(errors="replace") + err.read().decode(errors="replace")
+    finally:
+        client.close()
+
+    quota_txt, _, rest = text.partition("@@DF@@")
+    df_txt, _, rest = rest.partition("@@CPU@@")
+    cpu_txt, _, net_txt = rest.partition("@@NET@@")
+
+    volume = _parse_df(df_txt)
+    quota = _parse_quota(quota_txt)
+    disk = None
+    if quota and quota[1]:
+        used, limit, fs = quota
+        disk = {"used": used, "limit": limit, "filesystem": fs,
+                "percent": round(used / limit * 100, 1), "source": "quota"}
+    elif volume:
+        # No quota set: the account has no cap of its own, so the honest
+        # ceiling is what is left on the shared volume.
+        disk = {"used": volume["used"], "limit": volume["used"] + volume["avail"],
+                "filesystem": volume["filesystem"], "percent": volume["percent"],
+                "source": "df"}
+
+    cpu_lines = cpu_txt.strip().splitlines()
+    load = _parse_loadavg(cpu_lines[1] if len(cpu_lines) > 1 else "",
+                          cpu_lines[0] if cpu_lines else "")
+    return {"disk": disk, "volume": volume, "load": load, "net": _parse_netdev(net_txt)}
+
+
+def vps_disk_usage(timeout=15):
+    """Back-compat wrapper: just the account's disk figures."""
+    return vps_usage_snapshot(timeout=timeout)["disk"]

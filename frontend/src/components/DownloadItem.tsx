@@ -19,12 +19,16 @@ import {
   FolderOpen
 } from 'lucide-react';
 import ReactTimeAgo from 'react-time-ago';
+import { useNavigate } from 'react-router-dom';
 import type { Download } from '../types';
+import { ROUTES } from '../routes';
 import { formatBytes, formatTime, formatSpeed } from '../utils/format';
 import { ConfirmDialog } from './ConfirmDialog';
 import { VideoPlayerModal } from './VideoPlayerModal';
 import { Tooltip } from './Tooltip';
 import { checkVideoFile, getVideoStreamUrl, getThumbUrl } from '../api';
+
+const VIDEO_EXTENSIONS = /\.(mp4|mkv|webm|avi|mov|m4v|flv|wmv)$/i;
 
 interface DownloadItemProps {
   download: Download;
@@ -228,6 +232,14 @@ export function DownloadItem({ download, onRetry, onStop, onPause, onResume, onD
   const showProgressBar = (download.status === 'downloading' || download.status === 'paused' || download.status === 'stopped') && progressPercent > 0;
 
   const isTelegram = download.downloaded_from === 'telegram';
+  const navigate = useNavigate();
+
+  // Icon/tooltip only - what the button actually does is decided by the server's
+  // check, since the record doesn't say whether the item is a file or a folder.
+  const looksLikeVideo = VIDEO_EXTENSIONS.test(download.file || '');
+  const viewLabel = localFileDeleted
+    ? 'Not found - click to re-check'
+    : looksLikeVideo ? 'Play video' : 'Show in Files';
 
   // Build thumb URLs from thumb_count
   const thumbUrls = useMemo(() => {
@@ -345,19 +357,28 @@ export function DownloadItem({ download, onRetry, onStop, onPause, onResume, onD
     setConfirmAction(null);
   };
 
+  // Play a video inline; hand anything else (a folder pull, a non-video file)
+  // to the file explorer, which can actually show it.
   const handleViewClick = async () => {
     setCheckingVideo(true);
     try {
       const result = await checkVideoFile(download.id);
-      if (result.exists) {
-        setLocalFileDeleted(false);
+      if (!result.exists) {
+        setLocalFileDeleted(true);
+        return;
+      }
+      setLocalFileDeleted(false);
+      if (result.kind === 'dir' && result.path) {
+        navigate(`${ROUTES.FILES}?path=${encodeURIComponent(result.path)}`);
+      } else if (result.kind === 'file' && result.parent) {
+        navigate(`${ROUTES.FILES}?path=${encodeURIComponent(result.parent)}`
+          + `&select=${encodeURIComponent(result.path || '')}`);
+      } else {
         setVideoUrl(getVideoStreamUrl(download.id));
         setVideoPlayerOpen(true);
-      } else {
-        setLocalFileDeleted(true);
       }
     } catch (err) {
-      console.error('Failed to check video file:', err);
+      console.error('Failed to check download file:', err);
     } finally {
       setCheckingVideo(false);
     }
@@ -615,12 +636,14 @@ export function DownloadItem({ download, onRetry, onStop, onPause, onResume, onD
                 >
                   {checkingVideo ? (
                     <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
+                  ) : looksLikeVideo ? (
                     <Eye className="w-4 h-4" />
+                  ) : (
+                    <FolderOpen className="w-4 h-4" />
                   )}
                 </button>
                 <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
-                  {localFileDeleted ? 'File not found - click to re-check' : 'Play video'}
+                  {viewLabel}
                 </div>
               </div>
             )}
@@ -845,6 +868,7 @@ export function DownloadItem({ download, onRetry, onStop, onPause, onResume, onD
               <button
                 onClick={handleViewClick}
                 disabled={checkingVideo}
+                title={viewLabel}
                 className={`p-1.5 rounded-lg transition-colors ${
                   localFileDeleted
                     ? 'bg-slate-700/30 text-slate-500'
@@ -853,8 +877,10 @@ export function DownloadItem({ download, onRetry, onStop, onPause, onResume, onD
               >
                 {checkingVideo ? (
                   <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (
+                ) : looksLikeVideo ? (
                   <Eye className="w-4 h-4" />
+                ) : (
+                  <FolderOpen className="w-4 h-4" />
                 )}
               </button>
             )}

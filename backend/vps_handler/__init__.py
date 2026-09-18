@@ -128,6 +128,10 @@ class VpsDownloader:
             downloaded_from='vps',
             url=remote_path,
             author=None,
+            # Remembered so a resume lands in the same folder as the partial
+            # file: `dest` (a torrent client's local folder) can't be derived
+            # from the 'vps' spec later on.
+            dest_base=dest,
         )
         metrics.record_download_started('vps')
         self.emit_new_download(new_download)
@@ -148,7 +152,7 @@ class VpsDownloader:
         self.cancelled.discard(message_id)
         db.update_download_by_message_id(message_id, status='downloading', speed=0, error=None)
         self.emit_status(message_id, 'downloading')
-        self._spawn(dl['url'], message_id)
+        self._spawn(dl['url'], message_id, dl.get('dest_base'))
         return True
 
     def _spawn(self, remote_path: str, message_id: str, dest: str = None):

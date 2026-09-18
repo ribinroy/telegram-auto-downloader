@@ -19,6 +19,9 @@ Main Thread
   |- Flask thread (daemon) ........... REST API + WebSocket (SocketIO, threading mode)
   |- Event loop thread (daemon) ..... asyncio loop for yt-dlp subprocesses
   |- VPS threads (daemon) ........... one thread per SFTP transfer + hourly autoSync loop
+  |- Job scheduler (daemon) ......... fires due maintenance jobs (backend/jobs.py)
+  |- Network watchdog (daemon) ...... resumes downloads the uplink interrupted
+  |- Torrent watcher (daemon) ....... stops completed torrents from seeding
   '- Telegram thread (blocking) ..... Telethon client.start() - blocks main thread
 ```
 
@@ -76,7 +79,12 @@ Main Thread
 |  |- vps_handler/__init__.py       # SFTP download handler + hourly autoSync
 |  |- utils/__init__.py             # Helpers (resolve_spec, encryption, MIME types)
 |  |- files.py                      # Filesystem service for the file explorer (mounts, listing, ops, thumbs)
+|  |- remote_files.py               # The VPS as a second explorer drive, over SFTP (`vps:` paths)
 |  |- jobs.py                       # Maintenance job bodies + schedule store + JobScheduler thread
+|  |- logsafe.py                    # Log redaction filter + rotating, owner-only log handler
+|  |- netwatch.py                   # Connectivity probe + stall sweep -> resumes interrupted downloads
+|  |- torrent_watch.py              # Polls the torrent clients; stops finished torrents from seeding
+|  |- resume.py                     # Single resume path shared by /api/retry and the watchdog
 |  |- file_meta.py                  # Video metadata extraction (ffprobe)
 |  |- browser_downloader.py         # Playwright fallback for yt-dlp
 |  '- metrics/__init__.py           # Prometheus counters
@@ -129,6 +137,7 @@ Main Thread
 - `url` (source URL for yt-dlp), `author`, `error`
 - `file_meta` (JSON: video/audio codec, resolution, bitrate)
 - `thumb_count`, `status_msg_id`
+- `dest_base` (destination folder a VPS transfer was started with, when it isn't derivable from the source spec - e.g. a torrent client's `local_dir`; a resume reads it back so it can't restart into the wrong folder)
 - `deleted_at` (soft delete), `file_deleted` (physical file removed)
 - `created_at`, `updated_at`
 
@@ -179,7 +188,7 @@ Access/refresh token pair. Access tokens are short (`ACCESS_TOKEN_MINUTES`, defa
 - `GET /api/stats` - Aggregate statistics
 - `GET /api/authors` - Distinct author list
 - `GET /api/analytics` - Time-series & breakdown analytics
-- `POST /api/retry` - Retry failed download
+- `POST /api/retry` - Restart a failed/stopped download from the bytes on disk (via `backend/resume.py`; 400/404/500 carry the reason)
 - `POST /api/stop` - Stop active download
 - `POST /api/pause` / `POST /api/resume` - Telegram only
 - `POST /api/delete` - Soft delete
@@ -203,21 +212,50 @@ Access/refresh token pair. Access tokens are short (`ACCESS_TOKEN_MINUTES`, defa
 - `POST /api/settings/vps/browse` / `POST /api/settings/local/browse` - Remote/local folder listing
 - `GET/POST /api/settings/vps/folders`, `PATCH/DELETE /api/settings/vps/folders/<id>` - Watched folders (PATCH: `auto_sync`, `folder`, `is_secured`)
 - `GET /api/vps/files` - Live listing of watched folders
+- `GET /api/vps/usage` - Seedbox usage, cached 60s (`?refresh=1` bypasses). Two different things, which the UI must not blur: **the account** (`disk` - the per-user `quota -w` figure a seedbox actually bills against, falling back to `df` when no quota is set; `traffic`/`clients` - the torrent clients' own cumulative counters) and **the shared machine** (`server.volume`/`load`/`net`, every tenant combined). Per-account traffic is not exposed on a seedhost box at all (no vnstat, no accounting file), so the client counters are the closest honest substitute and are labelled as such. One SSH session runs every probe (`vps_usage_snapshot()` in `web_app/vps.py`, marker-split output). `net` counters are since boot, so `rx_rate`/`tx_rate` come from the delta against the previous poll - absent on the first call, and skipped if the counters went backwards (reboot) or the window is under 5s. UI: `components/VpsUsageBar.tsx`, a strip above the VPS page tabs - quota bar + up/down totals, with the per-client split and the muted server-health row behind a chevron.
 - `POST /api/vps/download` - Download a file/directory to the home server
 - `POST /api/vps/delete-remote` - Delete on the VPS
 
 ### Torrent Clients (Transmission + qBittorrent on the VPS)
-- **Both clients are configurable and live simultaneously.** Config is a nested `torrent_config` setting: `{transmission:{url,username,password_enc,download_dir,incomplete_dir}, qbittorrent:{...}, telegram_default}`. A legacy flat Transmission config auto-migrates on read (`read_torrent_settings()` in `web_app/torrent.py`).
+- **Both clients are configurable and live simultaneously.** Config is a nested `torrent_config` setting: `{transmission:{url,username,password_enc,download_dir,incomplete_dir,local_dir,stop_on_complete}, qbittorrent:{...}, telegram_default}`. A legacy flat Transmission config auto-migrates on read (`read_torrent_settings()` in `web_app/torrent.py`).
 - `web_app/torrent.py` provides **client-agnostic dispatchers** (`torrent_test/add_magnet/list/control/get/set_location/telegram_dirs`, `apply_torrent_session`) that take an explicit client and route to the Transmission backend (in the same file) or the qBittorrent backend (`web_app/qbittorrent.py`). Everything keys torrents by **hash** (Transmission RPC accepts hashes as `ids`; qBittorrent is hash-native), so one code path drives both.
 - `GET /api/settings/torrent` - Both clients' config (passwords never exposed) + `telegram_default`
 - `POST /api/settings/torrent` - Save one client (`{client, url, username, password?, download_dir?, incomplete_dir?}`); Transmission URL normalized to the RPC endpoint, qBittorrent uses the base WebUI URL; password encrypted at rest
 - `DELETE /api/settings/torrent?client=...` / `POST /api/settings/torrent/telegram-default` (`{client|null}`)
 - `POST /api/settings/torrent/test` - `{client, ...}` connectivity check (Transmission session-get / qBittorrent version)
 - `POST /api/torrent/add` - Send a magnet (`{magnet, client, download_dir?}`); falls back to the client's configured `download_dir` when none given
-- `GET /api/torrent/list?client=...` - Live status of that client's torrents (normalized shape: name, hash, status label, percent, down/up rate, size, ETA, download dir, error, peers/seeds)
-- `POST /api/torrent/action` - `{client, action:start|stop|remove, hashes:[str], delete_data?}` (legacy `ids` still accepted as hashes)
+- `GET /api/torrent/list?client=...` - Live status of that client's torrents (normalized shape: name, hash, status label, percent, down/up rate, size, ETA, download dir, error, peers/seeds, `force_start`). **`completed` is a distinct status from `stopped`**: a finished torrent that is no longer seeding is done, not paused, and with the torrent watcher stopping seeds on completion that is the normal end state - labelling it "Paused" reads like something went wrong. qBittorrent already draws the line (`stoppedUP`/`pausedUP` vs `stoppedDL`/`pausedDL`); Transmission reports one `stopped` for both, so `_transmission_normalize()` derives it from the percentage plus `downlee` - the VPS→DownLee transfer that already pulled it (`{id, message_id, status, progress}` or null), matched on `<download_dir>/<name>` with a basename fallback (a Telegram-flow pull may have been taken from the temp dir). The VPS panel uses it to show **Downloaded** / live % / a retry instead of offering the pull again, so the state survives a reload.
+- `POST /api/torrent/action` - `{client, action:start|force-start|stop|remove|verify, hashes:[str], delete_data?}` (legacy `ids` still accepted as hashes). **`force-start`** jumps the client's own download queue - Transmission `torrent-start-now` instead of `torrent-start`, qBittorrent `setForceStart` (a per-torrent flag, not a verb, so it is set and then the torrent is started). A plain start only queues a torrent, which on a busy seedbox looks like nothing happened. The panel offers it per row (⚡, hidden once a torrent is complete - there it would only force seeding) and for a bulk selection.
+  **Order matters on qBittorrent**: a plain start *clears* the force flag, so the backend starts first (covering a stopped torrent) and forces after - doing it the other way round is a silent no-op. That same fact makes the button a toggle: a forced torrent's ⚡ sends a plain `start` to un-force it.
+  The normalized shape carries `force_start` - qBittorrent reports it per torrent (plus the `forcedDL`/`forcedUP` states as a second witness), while Transmission has **no persistent forced flag** (`torrent-start-now` jumps the queue once and nothing records it), so it is `None` there. The UI only lights up on `=== true`: null is "can't tell", not "not forced". A forced row also gets a "Forced" badge, since the status label still just reads "downloading", and the panel's status dropdown carries a **`Forced (n)`** entry (reserved value `@forced`, so it can't collide with a real status) to list just those - shown only when there are any, which means never on Transmission.
+- `POST /api/settings/torrent/stop-on-complete` - `{client, enabled}`; its own route so the toggle doesn't round-trip (and risk clobbering) the whole client config
 - Temp folder: `apply_torrent_session()` pushes the incomplete/temp dir (Transmission `session-set incomplete-dir`; qBittorrent `setPreferences temp_path`), applied on config save + re-applied before each add. The client downloads into the temp dir, then moves to the torrent's download dir on completion.
 - Frontend: Settings → VPS shows a `TorrentClientCard` per client; the VPS page has per-client tabs (Files · Transmission · qBittorrent), each its own `TorrentStatusPanel` (hash-based multi-select). Pasted magnets pick the client in `AddUrlModal`.
+
+#### Torrent watcher (stop seeding on completion)
+
+`backend/torrent_watch.py` is a daemon thread (started in `backend/main.py`)
+that polls every configured client each `TORRENT_WATCH_INTERVAL` (30s) and
+stops any torrent that has finished. It exists because a seedbox keeps every
+completed torrent uploading by default, and once the files are pulled to
+DownLee that upload is only spending the VPS's bandwidth.
+
+- **It waits for `seeding`/`seed-wait`, never the raw percentage.** Both clients
+  download into a temp dir and move the files as part of completing; during that
+  move the torrent is not seeding yet (qBittorrent reports `moving`, normalized
+  to `checking`). Acting on `percent_done >= 100` would race the move, and the
+  VPS→DownLee pull would then chase files in flight between two directories.
+- **It stops a given torrent once.** The `(client, hash)` pairs it has acted on
+  are held in memory, so restarting a completed torrent by hand sticks instead
+  of being undone on the next tick. The set is intersected with what each poll
+  saw, so removed torrents don't accumulate.
+- **Per-client, because seeding is a tracker requirement.** `stop_on_complete`
+  lives in each client's sub-config (`stop_on_complete_enabled()` in
+  `web_app/torrent.py`, **default on**), toggled on the `TorrentClientCard` in
+  Settings → VPS. A full config save carries the flag over rather than resetting
+  it. `TORRENT_WATCH=0` disables the thread outright.
+- A client being unreachable is logged at debug and retried next tick; a failed
+  stop is not marked handled, so it is retried too.
 
 ### Scheduled Jobs
 
@@ -256,6 +294,7 @@ Live filesystem access - every call reads the disk, nothing is indexed or cached
 - `GET /api/files/stream|download|thumb?path=` - `@media_token_required`, range-streamed; `thumb` is a cached JPEG (Pillow for images, an ffmpeg frame grab for video)
 
 ### Video Streaming
+- `GET /api/video/check/<id>` - What is on disk for a download: `{exists, kind: 'video'|'dir'|'file', path, parent, size}`. The downloads list's view button uses `kind` to decide - play a video inline, or send a folder pull / non-video file to the file explorer (`/files?path=...`, plus `&select=<path>` for a single file, which `ExplorerPage` highlights and scrolls to, then drops). Keeps `file_deleted` honest for folders too, which the old video-only check always marked as missing.
 - `GET /api/video/stream/<id>` - Range-request video streaming
 - `GET /api/video/thumbs/<id>` - Thumbnail list
 - `GET /api/video/thumb/<id>/<filename>` - Single thumbnail
@@ -296,6 +335,58 @@ All config via `.env` file at project root (loaded by python-dotenv):
 | `SCREENSHOTS_DIR` | `DOWNLOAD_DIR/.thumbs` | Thumbnail storage |
 | `JWT_SECRET` | auto-generated, persisted to `.jwt_secret` | App secret: JWT signing + Fernet key for stored secrets |
 | `EXPLORER_READONLY` | `0` | Refuse every file-explorer write (rename/delete/move/copy/upload/mkdir) |
+| `NET_WATCHDOG` | `1` | Resume downloads the network interrupted (see below) |
+| `NET_PROBE_INTERVAL` | `20` | Seconds between connectivity probes |
+| `NET_STALL_SECONDS` | `600` | Restart a download frozen this long; `0` disables |
+| `NET_PROBE_HOSTS` | `1.1.1.1:53,8.8.8.8:53` | `host:port` pairs the probe TCP-connects to |
+| `TORRENT_WATCH` | `1` | Run the torrent watcher thread (stop seeding on completion) |
+| `TORRENT_WATCH_INTERVAL` | `30` | Seconds between torrent-client polls |
+
+## Network Watchdog & Resume
+
+A home uplink drops for ten seconds and nothing recovers on its own. Each
+handler fails differently - Telethon burns its retry budget and the record goes
+`failed`, a yt-dlp subprocess exits, an SFTP transfer dies on a socket error -
+and the worst case is silent: the TCP connection is gone but nothing raises, so
+the transfer sits at 47% forever. That is what "the downloads look paused" is.
+
+- **`backend/resume.py` is the single resume path.** `resume_download(download,
+  force)` dispatches to the owning handler; `/api/retry` and the watchdog both
+  call it, so an automatic recovery can't drift from the button. Everything
+  resumes from the bytes already on disk (Telethon seeks past the partial file,
+  yt-dlp runs with `-c`, SFTP resumes at the local size).
+- **`force` is the difference between dead and wedged.** Without it a transfer
+  still registered as running is left alone; with it the in-flight task is
+  cancelled *and awaited* before the replacement starts - skipping that wait
+  gives you two writers on one partial file, or lets the old task's cleanup
+  deregister the new download.
+- **`backend/netwatch.py`** is a daemon thread (started in `backend/main.py`
+  alongside the Flask/asyncio/VPS/job threads) doing two things, both on
+  observed trouble rather than guesswork:
+  - *Reconnects*: TCP-probes `NET_PROBE_HOSTS` every `NET_PROBE_INTERVAL`. On
+    the link dropping it snapshots every running download's byte count; on it
+    returning it waits `RECONNECT_GRACE` (30s - Telethon often recovers by
+    itself) and then resumes the ones that failed or never moved again.
+  - *Restarts*: a service or machine restart leaves every in-flight download
+    marked `downloading` with nothing behind it - the process that was
+    transferring is gone, so the row sits at its last percentage looking
+    paused. On the first online tick those orphans are resumed. Telethon may
+    still be connecting, so a Telegram one is retried across
+    `STARTUP_RESUME_ATTEMPTS` ticks and only then marked `failed` - an honest
+    failure with a retry button beats a row that claims to be downloading
+    forever. Resuming without `force` is safe for a download a user started
+    seconds earlier: every handler reports "already running" and declines.
+  - *Stalls*: a download still marked `downloading` whose byte count hasn't
+    changed for `NET_STALL_SECONDS` is force-restarted. A blip shorter than the
+    probe interval never registers as an outage but still kills the socket -
+    the common case. Downloads past 99% are skipped (yt-dlp muxing moves no
+    bytes for minutes on a big file).
+- **`stopped` and `paused` are decisions, not failures**, and are never
+  auto-resumed.
+- Supporting fixes, all aimed at failing *fast* instead of hanging: the SFTP
+  transport sets a 30s keepalive, yt-dlp runs with `--socket-timeout 30` plus
+  explicit retries, and the Telegram per-attempt backoff grew from a flat 5s to
+  5/10/20/40/60s so `MAX_RETRIES` isn't burnt inside half a minute.
 
 ## Download Flow
 
@@ -322,6 +413,7 @@ All config via `.env` file at project root (loaded by python-dotenv):
 
 ### Magnet Links (Transmission / qBittorrent)
 1. AddUrlModal detects `magnet:` input -> user picks the target client -> `POST /api/torrent/add` (`{magnet, client, download_dir?}`)
+1b. A `.torrent` file reaches the same panel two ways: the modal's upload button, or **dropping the file anywhere on the downloads page** (window-level drag listeners in `DownloadsPage`, with a depth-counted overlay; non-`.torrent` drops flash a rejection instead of letting the browser navigate to the file). **Multiple files at once** are taken: every `.torrent` in the drop is collected (and the upload button is `multiple`), handed to the modal as `initialFiles` — keyed on the array, so a second drop onto an open modal replaces the batch — and posted to `POST /api/torrent/add-file` (multipart) **serially**, one file per request. Each add is an upload plus a client round-trip, and firing ten at a seedbox WebUI at once is a good way to get some rejected. Each file gets its own row (sending / sent / already added / error) and a failure never abandons the rest of the batch; pressing send again retries only the failed ones. A `batchRunning` flag backs the disabled state because the mutation's `isPending` goes false *between* files, which would otherwise re-enable the button mid-batch and allow a parallel run.
 2. Backend dispatches via `torrent_add_magnet(client, ...)` (Transmission RPC or qBittorrent WebUI) with optional `download-dir` (e.g. a watched folder, so autoSync fetches the result)
 3. No local download record is created — the torrent lives on the VPS
 4. **Telegram-sourced magnets**: a magnet link posted in a monitored channel is detected in `telegram_handler._handle_new_file()` and handed off to the client resolved by **`torrent_client_for_chat(event.chat_id)`** — the channel's own `torrent_client` (stored per-channel in the `telegram_channels` settings JSON, set via `PATCH /api/settings/telegram/channels/<id>`) if set, else the global **`telegram_default`** fallback (`get_telegram_default()`); if neither is set the bot replies that no client is configured. Routed via `torrent_telegram_dirs(client)` to `<base>/telegram/downloads` (temp in `<base>/telegram/progress`), where `<base>` is the client's configured `download_dir` (or, if blank, a sibling of the client's own default download dir), auto-started, and the bot replies with the torrent name. The per-torrent temp dir is applied right before the add. A background task (`_track_torrent_progress`, given the client) polls the client (`torrent_get()`) every 15s and live-edits that reply (`` `name` download progress: xx% ``) until the torrent completes, errors, or is removed (capped at ~12h). On completion the message becomes a `Reply "download" to this message to download it to DownLee` prompt and the (chat_id, msg_id)→{candidates,...} is recorded in `_pending_downlee`. Replying "download" to that prompt (`_maybe_handle_downlee_reply`, checked at the top of `_handle_new_file`) starts `vps_downloader.start_download()` to pull the completed files VPS→DownLee. On completion the tracker also issues `torrent_set_location()` (move) to force files out of the temp dir, and the DownLee trigger resolves the real remote path over SFTP (`_resolve_existing_remote` tries the final dir then the temp dir) so it works whether or not the client moved the files. The torrent's live name is used, since a magnet's name is a placeholder until metadata arrives. (Replies are used rather than reactions — reaction updates aren't reliably delivered, esp. to bot accounts.) After starting, `_track_downlee_progress` polls the transfer's DB record and live-edits the same Telegram message with `xx%` until done/failed.
@@ -379,7 +471,11 @@ a pulled USB drive disappears from the sidebar.
   Destinations of `is_secured` sources/watched folders are omitted unless
   `?include_hidden=true` (the page passes the Layout's `showSecured`), and a
   folder that a plain source also points at still shows but drops the secured
-  name from its note.
+  name from its note. The sidebar marks two things, not one: the root you are
+  *at* (exact path, bright accent) and the root you are *inside* (longest path
+  prefix, dim accent), resolved per group - so a folder deep on a disk lights up
+  both its drive and the DownLee folder pointing there. Exact matches win the
+  prefix contest first, otherwise standing on a mount point would highlight `/`.
 - **Reads go anywhere** the service account can reach. **Writes** go through
   `guard_write()`: anything on a mount other than `/` is fair game (that is where
   a media library lives), while `PROTECTED_ROOTS` on the root filesystem
@@ -426,6 +522,80 @@ a pulled USB drive disappears from the sidebar.
   Ctrl+A/C/X/V, Enter to open, Backspace for up, drag-and-drop upload. On coarse
   pointers the native contextmenu is suppressed (the hold is the select gesture)
   and the row's ⋮ button opens the menu instead.
+
+## The VPS as an explorer drive
+
+The seedbox shows up in the file explorer's sidebar as a drive alongside the
+local disks, browsable in the same UI. `backend/remote_files.py` is the whole
+remote half; `files.py` stays pure local filesystem, which is what keeps it
+simple.
+
+- **Remote paths carry a `vps:` prefix** (`vps:/home6/user/downloads`), and
+  `routes/files.py` dispatches list/search/size/text/delete on it. Everything
+  above the transport - the URL, breadcrumb, selection, clipboard, context menu
+  - already treats a path as an opaque string, so the frontend needed almost
+  nothing. `vps:~` is the sidebar root: "wherever this login lands", which only
+  the far end can resolve.
+- **Copying VPS -> local is a download, not a copy.** A `transfer` with remote
+  sources hands off to `vps_handler.start_download()`, so a paste into a local
+  folder gets a real download record with progress, resume and the watchdog
+  behind it. Doing it inline would block the request for however long a 50 GB
+  folder takes. The UI says "Copy (paste locally to download)" and reports that
+  the transfer *started*.
+- **Read-mostly by design.** No remote rename/mkdir/upload and no remote-to-remote
+  copy (SFTP has no server-side copy); those routes refuse a `vps:` path with a
+  reason rather than failing obscurely. Remote delete works and is **always
+  permanent** - the local trash is a per-mount rename, which has no equivalent
+  on someone else's box, and inventing a hidden trash dir in a seedbox home
+  would be worse than saying so. The dialog says "Delete on the VPS".
+- **No thumbnails or streaming remotely.** A grid view would pull hundreds of
+  files across the internet to make JPEGs; only text preview is cheap enough.
+- **One pooled SSH session** (`vps_session()` in `web_app/vps.py`). Logging in
+  costs ~0.6s against a listing's ~0.15s, so reconnecting per click would spend
+  four fifths of the time on handshakes; measured 0.71s cold, 0.12s warm. It is
+  handed out under a lock (paramiko channels aren't safe to share), dropped
+  after `IDLE_TIMEOUT` (120s) so a closed tab isn't holding a connection open on
+  the seedbox, and `close_pooled_session()` is called when the VPS config
+  changes. A non-`ValueError` inside the session drops it rather than handing
+  the next caller a half-dead channel.
+- The sidebar capacity bar reuses the account quota, cached 60s, filled in by
+  the first listing rather than by `/api/files/roots` (which must not wait on an
+  SSH login during a page load).
+- **The tree stops at the login home.** Above it is the provider's shared
+  `/homeN`, which the account cannot list, so a remote listing reports
+  `parent: null` at home (the toolbar's Up button and Backspace are already
+  guarded on it) and `home` - the top of the tree - which the breadcrumb uses so
+  it never renders a crumb that can only fail. `_io_error()` maps `EACCES` to a
+  403 "Permission denied", because reporting an unreadable directory as "not
+  found" sends you hunting for a folder that is really just someone else's.
+- **The breadcrumb is prefix-aware.** `path.split('/')` on `vps:/home6/...`
+  yields targets like `/vps:` and a root button pointing at the *local* `/`, so
+  `splitPrefix()` strips the scheme, crumbs are built below `home`, and every
+  target gets the prefix put back.
+
+## Logging
+
+`backend/logsafe.py` owns log setup; `setup_logging()` in `backend/main.py` just
+calls `logsafe.install(LOG_FILE)`.
+
+- **Credentials are redacted before they reach a handler.** `media_token_required`
+  exists so no token lands "in a URL, browser history or an access log", but
+  Werkzeug logs the full request line - query string included - which defeated
+  exactly that. A media token is good for `MEDIA_TOKEN_HOURS` of arbitrary file
+  read as the service user, so a world-readable log of them is a credential store.
+  `RedactSecretsFilter` rewrites `token=`, `password=`, `api_key=` and friends
+  (`SECRET_PARAMS`) to `[redacted]`.
+- It filters the **formatted** message, not `record.msg`: Werkzeug passes the
+  request line as a positional arg, so inspecting `msg` alone would miss every
+  one. The filter sits on the **handler** as well as the root logger, because a
+  filter on a logger does not apply to records propagated up to it.
+- **Rotating and owner-only**: `RotatingFileHandler` at 10 MB x 5 (this replaced
+  a 70 MB unrotated file), `chmod 600` on the log and `750` on `logs/`.
+- `scrub_file()` redacts a log that was already written. It rewrites the **same
+  inode** rather than renaming: the running process holds an open descriptor, so
+  replacing the file would leave the service logging to an orphan. Redaction only
+  shortens a line, so the content always fits, and the handler appends, so later
+  writes land at the new end.
 
 ## Key Patterns
 

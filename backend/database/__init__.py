@@ -50,6 +50,12 @@ class Download(Base):
     thumb_count = Column(Integer, default=0)  # Number of generated thumbnail images
     status_msg_id = Column(Integer, nullable=True)  # Telegram status message ID for progress updates
     chat_id = Column(BigInteger, nullable=True)  # Telegram chat the message came from (message_id is per-chat)
+    # Destination base folder, stored only when the transfer was started with
+    # one that isn't derivable from the source spec (a torrent client's local
+    # folder). Without it a resumed VPS transfer would re-resolve to the plain
+    # 'vps' destination and start over in the wrong place, next to an orphaned
+    # partial file.
+    dest_base = Column(String(500), nullable=True)
 
     def to_dict(self):
         """Convert model to dictionary"""
@@ -75,6 +81,7 @@ class Download(Base):
             'thumb_count': self.thumb_count or 0,
             'status_msg_id': self.status_msg_id,
             'chat_id': str(self.chat_id) if self.chat_id is not None else None,
+            'dest_base': self.dest_base,
         }
 
 
@@ -379,6 +386,11 @@ class DatabaseManager:
                 conn.execute(text('ALTER TABLE downloads ADD COLUMN chat_id BIGINT'))
                 conn.commit()
 
+            # Add dest_base column if it doesn't exist (resume to the right folder)
+            if 'dest_base' not in columns:
+                conn.execute(text('ALTER TABLE downloads ADD COLUMN dest_base VARCHAR(500)'))
+                conn.commit()
+
             # Users: roles + Telegram identity (bot interaction tracking)
             if inspector.has_table('users'):
                 user_columns = [c['name'] for c in inspector.get_columns('users')]
@@ -545,7 +557,7 @@ class DatabaseManager:
     def add_download(self, file, status='downloading', progress=0, speed=0,
                      error=None, downloaded_bytes=0, total_bytes=0, pending_time=None,
                      message_id=None, downloaded_from='telegram', url=None, author=None,
-                     chat_id=None):
+                     chat_id=None, dest_base=None):
         """Add a new download entry"""
         session = self.get_session()
         try:
@@ -568,6 +580,7 @@ class DatabaseManager:
                 url=url,
                 author=author,
                 chat_id=chat_id,
+                dest_base=dest_base,
             )
             session.add(download)
             session.commit()
@@ -700,6 +713,17 @@ class DatabaseManager:
                 session.commit()
                 return True
             return False
+        finally:
+            self.close_session()
+
+    def get_downloads_by_status(self, status: str):
+        """Every non-deleted download in one status (the watchdog polls this
+        every probe interval, so it is a filtered query rather than a scan of
+        the whole history)."""
+        session = self.get_session()
+        try:
+            rows = session.query(Download).filter_by(status=status, deleted_at=None).all()
+            return [d.to_dict() for d in rows]
         finally:
             self.close_session()
 

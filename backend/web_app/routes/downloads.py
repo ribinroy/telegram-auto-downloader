@@ -61,61 +61,23 @@ class DownloadRoutesMixin:
         @self.app.route("/api/retry", methods=["POST"])
         @token_required
         def api_retry():
+            """Restart a failed/stopped download from the bytes already on disk.
+
+            The work itself lives in backend/resume.py, shared with the network
+            watchdog, so a retry the user asks for and one the watchdog does
+            after a reconnect are the same code path."""
+            from backend.resume import resume_download
             data = request.json
             download_id = data.get("id")
-            if download_id is not None:
-                db = get_db()
-                download = db.get_download_by_id(download_id)
-                if download and download["status"] in ["failed", "stopped"]:
-                    # VPS download - resume the SFTP transfer from where it stopped
-                    if download.get("downloaded_from") == "vps" and self.vps_downloader:
-                        self.vps_downloader.resume_download(download.get("message_id"))
-                    # Check if it's a yt-dlp download (has URL)
-                    elif download.get("url") and self.ytdlp_downloader and self.event_loop:
-                        # Resume yt-dlp download (yt-dlp will continue from partial file)
-                        message_id = download.get("message_id")
-                        url = download.get("url")
-
-                        # Extract custom title from filename (remove extension)
-                        custom_title = None
-                        if download.get("file"):
-                            # Remove extension to get the title
-                            filename = download["file"]
-                            print(f"[Retry] filename from db: {filename}")
-                            if '.' in filename:
-                                custom_title = filename.rsplit('.', 1)[0]
-                            else:
-                                custom_title = filename
-                            print(f"[Retry] custom_title extracted: {custom_title}")
-
-                        # Update status but keep progress (yt-dlp will resume)
-                        db.update_download_by_id(
-                            download_id,
-                            status='downloading',
-                            speed=0,
-                            error=None,
-                            updated_at=datetime.utcnow()
-                        )
-                        self.emit_status(message_id, 'downloading')
-
-                        # Start the download task (yt-dlp -c flag will resume)
-                        future = asyncio.run_coroutine_threadsafe(
-                            self.ytdlp_downloader.download(url, message_id, None, custom_title),
-                            self.event_loop
-                        )
-                        self.download_tasks[message_id] = future
-                    else:
-                        # Telegram download - just update status (Telegram handler will pick it up)
-                        db.update_download_by_id(
-                            download_id,
-                            status='downloading',
-                            progress=0,
-                            speed=0,
-                            error=None,
-                            updated_at=datetime.utcnow()
-                        )
-                        if download.get("message_id"):
-                            self.emit_status(download["message_id"], 'downloading')
+            if download_id is None:
+                return jsonify({"error": "id is required"}), 400
+            download = get_db().get_download_by_id(download_id)
+            if not download:
+                return jsonify({"error": "Download not found"}), 404
+            if download["status"] not in ("failed", "stopped"):
+                return jsonify({"error": f"Cannot retry a {download['status']} download"}), 400
+            if not resume_download(download):
+                return jsonify({"error": "Failed to restart the download"}), 500
             return jsonify({"status": "ok"})
 
         @self.app.route("/api/stop", methods=["POST"])

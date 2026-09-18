@@ -1,11 +1,14 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, Download, Loader2, Plus, X, HardDrive } from 'lucide-react';
+import { Search, Download, Loader2, Plus, X, HardDrive, Magnet, AlertCircle } from 'lucide-react';
 import { useLayoutContext } from '../components/Layout';
 import { ROUTES } from '../routes';
 import { DownloadItem } from '../components/DownloadItem';
 import { AddUrlModal } from '../components/AddUrlModal';
 import type { SortBy, SortOrder } from '../api';
+
+const isTorrentFile = (f: File) =>
+  /\.torrent$/i.test(f.name) || f.type === 'application/x-bittorrent';
 
 export function DownloadsPage() {
   const {
@@ -20,6 +23,14 @@ export function DownloadsPage() {
 
   const navigate = useNavigate();
   const searchRef = useRef<HTMLInputElement>(null);
+
+  // Drag-and-drop: a .torrent (or a dragged magnet/URL) opens the add modal.
+  const [droppedTorrents, setDroppedTorrents] = useState<File[] | null>(null);
+  const [dragState, setDragState] = useState<'active' | 'reject' | null>(null);
+  // dragenter/dragleave fire for every child element the pointer crosses, so
+  // the overlay is driven by a depth counter rather than the last event.
+  const dragDepth = useRef(0);
+  const rejectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Focus search on mount
   useEffect(() => {
@@ -56,6 +67,68 @@ export function DownloadsPage() {
     document.addEventListener('paste', handlePaste);
     return () => document.removeEventListener('paste', handlePaste);
   }, [addUrlOpen, setPastedUrl, setAddUrlOpen]);
+
+  // Drop a .torrent anywhere on the page -> the add modal, preloaded with it.
+  // The listeners are window-wide (and page-scoped, so they can't fight the
+  // explorer's own upload drop zone), and they swallow every file drop: the
+  // browser's default is to navigate away and open the file.
+  useEffect(() => {
+    const hasFiles = (e: DragEvent) =>
+      Array.from(e.dataTransfer?.types ?? []).includes('Files');
+
+    const flash = (state: 'active' | 'reject' | null, ms = 0) => {
+      if (rejectTimer.current) clearTimeout(rejectTimer.current);
+      setDragState(state);
+      if (ms) rejectTimer.current = setTimeout(() => setDragState(null), ms);
+    };
+
+    const onEnter = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      dragDepth.current += 1;
+      flash('active');
+    };
+    const onOver = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+    };
+    const onLeave = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      dragDepth.current = Math.max(0, dragDepth.current - 1);
+      if (dragDepth.current === 0) flash(null);
+    };
+    const onDrop = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      dragDepth.current = 0;
+      // Take every .torrent in the drop, not just the first: dropping a folder
+      // of them is the whole point of dragging more than one.
+      const torrents = Array.from(e.dataTransfer?.files ?? []).filter(isTorrentFile);
+      if (!torrents.length) {
+        // Only .torrent files mean anything here - say so instead of
+        // silently dropping it on the floor.
+        flash('reject', 2500);
+        return;
+      }
+      flash(null);
+      setDroppedTorrents(torrents);
+      setPastedUrl(null);
+      setAddUrlOpen(true);
+    };
+
+    window.addEventListener('dragenter', onEnter);
+    window.addEventListener('dragover', onOver);
+    window.addEventListener('dragleave', onLeave);
+    window.addEventListener('drop', onDrop);
+    return () => {
+      window.removeEventListener('dragenter', onEnter);
+      window.removeEventListener('dragover', onOver);
+      window.removeEventListener('dragleave', onLeave);
+      window.removeEventListener('drop', onDrop);
+      if (rejectTimer.current) clearTimeout(rejectTimer.current);
+    };
+  }, [setAddUrlOpen, setPastedUrl]);
 
   return (
     <>
@@ -239,9 +312,36 @@ export function DownloadsPage() {
       {/* Add URL Modal */}
       <AddUrlModal
         isOpen={addUrlOpen}
-        onClose={() => { setAddUrlOpen(false); setPastedUrl(null); }}
+        onClose={() => { setAddUrlOpen(false); setPastedUrl(null); setDroppedTorrents(null); }}
         initialUrl={pastedUrl}
+        initialFiles={droppedTorrents}
       />
+
+      {/* Drag-and-drop overlay - above the modal, so a torrent can be dropped
+          onto it as well as onto the page behind it. */}
+      {dragState && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/70 backdrop-blur-sm pointer-events-none p-6">
+          <div className={`flex flex-col items-center gap-3 px-8 py-10 rounded-2xl border-2 border-dashed text-center ${
+            dragState === 'reject'
+              ? 'border-red-400/60 bg-red-500/10'
+              : 'border-purple-400/60 bg-purple-500/10'
+          }`}>
+            {dragState === 'reject' ? (
+              <>
+                <AlertCircle className="w-10 h-10 text-red-400" />
+                <p className="text-base font-medium text-red-300">No .torrent files in that drop</p>
+                <p className="text-sm text-slate-400">Drop one or more .torrent files to send them to a VPS torrent client.</p>
+              </>
+            ) : (
+              <>
+                <Magnet className="w-10 h-10 text-purple-300" />
+                <p className="text-base font-medium text-white">Drop .torrent files</p>
+                <p className="text-sm text-slate-400">Drop as many as you like — they open in the add dialog and are sent one after another.</p>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </>
   );
 }

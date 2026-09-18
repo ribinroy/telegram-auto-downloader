@@ -86,6 +86,15 @@ def get_telegram_default():
     return None
 
 
+def stop_on_complete_enabled(sub: dict) -> bool:
+    """Whether a client's finished torrents should be stopped from seeding.
+
+    Defaults to on: a home setup has already pulled the files down, and the
+    upload is just spending the VPS's bandwidth. Private trackers need the
+    opposite, which is what the per-client toggle is for."""
+    return bool((sub or {}).get("stop_on_complete", True))
+
+
 def load_torrent_config(client):
     """Load a client's config with the password decrypted, plus a `client` key.
     Returns None when that client is not configured."""
@@ -103,6 +112,7 @@ def load_torrent_config(client):
         "download_dir": sub.get("download_dir", ""),
         "incomplete_dir": sub.get("incomplete_dir", ""),
         "local_dir": sub.get("local_dir", ""),
+        "stop_on_complete": stop_on_complete_enabled(sub),
     }
 
 
@@ -211,12 +221,20 @@ def _transmission_normalize(t):
 
     eta = t.get("eta")
     stats = t.get("trackerStats") or []
+    percent = round((t.get("percentDone") or 0) * 100, 1)
+    status = _TRANSMISSION_STATUS.get(t.get("status"), "unknown")
+    # Transmission reports one "stopped" for both "you paused a half-finished
+    # download" and "it finished and is no longer seeding" - and with the
+    # torrent watcher stopping seeds on completion, the second is the common
+    # case. Calling that "Paused" reads like something went wrong.
+    if status == "stopped" and percent >= 100:
+        status = "completed"
     return {
         "id": t.get("id"),
         "name": t.get("name"),
         "hash": t.get("hashString"),
-        "status": _TRANSMISSION_STATUS.get(t.get("status"), "unknown"),
-        "percent_done": round((t.get("percentDone") or 0) * 100, 1),
+        "status": status,
+        "percent_done": percent,
         "rate_download": t.get("rateDownload") or 0,
         "rate_upload": t.get("rateUpload") or 0,
         "total_size": t.get("totalSize") or 0,
@@ -227,6 +245,10 @@ def _transmission_normalize(t):
         "peers_connected": t.get("peersConnected") or 0,
         "seeds_connected": t.get("peersSendingToUs") or 0,
         "leeches_connected": t.get("peersGettingFromUs") or 0,
+        # Transmission has no persistent "forced" flag - torrent-start-now
+        # jumps the queue once and nothing records it - so this stays unknown
+        # rather than claiming a torrent is not forced when we cannot tell.
+        "force_start": None,
         "seeds_total": tracker_max(stats, "seederCount"),
         "leeches_total": tracker_max(stats, "leecherCount"),
     }
@@ -261,11 +283,31 @@ def transmission_control(cfg, action, hashes, delete_data=False):
         transmission_rpc("torrent-verify", {"ids": hashes}, config=cfg)
         transmission_rpc("torrent-start", {"ids": hashes}, config=cfg)
         return
-    method = {"start": "torrent-start", "stop": "torrent-stop", "remove": "torrent-remove"}[action]
+    # torrent-start-now jumps the download queue; plain torrent-start just
+    # queues it, which on a busy seedbox can mean nothing visibly happens.
+    method = {"start": "torrent-start", "force-start": "torrent-start-now",
+              "stop": "torrent-stop", "remove": "torrent-remove"}[action]
     args = {"ids": hashes}  # Transmission accepts hash strings as ids
     if action == "remove" and delete_data:
         args["delete-local-data"] = True
     transmission_rpc(method, args, config=cfg)
+
+
+def transmission_stats(cfg):
+    """Global transfer counters in the shared stats shape."""
+    res = transmission_rpc("session-stats", {}, config=cfg)
+    cum = res.get("cumulative-stats") or {}
+    cur = res.get("current-stats") or {}
+    down = cum.get("downloadedBytes") or 0
+    up = cum.get("uploadedBytes") or 0
+    return {
+        "downloaded": down,
+        "uploaded": up,
+        "session_downloaded": cur.get("downloadedBytes") or 0,
+        "session_uploaded": cur.get("uploadedBytes") or 0,
+        "ratio": round(up / down, 2) if down else None,
+        "free_space": None,
+    }
 
 
 def transmission_set_location(cfg, hashes, location):
@@ -326,6 +368,16 @@ def torrent_get(client, torrent_hash, config=None):
         from backend.web_app.qbittorrent import qbit_get
         return qbit_get(cfg, torrent_hash)
     return transmission_get(cfg, torrent_hash)
+
+
+def torrent_stats(client, config=None):
+    """Global up/down counters for a client: {downloaded, uploaded, ratio,
+    session_downloaded, session_uploaded, free_space}."""
+    cfg = _resolve(client, config)
+    if client == "qbittorrent":
+        from backend.web_app.qbittorrent import qbit_stats
+        return qbit_stats(cfg)
+    return transmission_stats(cfg)
 
 
 def torrent_control(client, action, hashes, delete_data=False, config=None):

@@ -17,6 +17,10 @@ def candidate_file_paths(download, file_name):
     spec = resolve_spec(source, path=download.get("url") if source == 'vps' else None)
     if spec.get("folder"):
         paths.insert(0, Path(spec["folder"]) / file_name)
+    # A VPS transfer started with an explicit destination (e.g. a torrent
+    # client's local_dir) can't be derived from the spec - it's on the record.
+    if download.get("dest_base"):
+        paths.insert(0, Path(download["dest_base"]) / file_name)
     return paths
 
 

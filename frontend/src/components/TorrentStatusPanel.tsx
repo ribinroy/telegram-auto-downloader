@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Magnet, ArrowDown, ArrowUp, Play, Pause, Trash2, Loader2, Search, X, Check, Sprout, Users, RotateCw,
+  Zap,
+  CheckCircle,
 } from 'lucide-react';
-import { type TorrentStatus, type TorrentClient } from '../api';
+import { type TorrentStatus, type TorrentClient, type TorrentActionName } from '../api';
 import { formatBytes, formatTime } from '../utils/format';
 import { ConfirmDialog } from './ConfirmDialog';
 import { Tooltip } from './Tooltip';
@@ -10,11 +12,16 @@ import { ROUTES } from '../routes';
 import { useNavigate } from 'react-router-dom';
 import { useTorrentList, useTorrentAction } from '../hooks/useTorrents';
 import { useDownloadVpsFile } from '../hooks/useVps';
+import { useLayoutContext } from './Layout';
+
+// Reserved filter value: not a status the clients report, so it can't collide.
+const FORCED_FILTER = '@forced';
 
 const STATUS_STYLES: Record<TorrentStatus['status'], { label: string; cls: string }> = {
   downloading: { label: 'Downloading', cls: 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30' },
   seeding: { label: 'Seeding', cls: 'bg-green-500/15 text-green-400 border-green-500/30' },
   stopped: { label: 'Paused', cls: 'bg-slate-500/15 text-slate-300 border-slate-500/30' },
+  completed: { label: 'Completed', cls: 'bg-green-500/15 text-green-300 border-green-500/30' },
   checking: { label: 'Checking', cls: 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30' },
   'check-wait': { label: 'Queued (check)', cls: 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30' },
   'download-wait': { label: 'Queued', cls: 'bg-slate-500/15 text-slate-300 border-slate-500/30' },
@@ -24,6 +31,8 @@ const STATUS_STYLES: Record<TorrentStatus['status'], { label: string; cls: strin
 
 export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentClient; onCountChange?: (n: number) => void }) {
   const navigate = useNavigate();
+  // Live transfer progress (WebSocket-backed) for torrents already pulled to DownLee.
+  const { downloads, onRetry } = useLayoutContext();
   const listQuery = useTorrentList(client);
   const actionMut = useTorrentAction();
   const downloadFile = useDownloadVpsFile();
@@ -40,7 +49,8 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [sortBy, setSortBy] = useState<'created' | 'name' | 'status'>('created');
-  // DownLee transfer state: torrents with a transfer being started / already started.
+  // DownLee transfer state: the request in flight, plus an optimistic marker
+  // that bridges the gap until the list refetch carries the server's own answer.
   const [dlBusy, setDlBusy] = useState<Set<string>>(new Set());
   const [dlStarted, setDlStarted] = useState<Set<string>>(new Set());
   // Multi-select: chosen torrent hashes + whether the bulk remove dialog is open.
@@ -54,7 +64,7 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
   onCountChangeRef.current = onCountChange;
   useEffect(() => { onCountChangeRef.current?.(torrents.length); }, [torrents.length]);
 
-  const runAction = async (action: 'start' | 'stop' | 'remove' | 'verify', t: TorrentStatus, deleteData = false) => {
+  const runAction = async (action: TorrentActionName, t: TorrentStatus, deleteData = false) => {
     setBusy(prev => new Set(prev).add(t.hash));
     setActionError(null);
     try {
@@ -66,7 +76,7 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
   };
 
   // Run an action across all currently-selected torrents in one RPC call.
-  const runBulkAction = async (action: 'start' | 'stop' | 'remove', deleteData = false) => {
+  const runBulkAction = async (action: TorrentActionName, deleteData = false) => {
     const hashes = torrents.filter(t => selected.has(t.hash)).map(t => t.hash);
     if (hashes.length === 0) return;
     setBusy(prev => { const next = new Set(prev); hashes.forEach(h => next.add(h)); return next; });
@@ -127,6 +137,10 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
   const query = search.trim().toLowerCase();
   // Distinct statuses present, for the status filter dropdown.
   const statusesPresent = [...new Set(torrents.map(t => t.status))].sort();
+  // Forced isn't a status - a forced torrent still reads "downloading" - so it
+  // rides in the same dropdown under a reserved value, and only when there is
+  // something to find. Transmission can't report it, so its list never offers it.
+  const forcedCount = torrents.filter(t => t.force_start === true).length;
   const comparators: Record<typeof sortBy, (a: TorrentStatus, b: TorrentStatus) => number> = {
     created: (a, b) => b.added_date - a.added_date,
     name: (a, b) => (a.name || '').localeCompare(b.name || ''),
@@ -134,7 +148,11 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
   };
   const filtered = torrents
     .filter(t => (query ? t.name.toLowerCase().includes(query) : true))
-    .filter(t => (statusFilter ? t.status === statusFilter : true))
+    .filter(t => {
+      if (!statusFilter) return true;
+      if (statusFilter === FORCED_FILTER) return t.force_start === true;
+      return t.status === statusFilter;
+    })
     .sort(comparators[sortBy]);
 
   const selectedCount = torrents.filter(t => selected.has(t.hash)).length;
@@ -199,6 +217,9 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
           {statusesPresent.map(s => (
             <option key={s} value={s}>{(STATUS_STYLES[s] ?? STATUS_STYLES.unknown).label}</option>
           ))}
+          {forcedCount > 0 && (
+            <option value={FORCED_FILTER}>Forced ({forcedCount})</option>
+          )}
         </select>
 
         {/* Sort field */}
@@ -222,6 +243,14 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
               className="flex items-center gap-1.5 py-2 px-2.5 rounded-lg text-sm bg-slate-700/50 hover:bg-slate-600/50 text-slate-200 transition-colors disabled:opacity-50"
             >
               <Play className="w-4 h-4" /> <span className="hidden sm:inline">Resume</span>
+            </button>
+            <button
+              onClick={() => runBulkAction('force-start')}
+              disabled={bulkBusy}
+              title="Force start selected - jump the client's download queue"
+              className="flex items-center gap-1.5 py-2 px-2.5 rounded-lg text-sm bg-amber-500/15 hover:bg-amber-500/30 text-amber-300 transition-colors disabled:opacity-50"
+            >
+              <Zap className="w-4 h-4" /> <span className="hidden sm:inline">Force start</span>
             </button>
             <button
               onClick={() => runBulkAction('stop')}
@@ -284,11 +313,29 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
       {filtered.map(t => {
         const style = STATUS_STYLES[t.status] ?? STATUS_STYLES.unknown;
         const active = t.status === 'downloading';
-        const paused = t.status === 'stopped';
+        // Both are "not running", so the play/pause button acts the same on
+        // either; only the label distinguishes them.
+        const paused = t.status === 'stopped' || t.status === 'completed';
+        // null means the client can't report it (Transmission), which is not
+        // the same as false - don't light the button up on a guess.
+        const forced = t.force_start === true;
         const isBusy = busy.has(t.hash);
         const done = t.percent_done >= 100;
         const dlInFlight = dlBusy.has(t.hash);
-        const dlDone = dlStarted.has(t.hash);
+        // The transfer this torrent was already pulled through, if any. The
+        // server's match survives reloads; the shared downloads list (fed by the
+        // WebSocket) overrides it while a transfer is actually running.
+        const transfer = t.downlee;
+        const live = transfer?.message_id
+          ? downloads.find(d => d.message_id === transfer.message_id)
+          : undefined;
+        const dlStatus = live?.status ?? transfer?.status ?? null;
+        const dlProgress = live?.progress ?? transfer?.progress ?? 0;
+        const dlDone = dlStatus === 'done';
+        // dlStarted covers the window between "transfer accepted" and the list
+        // refetch that first reports it.
+        const dlRunning = dlStatus === 'downloading' || (!dlStatus && dlStarted.has(t.hash));
+        const dlRetryable = (dlStatus === 'failed' || dlStatus === 'stopped') && !!transfer;
         return (
           <div
             key={t.hash}
@@ -311,8 +358,35 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
               <span className="text-sm sm:text-base text-white font-medium truncate min-w-0 flex-1" title={t.name}>{t.name}</span>
               <div className="flex items-center gap-2 shrink-0">
                 <span className={`text-xs border rounded-full px-2 py-0.5 ${style.cls}`}>{style.label}</span>
-                {done && (
-                  <Tooltip content={dlDone ? 'Sent to DownLee' : 'Download to DownLee'} position="top">
+                {/* DownLee transfer: already pulled, in flight, retryable, or offered. */}
+                {done && dlDone && (
+                  <Tooltip content="Already downloaded to DownLee" position="top">
+                    <span className="flex items-center gap-1.5 py-1.5 px-2.5 rounded-lg bg-green-500/15 text-green-400 border border-green-500/30 cursor-default">
+                      <CheckCircle className="w-4 h-4" />
+                    </span>
+                  </Tooltip>
+                )}
+                {done && !dlDone && dlRunning && (
+                  <Tooltip content="Downloading to DownLee" position="top">
+                    <span className="flex items-center gap-1.5 py-1.5 px-2.5 rounded-lg bg-cyan-500/15 text-cyan-400 border border-cyan-500/30 cursor-default">
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span className="text-xs">{Math.round(dlProgress)}%</span>
+                    </span>
+                  </Tooltip>
+                )}
+                {done && !dlDone && !dlRunning && dlRetryable && (
+                  <Tooltip content={`Transfer to DownLee ${dlStatus} — retry`} position="top">
+                    <button
+                      onClick={() => onRetry(transfer!.id)}
+                      className="flex items-center gap-1.5 py-1.5 px-2.5 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 transition-colors"
+                    >
+                      <RotateCw className="w-4 h-4" />
+                      <ArrowDown className="w-3.5 h-3.5" />
+                    </button>
+                  </Tooltip>
+                )}
+                {done && !dlDone && !dlRunning && !dlRetryable && (
+                  <Tooltip content="Download to DownLee" position="top">
                     <button
                       onClick={() => downloadToDownlee(t)}
                       disabled={dlInFlight}
@@ -320,9 +394,7 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
                     >
                       {dlInFlight
                         ? <Loader2 className="w-4 h-4 animate-spin" />
-                        : dlDone
-                          ? <Check className="w-4 h-4 text-green-400" />
-                          : <img src="/logo.png" alt="" className="w-4 h-4" />}
+                        : <img src="/logo.png" alt="" className="w-4 h-4" />}
                       <ArrowDown className="w-3.5 h-3.5" />
                     </button>
                   </Tooltip>
@@ -335,6 +407,26 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
                 >
                   {isBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : paused ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
                 </button>
+                {/* Force start: only worth offering while the torrent still has
+                    data to fetch - on a finished one it would just force seeding. */}
+                {!done && (
+                  <button
+                    // Already forced? The same button turns it back off - a
+                    // plain start is exactly what clears the flag.
+                    onClick={() => runAction(forced ? 'start' : 'force-start', t)}
+                    disabled={isBusy}
+                    title={forced
+                      ? 'Force started - running ahead of the queue. Click to return it to the queue.'
+                      : "Force start - jump the client's download queue"}
+                    className={`p-2 rounded-lg transition-colors disabled:opacity-50 ${
+                      forced
+                        ? 'bg-amber-400/30 text-amber-200 ring-1 ring-amber-300/60'
+                        : 'bg-amber-500/15 hover:bg-amber-500/30 text-amber-300'
+                    }`}
+                  >
+                    <Zap className={`w-4 h-4 ${forced ? 'fill-current' : ''}`} />
+                  </button>
+                )}
                 <button
                   onClick={() => setRemoveTarget(t)}
                   disabled={isBusy}

@@ -2,7 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   fetchVpsConfig, saveVpsConfig, testVpsConnection, deleteVpsConfig,
   fetchVpsFolders, addVpsFolders, deleteVpsFolder, updateVpsFolder,
-  fetchVpsFiles, downloadVpsFile, deleteVpsRemote,
+  fetchVpsFiles, downloadVpsFile, deleteVpsRemote, fetchVpsUsage,
   type VpsConfigInput, type TorrentClient,
 } from '../api';
 import { qk } from '../api/queryKeys';
@@ -20,6 +20,18 @@ export function useVpsFiles(showSecured: boolean, enabled = true) {
     queryKey: qk.vpsFiles(showSecured),
     queryFn: () => fetchVpsFiles(showSecured),
     enabled,
+  });
+}
+
+/** Seedbox account usage (disk quota + traffic). Cached 60s server-side, so
+ *  a 2-minute refetch keeps it live without hammering the SSH login. */
+export function useVpsUsage(enabled = true) {
+  return useQuery({
+    queryKey: qk.vpsUsage(),
+    queryFn: () => fetchVpsUsage(),
+    enabled,
+    staleTime: 60_000,
+    refetchInterval: 120_000,
   });
 }
 

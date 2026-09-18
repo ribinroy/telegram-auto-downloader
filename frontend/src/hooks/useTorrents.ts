@@ -2,7 +2,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   fetchTorrentConfig, fetchTorrentList, saveTorrentConfig, deleteTorrentConfig,
   testTorrentConnection, setTelegramDefault, torrentAction, addTorrent, addTorrentFile,
-  type TorrentClient,
+  setStopOnComplete,
+  type TorrentClient, type TorrentActionName,
 } from '../api';
 import { qk } from '../api/queryKeys';
 
@@ -55,10 +56,20 @@ export function useSetTelegramDefault() {
   return useMutation({ mutationFn: (client: TorrentClient | null) => setTelegramDefault(client), onSuccess: invalidate });
 }
 
+/** Toggle 'stop seeding when complete' for one client. */
+export function useSetStopOnComplete() {
+  const invalidate = useInvalidateTorrent();
+  return useMutation({
+    mutationFn: (vars: { client: TorrentClient; enabled: boolean }) =>
+      setStopOnComplete(vars.client, vars.enabled),
+    onSuccess: invalidate,
+  });
+}
+
 export function useTorrentAction() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (vars: { client: TorrentClient; action: 'start' | 'stop' | 'remove' | 'verify'; hashes: string[]; deleteData?: boolean }) =>
+    mutationFn: (vars: { client: TorrentClient; action: TorrentActionName; hashes: string[]; deleteData?: boolean }) =>
       torrentAction(vars.client, vars.action, vars.hashes, vars.deleteData),
     onSuccess: (_data, vars) => qc.invalidateQueries({ queryKey: qk.torrentList(vars.client) }),
   });

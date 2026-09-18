@@ -271,11 +271,17 @@ export async function fetchStats(): Promise<Stats> {
 }
 
 export async function retryDownload(id: number): Promise<void> {
-  await authFetch(`/api/retry`, {
+  const response = await authFetch(`/api/retry`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ id }),
   });
+  // A retry that quietly fails to restart anything looks exactly like one that
+  // worked, so surface the server's reason.
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.error || 'Failed to restart the download');
+  }
 }
 
 export async function stopDownload(message_id: string): Promise<void> {
@@ -743,6 +749,61 @@ export async function deleteVpsConfig(): Promise<{ status?: string; configured?:
   return response.json();
 }
 
+/** Seedbox account usage: per-user disk quota + per-client traffic counters. */
+export interface VpsClientStats {
+  client: TorrentClient;
+  downloaded?: number;
+  uploaded?: number;
+  ratio?: number | null;
+  session_downloaded?: number;
+  session_uploaded?: number;
+  free_space?: number | null;
+  error?: string;
+}
+
+/** The shared machine, not your account - every tenant's numbers combined. */
+export interface VpsServerStats {
+  volume: {
+    filesystem: string; mount: string;
+    total: number; used: number; avail: number; percent: number | null;
+  } | null;
+  load: {
+    load1: number; load5: number; load15: number;
+    cores: number; percent: number | null;
+  } | null;
+  net: {
+    iface: string;
+    rx_bytes: number; tx_bytes: number;
+    /** Bytes/sec, derived from the delta between two polls; absent on the first. */
+    rx_rate?: number; tx_rate?: number;
+    /** Seconds the rate was averaged over. */
+    window?: number;
+  } | null;
+}
+
+export interface VpsUsage {
+  host: string | null;
+  disk: {
+    used: number;
+    limit: number;
+    percent: number | null;
+    filesystem: string;
+    /** 'quota' = the per-account limit; 'df' = the shared volume (a fallback). */
+    source: 'quota' | 'df';
+  } | null;
+  disk_error?: string;
+  clients: VpsClientStats[];
+  traffic: { downloaded: number; uploaded: number };
+  server: VpsServerStats | null;
+  cached_at: number;
+}
+
+export async function fetchVpsUsage(refresh = false): Promise<VpsUsage> {
+  const response = await authFetch(`/api/vps/usage${refresh ? '?refresh=1' : ''}`);
+  if (response.status === 401) { clearToken(); window.location.reload(); }
+  return response.json();
+}
+
 // Torrent client (Transmission on the VPS) API
 export type TorrentClient = 'transmission' | 'qbittorrent';
 
@@ -754,6 +815,8 @@ export interface TorrentClientConfig {
   download_dir: string;
   incomplete_dir: string;
   local_dir: string;
+  /** Stop a torrent seeding as soon as its download finishes. */
+  stop_on_complete: boolean;
 }
 
 export interface TorrentConfig {
@@ -776,6 +839,19 @@ export async function saveTorrentConfig(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ client, ...config }),
+  });
+  if (response.status === 401) { clearToken(); window.location.reload(); }
+  return response.json();
+}
+
+/** Flip 'stop seeding when complete' for one client without resaving its config. */
+export async function setStopOnComplete(
+  client: TorrentClient, enabled: boolean
+): Promise<{ status?: string; stop_on_complete?: boolean; error?: string }> {
+  const response = await authFetch(`/api/settings/torrent/stop-on-complete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ client, enabled }),
   });
   if (response.status === 401) { clearToken(); window.location.reload(); }
   return response.json();
@@ -816,7 +892,8 @@ export interface TorrentStatus {
   id: number;
   name: string;
   hash: string;
-  status: 'stopped' | 'check-wait' | 'checking' | 'download-wait' | 'downloading' | 'seed-wait' | 'seeding' | 'unknown';
+  /** 'completed' = finished and not seeding; 'stopped' = paused mid-download. */
+  status: 'stopped' | 'completed' | 'check-wait' | 'checking' | 'download-wait' | 'downloading' | 'seed-wait' | 'seeding' | 'unknown';
   percent_done: number;
   rate_download: number;
   rate_upload: number;
@@ -830,6 +907,11 @@ export interface TorrentStatus {
   seeds_total: number | null;
   leeches_total: number | null;
   added_date: number;
+  /** Running ahead of the client's queue. null = Transmission, which has no
+   *  persistent forced flag, so "not forced" can't be claimed either way. */
+  force_start: boolean | null;
+  /** The VPS->DownLee transfer that already pulled this torrent, if any. */
+  downlee: { id: number; message_id: string | null; status: string | null; progress: number } | null;
 }
 
 export async function fetchTorrentList(client: TorrentClient): Promise<{ configured: boolean; torrents?: TorrentStatus[]; error?: string }> {
@@ -838,8 +920,11 @@ export async function fetchTorrentList(client: TorrentClient): Promise<{ configu
   return response.json();
 }
 
+/** 'force-start' jumps the client's own download queue. */
+export type TorrentActionName = 'start' | 'force-start' | 'stop' | 'remove' | 'verify';
+
 export async function torrentAction(
-  client: TorrentClient, action: 'start' | 'stop' | 'remove' | 'verify', hashes: string[], deleteData = false
+  client: TorrentClient, action: TorrentActionName, hashes: string[], deleteData = false
 ): Promise<{ status?: string; error?: string }> {
   const response = await authFetch(`/api/torrent/action`, {
     method: 'POST',
@@ -1060,7 +1145,11 @@ export async function fetchAnalytics(days: number = 30, groupBy: 'day' | 'hour' 
 // Video playback API
 export interface VideoCheckResult {
   exists: boolean;
+  /** What is actually on disk: a playable video, a folder, or some other file. */
+  kind?: 'video' | 'dir' | 'file';
   path?: string;
+  /** Containing folder (files only) - where the explorer opens. */
+  parent?: string;
   size?: number;
   name?: string;
   error?: string;

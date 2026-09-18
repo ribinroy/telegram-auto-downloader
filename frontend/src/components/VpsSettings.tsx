@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Loader2, AlertCircle, CheckCircle, Check, Plug, FolderPlus, Folder, FolderOpen, Eye, EyeOff, Trash2, Unplug, Server, Magnet, Send } from 'lucide-react';
+import { Loader2, AlertCircle, CheckCircle, Check, Plug, FolderPlus, Folder, FolderOpen, Eye, EyeOff, Trash2, Unplug, Server, Magnet, Send, Upload } from 'lucide-react';
 import {
   browseLocal,
   type VpsWatchFolder, type TorrentClient, type TorrentClientConfig,
@@ -10,7 +10,7 @@ import {
 } from '../hooks/useVps';
 import {
   useTorrentConfig, useSaveTorrentConfig, useTestTorrentConnection, useDeleteTorrentConfig,
-  useSetTelegramDefault,
+  useSetTelegramDefault, useSetStopOnComplete,
 } from '../hooks/useTorrents';
 import { FolderBrowser } from './FolderBrowser';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -41,6 +41,8 @@ export function VpsSettings({ onChange }: { onChange?: () => void }) {
   const [success, setSuccess] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<{ success: boolean; message?: string; error?: string } | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
+  // The watched folder pending removal (null = no dialog open).
+  const [folderToDelete, setFolderToDelete] = useState<VpsWatchFolder | null>(null);
 
   // Watched folders
   const [foldersError, setFoldersError] = useState<string | null>(null);
@@ -142,6 +144,12 @@ export function VpsSettings({ onChange }: { onChange?: () => void }) {
     } catch {
       setFoldersError('Failed to remove folder');
     }
+  };
+
+  const confirmDeleteFolder = () => {
+    const folder = folderToDelete;
+    setFolderToDelete(null);
+    if (folder) handleDeleteFolder(folder.id);
   };
 
   const handleToggleAutoSync = async (folder: VpsWatchFolder) => {
@@ -427,14 +435,14 @@ export function VpsSettings({ onChange }: { onChange?: () => void }) {
               return (
                 <div
                   key={f.id}
-                  className={`flex items-center gap-2 rounded-lg p-2.5 ${inactive ? 'bg-slate-800/30 opacity-60' : 'bg-slate-700/30'}`}
+                  className={`flex items-center gap-2 rounded-lg p-2.5 ${inactive ? 'bg-slate-800/30' : 'bg-slate-700/30'}`}
                 >
                   <Folder className={`w-4 h-4 shrink-0 ${inactive ? 'text-slate-500' : 'text-cyan-400'}`} />
                   <div className="flex-1 min-w-0">
                     <span className={`block text-sm truncate ${inactive ? 'text-slate-400' : 'text-slate-200'}`} title={f.path}>{f.path}</span>
                     {inactive ? (
                       <span className="text-[11px] text-slate-500">
-                        {f.username ? `${f.username}@${f.host}` : f.host} — connect to this VPS to manage
+                        {f.username ? `${f.username}@${f.host}` : f.host} — connect to this VPS to change its settings
                       </span>
                     ) : (
                       <span className="block text-[11px] text-slate-500 truncate" title={f.folder || undefined}>
@@ -478,11 +486,15 @@ export function VpsSettings({ onChange }: { onChange?: () => void }) {
                     <span className={`w-2 h-2 rounded-full ${f.auto_sync && !inactive ? 'bg-purple-400' : 'bg-slate-500'}`} />
                     autoSync
                   </button>
+                  {/* Always available: removing a watched folder only deletes a
+                      database row (and an in-memory autoSync baseline), so it
+                      must not require reaching the VPS it belongs to -
+                      otherwise a folder on a server you no longer have is
+                      stuck in the list forever. */}
                   <button
-                    onClick={() => handleDeleteFolder(f.id)}
-                    disabled={inactive}
-                    className="p-1.5 bg-slate-600/50 hover:bg-red-500/20 text-slate-400 hover:text-red-400 rounded-lg transition-colors shrink-0 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-slate-600/50 disabled:hover:text-slate-400"
-                    title="Remove folder"
+                    onClick={() => setFolderToDelete(f)}
+                    className="p-1.5 bg-slate-600/50 hover:bg-red-500/20 text-slate-400 hover:text-red-400 rounded-lg transition-colors shrink-0"
+                    title={inactive ? 'Remove folder (no connection needed)' : 'Remove folder'}
                   >
                     <Trash2 className="w-4 h-4" />
                   </button>
@@ -515,6 +527,18 @@ export function VpsSettings({ onChange }: { onChange?: () => void }) {
       />
 
       <ConfirmDialog
+        isOpen={folderToDelete !== null}
+        title="Stop watching this folder?"
+        message={`"${folderToDelete?.path}" is removed from the watched list${
+          folderToDelete?.auto_sync ? ', and its hourly autoSync stops' : ''
+        }. Nothing is deleted - the files stay on the VPS, and anything already downloaded stays on this server.`}
+        confirmText="Remove"
+        variant="danger"
+        onConfirm={confirmDeleteFolder}
+        onCancel={() => setFolderToDelete(null)}
+      />
+
+      <ConfirmDialog
         isOpen={confirmRemove}
         title="Remove VPS connection?"
         message="This deletes the saved host, username and password. Your watched folders are kept, but browsing is disabled until you reconnect."
@@ -527,6 +551,9 @@ export function VpsSettings({ onChange }: { onChange?: () => void }) {
   );
 }
 
+// Matches TORRENT_WATCH_INTERVAL on the backend; only used for the blurb.
+const TORRENT_WATCH_SECONDS = 30;
+
 function TorrentClientCard({
   client, label, data, canBrowse,
 }: {
@@ -538,6 +565,7 @@ function TorrentClientCard({
   const saveMut = useSaveTorrentConfig();
   const testMut = useTestTorrentConnection();
   const removeMut = useDeleteTorrentConfig();
+  const seedMut = useSetStopOnComplete();
 
   const [url, setUrl] = useState('');
   const [username, setUsername] = useState('');
@@ -550,6 +578,7 @@ function TorrentClientCard({
   const [testResult, setTestResult] = useState<{ success: boolean; message?: string; error?: string } | null>(null);
   // Which folder field is currently picking a path (local_dir browses the home server).
   const [picking, setPicking] = useState<null | 'download_dir' | 'incomplete_dir' | 'local_dir'>(null);
+  const [confirmRemove, setConfirmRemove] = useState(false);
 
   const saving = saveMut.isPending;
   const testing = testMut.isPending;
@@ -606,6 +635,7 @@ function TorrentClientCard({
   };
 
   const handleRemove = async () => {
+    setConfirmRemove(false);
     setError(null);
     setTestResult(null);
     try {
@@ -733,6 +763,31 @@ function TorrentClientCard({
           'e.g., /mnt/media/torrents (leave blank for the VPS source default)',
           'Where this client’s torrents land on the home server when pulled to DownLee.')}
 
+        {/* Seeding. Saved on its own the moment it is flipped - it is a
+            behaviour switch, not part of the connection form. */}
+        {configured && (
+          <label className="flex items-start gap-2.5 p-2.5 bg-slate-900/40 border border-slate-700/60 rounded-lg cursor-pointer">
+            <input
+              type="checkbox"
+              checked={data?.stop_on_complete ?? true}
+              disabled={seedMut.isPending}
+              onChange={(e) => seedMut.mutate({ client, enabled: e.target.checked })}
+              className="mt-0.5 w-4 h-4 accent-purple-500 shrink-0"
+            />
+            <span className="min-w-0">
+              <span className="flex items-center gap-1.5 text-sm text-white">
+                <Upload className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+                Stop seeding when complete
+                {seedMut.isPending && <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-400" />}
+              </span>
+              <span className="block text-xs text-slate-500 mt-0.5">
+                DownLee checks this client every {TORRENT_WATCH_SECONDS}s and pauses a torrent once it
+                finishes downloading. Turn it off if the tracker needs you to seed.
+              </span>
+            </span>
+          </label>
+        )}
+
         {testResult && (
           <div className={`flex items-center gap-2 border rounded-lg p-3 text-sm ${
             testResult.success
@@ -766,7 +821,7 @@ function TorrentClientCard({
           {configured && (
             <button
               type="button"
-              onClick={handleRemove}
+              onClick={() => setConfirmRemove(true)}
               disabled={removing}
               title={`Remove the saved ${label} client`}
               className="px-3 bg-red-500/10 hover:bg-red-500/20 border border-red-500/40 text-red-400 font-medium py-2 rounded-lg transition-colors disabled:opacity-50 flex items-center justify-center"
@@ -795,6 +850,16 @@ function TorrentClientCard({
           else if (picking === 'download_dir') setDownloadDir(p);
           setPicking(null);
         }}
+      />
+
+      <ConfirmDialog
+        isOpen={confirmRemove}
+        title={`Remove ${label}?`}
+        message={`This deletes the saved ${label} URL, username and password. Torrents already on the VPS keep running - DownLee just stops talking to this client until you configure it again.`}
+        confirmText="Remove"
+        variant="danger"
+        onConfirm={handleRemove}
+        onCancel={() => setConfirmRemove(false)}
       />
     </div>
   );

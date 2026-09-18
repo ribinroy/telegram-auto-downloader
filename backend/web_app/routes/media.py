@@ -46,18 +46,28 @@ class MediaRoutesMixin:
             possible_paths = candidate_file_paths(download, file_name)
 
             for file_path in possible_paths:
-                if file_path.exists():
-                    # Check if it's a video file
-                    video_extensions = {'.mp4', '.mkv', '.webm', '.avi', '.mov', '.m4v', '.flv', '.wmv'}
-                    if file_path.suffix.lower() in video_extensions:
-                        # Reset file_deleted flag if file exists
-                        db.update_download_by_id(download_id, file_deleted=False)
-                        return jsonify({
-                            "exists": True,
-                            "path": str(file_path),
-                            "size": file_path.stat().st_size,
-                            "name": file_name
-                        })
+                if not file_path.exists():
+                    continue
+                # Reset file_deleted flag if the item is there
+                db.update_download_by_id(download_id, file_deleted=False)
+                # `kind` tells the frontend what to do with it: play a video
+                # inline, or hand a folder/other file to the file explorer.
+                if file_path.is_dir():
+                    return jsonify({
+                        "exists": True,
+                        "kind": "dir",
+                        "path": str(file_path),
+                        "name": file_name,
+                    })
+                video_extensions = {'.mp4', '.mkv', '.webm', '.avi', '.mov', '.m4v', '.flv', '.wmv'}
+                return jsonify({
+                    "exists": True,
+                    "kind": "video" if file_path.suffix.lower() in video_extensions else "file",
+                    "path": str(file_path),
+                    "parent": str(file_path.parent),
+                    "size": file_path.stat().st_size,
+                    "name": file_name
+                })
 
             # Mark file as deleted in database
             db.update_download_by_id(download_id, file_deleted=True)
