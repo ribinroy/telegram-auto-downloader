@@ -41,6 +41,8 @@ export function VpsSettings({ onChange }: { onChange?: () => void }) {
   const [success, setSuccess] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<{ success: boolean; message?: string; error?: string } | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
+  // The watched folder pending removal (null = no dialog open).
+  const [folderToDelete, setFolderToDelete] = useState<VpsWatchFolder | null>(null);
 
   // Watched folders
   const [foldersError, setFoldersError] = useState<string | null>(null);
@@ -142,6 +144,12 @@ export function VpsSettings({ onChange }: { onChange?: () => void }) {
     } catch {
       setFoldersError('Failed to remove folder');
     }
+  };
+
+  const confirmDeleteFolder = () => {
+    const folder = folderToDelete;
+    setFolderToDelete(null);
+    if (folder) handleDeleteFolder(folder.id);
   };
 
   const handleToggleAutoSync = async (folder: VpsWatchFolder) => {
@@ -484,7 +492,7 @@ export function VpsSettings({ onChange }: { onChange?: () => void }) {
                       otherwise a folder on a server you no longer have is
                       stuck in the list forever. */}
                   <button
-                    onClick={() => handleDeleteFolder(f.id)}
+                    onClick={() => setFolderToDelete(f)}
                     className="p-1.5 bg-slate-600/50 hover:bg-red-500/20 text-slate-400 hover:text-red-400 rounded-lg transition-colors shrink-0"
                     title={inactive ? 'Remove folder (no connection needed)' : 'Remove folder'}
                   >
@@ -516,6 +524,18 @@ export function VpsSettings({ onChange }: { onChange?: () => void }) {
           if (destTarget) handleSetDestFolder(destTarget, paths[0] || null);
           setDestTarget(null);
         }}
+      />
+
+      <ConfirmDialog
+        isOpen={folderToDelete !== null}
+        title="Stop watching this folder?"
+        message={`"${folderToDelete?.path}" is removed from the watched list${
+          folderToDelete?.auto_sync ? ', and its hourly autoSync stops' : ''
+        }. Nothing is deleted - the files stay on the VPS, and anything already downloaded stays on this server.`}
+        confirmText="Remove"
+        variant="danger"
+        onConfirm={confirmDeleteFolder}
+        onCancel={() => setFolderToDelete(null)}
       />
 
       <ConfirmDialog
@@ -558,6 +578,7 @@ function TorrentClientCard({
   const [testResult, setTestResult] = useState<{ success: boolean; message?: string; error?: string } | null>(null);
   // Which folder field is currently picking a path (local_dir browses the home server).
   const [picking, setPicking] = useState<null | 'download_dir' | 'incomplete_dir' | 'local_dir'>(null);
+  const [confirmRemove, setConfirmRemove] = useState(false);
 
   const saving = saveMut.isPending;
   const testing = testMut.isPending;
@@ -614,6 +635,7 @@ function TorrentClientCard({
   };
 
   const handleRemove = async () => {
+    setConfirmRemove(false);
     setError(null);
     setTestResult(null);
     try {
@@ -799,7 +821,7 @@ function TorrentClientCard({
           {configured && (
             <button
               type="button"
-              onClick={handleRemove}
+              onClick={() => setConfirmRemove(true)}
               disabled={removing}
               title={`Remove the saved ${label} client`}
               className="px-3 bg-red-500/10 hover:bg-red-500/20 border border-red-500/40 text-red-400 font-medium py-2 rounded-lg transition-colors disabled:opacity-50 flex items-center justify-center"
@@ -828,6 +850,16 @@ function TorrentClientCard({
           else if (picking === 'download_dir') setDownloadDir(p);
           setPicking(null);
         }}
+      />
+
+      <ConfirmDialog
+        isOpen={confirmRemove}
+        title={`Remove ${label}?`}
+        message={`This deletes the saved ${label} URL, username and password. Torrents already on the VPS keep running - DownLee just stops talking to this client until you configure it again.`}
+        confirmText="Remove"
+        variant="danger"
+        onConfirm={handleRemove}
+        onCancel={() => setConfirmRemove(false)}
       />
     </div>
   );

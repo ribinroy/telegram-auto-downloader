@@ -17,7 +17,7 @@ from backend.web_app.torrent import (
     load_torrent_config, apply_torrent_session, transmission_add_magnet,
     transmission_rpc, normalize_transmission_url,
 )
-from backend.web_app.vps import load_vps_credentials, annotate_vps_folders, open_vps_sftp
+from backend.web_app.vps import load_vps_credentials, annotate_vps_folders, open_vps_sftp, close_pooled_session
 from backend.web_app.helpers import candidate_file_paths
 
 
@@ -90,6 +90,8 @@ class VpsSettingsRoutesMixin:
                 "password_enc": password_enc,
             }
             db.set_setting("vps_config", json.dumps(cfg))
+            # The explorer holds a warm SSH session; it points at the old box.
+            close_pooled_session()
             return jsonify({
                 "status": "saved",
                 "configured": True,
@@ -101,6 +103,7 @@ class VpsSettingsRoutesMixin:
         def delete_vps_config():
             """Remove the saved VPS connection (credentials). Watched folders are kept."""
             get_db().delete_setting("vps_config")
+            close_pooled_session()
             return jsonify({"status": "deleted", "configured": False})
 
         @self.app.route("/api/settings/vps/test", methods=["POST"])
