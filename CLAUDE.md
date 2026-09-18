@@ -81,6 +81,7 @@ Main Thread
 |  |- files.py                      # Filesystem service for the file explorer (mounts, listing, ops, thumbs)
 |  |- remote_files.py               # The VPS as a second explorer drive, over SFTP (`vps:` paths)
 |  |- jobs.py                       # Maintenance job bodies + schedule store + JobScheduler thread
+|  |- logsafe.py                    # Log redaction filter + rotating, owner-only log handler
 |  |- netwatch.py                   # Connectivity probe + stall sweep -> resumes interrupted downloads
 |  |- torrent_watch.py              # Polls the torrent clients; stops finished torrents from seeding
 |  |- resume.py                     # Single resume path shared by /api/retry and the watchdog
@@ -571,6 +572,30 @@ simple.
   yields targets like `/vps:` and a root button pointing at the *local* `/`, so
   `splitPrefix()` strips the scheme, crumbs are built below `home`, and every
   target gets the prefix put back.
+
+## Logging
+
+`backend/logsafe.py` owns log setup; `setup_logging()` in `backend/main.py` just
+calls `logsafe.install(LOG_FILE)`.
+
+- **Credentials are redacted before they reach a handler.** `media_token_required`
+  exists so no token lands "in a URL, browser history or an access log", but
+  Werkzeug logs the full request line - query string included - which defeated
+  exactly that. A media token is good for `MEDIA_TOKEN_HOURS` of arbitrary file
+  read as the service user, so a world-readable log of them is a credential store.
+  `RedactSecretsFilter` rewrites `token=`, `password=`, `api_key=` and friends
+  (`SECRET_PARAMS`) to `[redacted]`.
+- It filters the **formatted** message, not `record.msg`: Werkzeug passes the
+  request line as a positional arg, so inspecting `msg` alone would miss every
+  one. The filter sits on the **handler** as well as the root logger, because a
+  filter on a logger does not apply to records propagated up to it.
+- **Rotating and owner-only**: `RotatingFileHandler` at 10 MB x 5 (this replaced
+  a 70 MB unrotated file), `chmod 600` on the log and `750` on `logs/`.
+- `scrub_file()` redacts a log that was already written. It rewrites the **same
+  inode** rather than renaming: the running process holds an open descriptor, so
+  replacing the file would leave the service logging to an orphan. Redaction only
+  shortens a line, so the content always fits, and the handler appends, so later
+  writes land at the new end.
 
 ## Key Patterns
 

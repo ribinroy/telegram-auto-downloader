@@ -16,12 +16,14 @@ from backend.netwatch import NetworkWatchdog
 
 
 def setup_logging():
-    """Setup logging configuration"""
-    logging.basicConfig(
-        filename=str(LOG_FILE),
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(message)s"
-    )
+    """Rotating, owner-only log with credentials redacted.
+
+    Werkzeug logs the full request line, so a media token handed to a <video>
+    tag used to land in a world-readable file and stay replayable for hours.
+    See backend/logsafe.py.
+    """
+    from backend import logsafe
+    logsafe.install(LOG_FILE)
 
 
 def validate_credentials():

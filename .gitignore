@@ -66,3 +66,6 @@ cookies.txt
 
 # Explorer trash for files deleted from the root filesystem
 .trash/
+
+# Deployment-specific security assessment - never publish
+SECURITY_FINDINGS.txt
