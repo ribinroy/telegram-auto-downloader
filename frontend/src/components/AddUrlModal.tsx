@@ -46,9 +46,11 @@ interface AddUrlModalProps {
   isOpen: boolean;
   onClose: () => void;
   initialUrl?: string | null;
+  /** A .torrent dropped onto the page - loaded straight into torrent mode. */
+  initialFile?: File | null;
 }
 
-export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
+export function AddUrlModal({ isOpen, onClose, initialUrl, initialFile }: AddUrlModalProps) {
   const [url, setUrl] = useState('');
   const [checkResult, setCheckResult] = useState<UrlCheckResult | null>(null);
   const [selectedFormat, setSelectedFormat] = useState<VideoFormat | null>(null);
@@ -201,6 +203,13 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
     return null;
   };
 
+  // A dropped .torrent goes straight into torrent mode. Keyed on the File
+  // itself rather than a once-only ref, so dropping a second one onto an
+  // already-open modal replaces the first.
+  useEffect(() => {
+    if (isOpen && initialFile) enterTorrentFileMode(initialFile);
+  }, [isOpen, initialFile]);
+
   // Auto-fill and check when initialUrl is provided
   useEffect(() => {
     if (isOpen && initialUrl && !hasAutoChecked.current) {
@@ -332,6 +341,7 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
                 setSelectedFormat(null);
                 setError(null);
                 setMagnetMode(false);
+                setTorrentFile(null);
                 setMagnetResult(null);
               }}
               onKeyDown={handleKeyDown}
@@ -357,7 +367,7 @@ export function AddUrlModal({ isOpen, onClose, initialUrl }: AddUrlModalProps) {
                   onClick={() => fileInputRef.current?.click()}
                   className="mt-2 inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-purple-300 transition-colors"
                 >
-                  <Upload className="w-3.5 h-3.5" /> or upload a .torrent file
+                  <Upload className="w-3.5 h-3.5" /> or upload a .torrent file — or drop one on the page
                 </button>
               </>
             )}
