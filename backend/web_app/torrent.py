@@ -221,12 +221,20 @@ def _transmission_normalize(t):
 
     eta = t.get("eta")
     stats = t.get("trackerStats") or []
+    percent = round((t.get("percentDone") or 0) * 100, 1)
+    status = _TRANSMISSION_STATUS.get(t.get("status"), "unknown")
+    # Transmission reports one "stopped" for both "you paused a half-finished
+    # download" and "it finished and is no longer seeding" - and with the
+    # torrent watcher stopping seeds on completion, the second is the common
+    # case. Calling that "Paused" reads like something went wrong.
+    if status == "stopped" and percent >= 100:
+        status = "completed"
     return {
         "id": t.get("id"),
         "name": t.get("name"),
         "hash": t.get("hashString"),
-        "status": _TRANSMISSION_STATUS.get(t.get("status"), "unknown"),
-        "percent_done": round((t.get("percentDone") or 0) * 100, 1),
+        "status": status,
+        "percent_done": percent,
         "rate_download": t.get("rateDownload") or 0,
         "rate_upload": t.get("rateUpload") or 0,
         "total_size": t.get("totalSize") or 0,

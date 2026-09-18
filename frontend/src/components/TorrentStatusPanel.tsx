@@ -14,10 +14,14 @@ import { useTorrentList, useTorrentAction } from '../hooks/useTorrents';
 import { useDownloadVpsFile } from '../hooks/useVps';
 import { useLayoutContext } from './Layout';
 
+// Reserved filter value: not a status the clients report, so it can't collide.
+const FORCED_FILTER = '@forced';
+
 const STATUS_STYLES: Record<TorrentStatus['status'], { label: string; cls: string }> = {
   downloading: { label: 'Downloading', cls: 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30' },
   seeding: { label: 'Seeding', cls: 'bg-green-500/15 text-green-400 border-green-500/30' },
   stopped: { label: 'Paused', cls: 'bg-slate-500/15 text-slate-300 border-slate-500/30' },
+  completed: { label: 'Completed', cls: 'bg-green-500/15 text-green-300 border-green-500/30' },
   checking: { label: 'Checking', cls: 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30' },
   'check-wait': { label: 'Queued (check)', cls: 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30' },
   'download-wait': { label: 'Queued', cls: 'bg-slate-500/15 text-slate-300 border-slate-500/30' },
@@ -133,6 +137,10 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
   const query = search.trim().toLowerCase();
   // Distinct statuses present, for the status filter dropdown.
   const statusesPresent = [...new Set(torrents.map(t => t.status))].sort();
+  // Forced isn't a status - a forced torrent still reads "downloading" - so it
+  // rides in the same dropdown under a reserved value, and only when there is
+  // something to find. Transmission can't report it, so its list never offers it.
+  const forcedCount = torrents.filter(t => t.force_start === true).length;
   const comparators: Record<typeof sortBy, (a: TorrentStatus, b: TorrentStatus) => number> = {
     created: (a, b) => b.added_date - a.added_date,
     name: (a, b) => (a.name || '').localeCompare(b.name || ''),
@@ -140,7 +148,11 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
   };
   const filtered = torrents
     .filter(t => (query ? t.name.toLowerCase().includes(query) : true))
-    .filter(t => (statusFilter ? t.status === statusFilter : true))
+    .filter(t => {
+      if (!statusFilter) return true;
+      if (statusFilter === FORCED_FILTER) return t.force_start === true;
+      return t.status === statusFilter;
+    })
     .sort(comparators[sortBy]);
 
   const selectedCount = torrents.filter(t => selected.has(t.hash)).length;
@@ -205,6 +217,9 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
           {statusesPresent.map(s => (
             <option key={s} value={s}>{(STATUS_STYLES[s] ?? STATUS_STYLES.unknown).label}</option>
           ))}
+          {forcedCount > 0 && (
+            <option value={FORCED_FILTER}>Forced ({forcedCount})</option>
+          )}
         </select>
 
         {/* Sort field */}
@@ -298,7 +313,9 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
       {filtered.map(t => {
         const style = STATUS_STYLES[t.status] ?? STATUS_STYLES.unknown;
         const active = t.status === 'downloading';
-        const paused = t.status === 'stopped';
+        // Both are "not running", so the play/pause button acts the same on
+        // either; only the label distinguishes them.
+        const paused = t.status === 'stopped' || t.status === 'completed';
         // null means the client can't report it (Transmission), which is not
         // the same as false - don't light the button up on a guess.
         const forced = t.force_start === true;
@@ -341,13 +358,6 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
               <span className="text-sm sm:text-base text-white font-medium truncate min-w-0 flex-1" title={t.name}>{t.name}</span>
               <div className="flex items-center gap-2 shrink-0">
                 <span className={`text-xs border rounded-full px-2 py-0.5 ${style.cls}`}>{style.label}</span>
-                {/* The status label alone can't show this: a forced torrent
-                    still reads "downloading". */}
-                {forced && (
-                  <span className="flex items-center gap-1 text-xs border border-amber-400/40 bg-amber-400/15 text-amber-200 rounded-full px-2 py-0.5">
-                    <Zap className="w-3 h-3 fill-current" /> Forced
-                  </span>
-                )}
                 {/* DownLee transfer: already pulled, in flight, retryable, or offered. */}
                 {done && dlDone && (
                   <Tooltip content="Already downloaded to DownLee" position="top">

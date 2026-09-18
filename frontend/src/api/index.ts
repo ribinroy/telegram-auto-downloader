@@ -892,7 +892,8 @@ export interface TorrentStatus {
   id: number;
   name: string;
   hash: string;
-  status: 'stopped' | 'check-wait' | 'checking' | 'download-wait' | 'downloading' | 'seed-wait' | 'seeding' | 'unknown';
+  /** 'completed' = finished and not seeding; 'stopped' = paused mid-download. */
+  status: 'stopped' | 'completed' | 'check-wait' | 'checking' | 'download-wait' | 'downloading' | 'seed-wait' | 'seeding' | 'unknown';
   percent_done: number;
   rate_download: number;
   rate_upload: number;

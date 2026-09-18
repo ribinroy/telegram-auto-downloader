@@ -20,7 +20,10 @@ _STATE_LABELS = {
     "downloading": "downloading", "metaDL": "downloading",
     "forcedDL": "downloading", "stalledDL": "downloading",
     "pausedDL": "stopped", "stoppedDL": "stopped",
-    "pausedUP": "stopped", "stoppedUP": "stopped",
+    # ...UP = stopped *after* completing, which is a finished torrent, not a
+    # paused one. qBittorrent draws this distinction for us; Transmission does
+    # not, so torrent.py derives the same thing from the percentage.
+    "pausedUP": "completed", "stoppedUP": "completed",
     "uploading": "seeding", "forcedUP": "seeding", "stalledUP": "seeding",
     "queuedDL": "download-wait", "queuedUP": "seed-wait",
     "checkingDL": "checking", "checkingUP": "checking",
