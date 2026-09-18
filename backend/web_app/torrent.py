@@ -86,6 +86,15 @@ def get_telegram_default():
     return None
 
 
+def stop_on_complete_enabled(sub: dict) -> bool:
+    """Whether a client's finished torrents should be stopped from seeding.
+
+    Defaults to on: a home setup has already pulled the files down, and the
+    upload is just spending the VPS's bandwidth. Private trackers need the
+    opposite, which is what the per-client toggle is for."""
+    return bool((sub or {}).get("stop_on_complete", True))
+
+
 def load_torrent_config(client):
     """Load a client's config with the password decrypted, plus a `client` key.
     Returns None when that client is not configured."""
@@ -103,6 +112,7 @@ def load_torrent_config(client):
         "download_dir": sub.get("download_dir", ""),
         "incomplete_dir": sub.get("incomplete_dir", ""),
         "local_dir": sub.get("local_dir", ""),
+        "stop_on_complete": stop_on_complete_enabled(sub),
     }
 
 

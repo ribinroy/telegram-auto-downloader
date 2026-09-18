@@ -17,6 +17,7 @@ from backend.web_app.torrent import (
     CLIENTS, read_torrent_settings, write_torrent_settings, load_torrent_config,
     apply_torrent_session, normalize_transmission_url,
     torrent_test, torrent_add_magnet, torrent_add_file, torrent_list, torrent_control,
+    stop_on_complete_enabled,
 )
 from backend.web_app.vps import load_vps_credentials, annotate_vps_folders, open_vps_sftp
 from backend.web_app.helpers import candidate_file_paths
@@ -35,6 +36,7 @@ class TorrentRoutesMixin:
                 "download_dir": sub.get("download_dir", ""),
                 "incomplete_dir": sub.get("incomplete_dir", ""),
                 "local_dir": sub.get("local_dir", ""),
+                "stop_on_complete": stop_on_complete_enabled(sub),
             }
 
         @self.app.route("/api/settings/torrent", methods=["GET"])
@@ -83,6 +85,10 @@ class TorrentRoutesMixin:
                 "download_dir": download_dir,
                 "incomplete_dir": incomplete_dir,
                 "local_dir": local_dir,
+                # A full save rewrites the sub-config, so carry the seeding
+                # toggle over rather than silently resetting it to the default.
+                "stop_on_complete": bool(data["stop_on_complete"]) if "stop_on_complete" in data
+                                    else stop_on_complete_enabled(prev),
             }
             # If this is the only configured client and no Telegram default is
             # set yet, make it the default so Telegram magnets work out of the box.
@@ -107,6 +113,25 @@ class TorrentRoutesMixin:
 
             return jsonify({"status": "saved", "warning": warning,
                             **_client_summary(settings, client)})
+
+        @self.app.route("/api/settings/torrent/stop-on-complete", methods=["POST"])
+        @token_required
+        def set_stop_on_complete():
+            """Toggle 'stop seeding when complete' for one client:
+            {client, enabled}. Its own route so flipping the switch doesn't
+            round-trip (and risk clobbering) the whole client config."""
+            data = request.json or {}
+            client = (data.get("client") or "").strip()
+            if client not in CLIENTS:
+                return jsonify({"error": "Unknown torrent client"}), 400
+            settings = read_torrent_settings()
+            sub = settings.get(client) or {}
+            if not sub.get("url"):
+                return jsonify({"error": f"{client} is not configured"}), 400
+            sub["stop_on_complete"] = bool(data.get("enabled"))
+            settings[client] = sub
+            write_torrent_settings(settings)
+            return jsonify({"status": "saved", **_client_summary(settings, client)})
 
         @self.app.route("/api/settings/torrent", methods=["DELETE"])
         @token_required

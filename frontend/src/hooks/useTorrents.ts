@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   fetchTorrentConfig, fetchTorrentList, saveTorrentConfig, deleteTorrentConfig,
   testTorrentConnection, setTelegramDefault, torrentAction, addTorrent, addTorrentFile,
+  setStopOnComplete,
   type TorrentClient,
 } from '../api';
 import { qk } from '../api/queryKeys';
@@ -53,6 +54,16 @@ export function useTestTorrentConnection() {
 export function useSetTelegramDefault() {
   const invalidate = useInvalidateTorrent();
   return useMutation({ mutationFn: (client: TorrentClient | null) => setTelegramDefault(client), onSuccess: invalidate });
+}
+
+/** Toggle 'stop seeding when complete' for one client. */
+export function useSetStopOnComplete() {
+  const invalidate = useInvalidateTorrent();
+  return useMutation({
+    mutationFn: (vars: { client: TorrentClient; enabled: boolean }) =>
+      setStopOnComplete(vars.client, vars.enabled),
+    onSuccess: invalidate,
+  });
 }
 
 export function useTorrentAction() {

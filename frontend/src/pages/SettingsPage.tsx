@@ -165,9 +165,20 @@ export function SettingsPage() {
         <p className="text-slate-400 text-xs sm:text-sm">Manage your preferences and configuration</p>
       </div>
 
-      <div className="flex flex-col md:flex-row gap-4 sm:gap-6">
-        {/* Sidebar tabs */}
-        <nav className="md:w-64 md:shrink-0 flex md:flex-col gap-1 overflow-x-auto md:overflow-visible border-b md:border-b-0 border-slate-700 pb-2 md:pb-0">
+      <div className="flex flex-col md:flex-row md:items-start gap-4 sm:gap-6">
+        {/* Sidebar tabs. Pinned rather than scrolled away with the content:
+            the VPS and Jobs panels are several screens tall, and having to
+            scroll back to the top to reach another section is miserable.
+            `self-start` matters - a stretched flex item is its own scroll
+            container's full height and sticky would never engage. On phones
+            the same nav is the horizontal strip under the header. */}
+        <nav className="md:w-64 md:shrink-0 md:self-start sticky top-14 md:top-20 z-20
+                        flex md:flex-col gap-1
+                        -mx-3 px-3 py-2 sm:-mx-4 sm:px-4 md:mx-0 md:p-2
+                        overflow-x-auto md:overflow-x-visible md:overflow-y-auto
+                        md:max-h-[calc(100vh-7rem)]
+                        border-b md:border border-slate-700/70 md:rounded-xl
+                        bg-slate-900/85 md:bg-slate-800/40 backdrop-blur-xl">
           {visibleTabs.map(tab => {
             const Icon = tab.icon;
             const active = activeTab === tab.id;
@@ -175,16 +186,18 @@ export function SettingsPage() {
               <button
                 key={tab.id}
                 onClick={() => goToTab(tab.id)}
-                className={`flex items-center gap-3 px-3 sm:px-4 py-2.5 sm:py-3 rounded-lg text-left transition-colors whitespace-nowrap md:whitespace-normal ${
+                title={tab.description}
+                aria-current={active ? 'page' : undefined}
+                className={`group flex shrink-0 items-center gap-3 px-3 sm:px-4 py-2.5 rounded-lg text-left transition-colors whitespace-nowrap md:whitespace-normal ${
                   active
                     ? 'bg-cyan-500/15 text-cyan-400 md:border md:border-cyan-500/30'
-                    : 'text-slate-400 hover:text-white hover:bg-slate-700/40'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-700/40 md:border md:border-transparent'
                 }`}
               >
-                <Icon className="w-4 h-4 shrink-0" />
-                <span className="flex flex-col">
+                <Icon className={`w-4 h-4 shrink-0 ${active ? '' : 'text-slate-500 group-hover:text-slate-300'}`} />
+                <span className="flex flex-col min-w-0">
                   <span className="text-sm font-medium">{tab.label}</span>
-                  <span className={`hidden md:block text-xs ${active ? 'text-cyan-400/70' : 'text-slate-500'}`}>
+                  <span className={`hidden md:block text-xs truncate ${active ? 'text-cyan-400/70' : 'text-slate-500'}`}>
                     {tab.description}
                   </span>
                 </span>

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Loader2, AlertCircle, CheckCircle, Check, Plug, FolderPlus, Folder, FolderOpen, Eye, EyeOff, Trash2, Unplug, Server, Magnet, Send } from 'lucide-react';
+import { Loader2, AlertCircle, CheckCircle, Check, Plug, FolderPlus, Folder, FolderOpen, Eye, EyeOff, Trash2, Unplug, Server, Magnet, Send, Upload } from 'lucide-react';
 import {
   browseLocal,
   type VpsWatchFolder, type TorrentClient, type TorrentClientConfig,
@@ -10,7 +10,7 @@ import {
 } from '../hooks/useVps';
 import {
   useTorrentConfig, useSaveTorrentConfig, useTestTorrentConnection, useDeleteTorrentConfig,
-  useSetTelegramDefault,
+  useSetTelegramDefault, useSetStopOnComplete,
 } from '../hooks/useTorrents';
 import { FolderBrowser } from './FolderBrowser';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -527,6 +527,9 @@ export function VpsSettings({ onChange }: { onChange?: () => void }) {
   );
 }
 
+// Matches TORRENT_WATCH_INTERVAL on the backend; only used for the blurb.
+const TORRENT_WATCH_SECONDS = 30;
+
 function TorrentClientCard({
   client, label, data, canBrowse,
 }: {
@@ -538,6 +541,7 @@ function TorrentClientCard({
   const saveMut = useSaveTorrentConfig();
   const testMut = useTestTorrentConnection();
   const removeMut = useDeleteTorrentConfig();
+  const seedMut = useSetStopOnComplete();
 
   const [url, setUrl] = useState('');
   const [username, setUsername] = useState('');
@@ -732,6 +736,31 @@ function TorrentClientCard({
           'Default local folder (home server)',
           'e.g., /mnt/media/torrents (leave blank for the VPS source default)',
           'Where this client’s torrents land on the home server when pulled to DownLee.')}
+
+        {/* Seeding. Saved on its own the moment it is flipped - it is a
+            behaviour switch, not part of the connection form. */}
+        {configured && (
+          <label className="flex items-start gap-2.5 p-2.5 bg-slate-900/40 border border-slate-700/60 rounded-lg cursor-pointer">
+            <input
+              type="checkbox"
+              checked={data?.stop_on_complete ?? true}
+              disabled={seedMut.isPending}
+              onChange={(e) => seedMut.mutate({ client, enabled: e.target.checked })}
+              className="mt-0.5 w-4 h-4 accent-purple-500 shrink-0"
+            />
+            <span className="min-w-0">
+              <span className="flex items-center gap-1.5 text-sm text-white">
+                <Upload className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+                Stop seeding when complete
+                {seedMut.isPending && <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-400" />}
+              </span>
+              <span className="block text-xs text-slate-500 mt-0.5">
+                DownLee checks this client every {TORRENT_WATCH_SECONDS}s and pauses a torrent once it
+                finishes downloading. Turn it off if the tracker needs you to seed.
+              </span>
+            </span>
+          </label>
+        )}
 
         {testResult && (
           <div className={`flex items-center gap-2 border rounded-lg p-3 text-sm ${

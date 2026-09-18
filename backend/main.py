@@ -123,6 +123,13 @@ def main(argv=None):
         NetworkWatchdog().start()
         print("📡 Network watchdog started")
 
+    # Stop completed torrents from seeding (per-client setting)
+    from backend.config import TORRENT_WATCH
+    if TORRENT_WATCH:
+        from backend.torrent_watch import TorrentWatcher
+        TorrentWatcher().start()
+        print("🌱 Torrent watcher started")
+
     # Start Telegram client (this will block)
     telegram_downloader.start()
 

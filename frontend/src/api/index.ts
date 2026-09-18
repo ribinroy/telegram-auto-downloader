@@ -760,6 +760,8 @@ export interface TorrentClientConfig {
   download_dir: string;
   incomplete_dir: string;
   local_dir: string;
+  /** Stop a torrent seeding as soon as its download finishes. */
+  stop_on_complete: boolean;
 }
 
 export interface TorrentConfig {
@@ -782,6 +784,19 @@ export async function saveTorrentConfig(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ client, ...config }),
+  });
+  if (response.status === 401) { clearToken(); window.location.reload(); }
+  return response.json();
+}
+
+/** Flip 'stop seeding when complete' for one client without resaving its config. */
+export async function setStopOnComplete(
+  client: TorrentClient, enabled: boolean
+): Promise<{ status?: string; stop_on_complete?: boolean; error?: string }> {
+  const response = await authFetch(`/api/settings/torrent/stop-on-complete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ client, enabled }),
   });
   if (response.status === 401) { clearToken(); window.location.reload(); }
   return response.json();

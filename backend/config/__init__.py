@@ -164,6 +164,12 @@ MAX_RETRIES = int(os.getenv('MAX_RETRIES', '6'))
 NET_WATCHDOG = _env_bool('NET_WATCHDOG', True)
 NET_PROBE_INTERVAL = int(os.getenv('NET_PROBE_INTERVAL', '20'))
 NET_STALL_SECONDS = int(os.getenv('NET_STALL_SECONDS', '600'))
+
+# Torrent watcher: polls each configured client and stops a torrent from
+# seeding once it has finished downloading. Whether it acts on a given client
+# is that client's `stop_on_complete` setting; this switch is the thread itself.
+TORRENT_WATCH = _env_bool('TORRENT_WATCH', True)
+TORRENT_WATCH_INTERVAL = int(os.getenv('TORRENT_WATCH_INTERVAL', '30'))
 # host:port pairs to TCP-connect to. DNS resolution is deliberately not part of
 # the probe - a working link with a sulking resolver would read as an outage.
 _probe_hosts_env = (os.getenv('NET_PROBE_HOSTS') or '').strip()

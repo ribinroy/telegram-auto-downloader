@@ -21,6 +21,7 @@ Main Thread
   |- VPS threads (daemon) ........... one thread per SFTP transfer + hourly autoSync loop
   |- Job scheduler (daemon) ......... fires due maintenance jobs (backend/jobs.py)
   |- Network watchdog (daemon) ...... resumes downloads the uplink interrupted
+  |- Torrent watcher (daemon) ....... stops completed torrents from seeding
   '- Telegram thread (blocking) ..... Telethon client.start() - blocks main thread
 ```
 
@@ -80,6 +81,7 @@ Main Thread
 |  |- files.py                      # Filesystem service for the file explorer (mounts, listing, ops, thumbs)
 |  |- jobs.py                       # Maintenance job bodies + schedule store + JobScheduler thread
 |  |- netwatch.py                   # Connectivity probe + stall sweep -> resumes interrupted downloads
+|  |- torrent_watch.py              # Polls the torrent clients; stops finished torrents from seeding
 |  |- resume.py                     # Single resume path shared by /api/retry and the watchdog
 |  |- file_meta.py                  # Video metadata extraction (ffprobe)
 |  |- browser_downloader.py         # Playwright fallback for yt-dlp
@@ -212,7 +214,7 @@ Access/refresh token pair. Access tokens are short (`ACCESS_TOKEN_MINUTES`, defa
 - `POST /api/vps/delete-remote` - Delete on the VPS
 
 ### Torrent Clients (Transmission + qBittorrent on the VPS)
-- **Both clients are configurable and live simultaneously.** Config is a nested `torrent_config` setting: `{transmission:{url,username,password_enc,download_dir,incomplete_dir}, qbittorrent:{...}, telegram_default}`. A legacy flat Transmission config auto-migrates on read (`read_torrent_settings()` in `web_app/torrent.py`).
+- **Both clients are configurable and live simultaneously.** Config is a nested `torrent_config` setting: `{transmission:{url,username,password_enc,download_dir,incomplete_dir,local_dir,stop_on_complete}, qbittorrent:{...}, telegram_default}`. A legacy flat Transmission config auto-migrates on read (`read_torrent_settings()` in `web_app/torrent.py`).
 - `web_app/torrent.py` provides **client-agnostic dispatchers** (`torrent_test/add_magnet/list/control/get/set_location/telegram_dirs`, `apply_torrent_session`) that take an explicit client and route to the Transmission backend (in the same file) or the qBittorrent backend (`web_app/qbittorrent.py`). Everything keys torrents by **hash** (Transmission RPC accepts hashes as `ids`; qBittorrent is hash-native), so one code path drives both.
 - `GET /api/settings/torrent` - Both clients' config (passwords never exposed) + `telegram_default`
 - `POST /api/settings/torrent` - Save one client (`{client, url, username, password?, download_dir?, incomplete_dir?}`); Transmission URL normalized to the RPC endpoint, qBittorrent uses the base WebUI URL; password encrypted at rest
@@ -221,8 +223,34 @@ Access/refresh token pair. Access tokens are short (`ACCESS_TOKEN_MINUTES`, defa
 - `POST /api/torrent/add` - Send a magnet (`{magnet, client, download_dir?}`); falls back to the client's configured `download_dir` when none given
 - `GET /api/torrent/list?client=...` - Live status of that client's torrents (normalized shape: name, hash, status label, percent, down/up rate, size, ETA, download dir, error, peers/seeds) plus `downlee` - the VPS→DownLee transfer that already pulled it (`{id, message_id, status, progress}` or null), matched on `<download_dir>/<name>` with a basename fallback (a Telegram-flow pull may have been taken from the temp dir). The VPS panel uses it to show **Downloaded** / live % / a retry instead of offering the pull again, so the state survives a reload.
 - `POST /api/torrent/action` - `{client, action:start|stop|remove, hashes:[str], delete_data?}` (legacy `ids` still accepted as hashes)
+- `POST /api/settings/torrent/stop-on-complete` - `{client, enabled}`; its own route so the toggle doesn't round-trip (and risk clobbering) the whole client config
 - Temp folder: `apply_torrent_session()` pushes the incomplete/temp dir (Transmission `session-set incomplete-dir`; qBittorrent `setPreferences temp_path`), applied on config save + re-applied before each add. The client downloads into the temp dir, then moves to the torrent's download dir on completion.
 - Frontend: Settings → VPS shows a `TorrentClientCard` per client; the VPS page has per-client tabs (Files · Transmission · qBittorrent), each its own `TorrentStatusPanel` (hash-based multi-select). Pasted magnets pick the client in `AddUrlModal`.
+
+#### Torrent watcher (stop seeding on completion)
+
+`backend/torrent_watch.py` is a daemon thread (started in `backend/main.py`)
+that polls every configured client each `TORRENT_WATCH_INTERVAL` (30s) and
+stops any torrent that has finished. It exists because a seedbox keeps every
+completed torrent uploading by default, and once the files are pulled to
+DownLee that upload is only spending the VPS's bandwidth.
+
+- **It waits for `seeding`/`seed-wait`, never the raw percentage.** Both clients
+  download into a temp dir and move the files as part of completing; during that
+  move the torrent is not seeding yet (qBittorrent reports `moving`, normalized
+  to `checking`). Acting on `percent_done >= 100` would race the move, and the
+  VPS→DownLee pull would then chase files in flight between two directories.
+- **It stops a given torrent once.** The `(client, hash)` pairs it has acted on
+  are held in memory, so restarting a completed torrent by hand sticks instead
+  of being undone on the next tick. The set is intersected with what each poll
+  saw, so removed torrents don't accumulate.
+- **Per-client, because seeding is a tracker requirement.** `stop_on_complete`
+  lives in each client's sub-config (`stop_on_complete_enabled()` in
+  `web_app/torrent.py`, **default on**), toggled on the `TorrentClientCard` in
+  Settings → VPS. A full config save carries the flag over rather than resetting
+  it. `TORRENT_WATCH=0` disables the thread outright.
+- A client being unreachable is logged at debug and retried next tick; a failed
+  stop is not marked handled, so it is retried too.
 
 ### Scheduled Jobs
 
@@ -306,6 +334,8 @@ All config via `.env` file at project root (loaded by python-dotenv):
 | `NET_PROBE_INTERVAL` | `20` | Seconds between connectivity probes |
 | `NET_STALL_SECONDS` | `600` | Restart a download frozen this long; `0` disables |
 | `NET_PROBE_HOSTS` | `1.1.1.1:53,8.8.8.8:53` | `host:port` pairs the probe TCP-connects to |
+| `TORRENT_WATCH` | `1` | Run the torrent watcher thread (stop seeding on completion) |
+| `TORRENT_WATCH_INTERVAL` | `30` | Seconds between torrent-client polls |
 
 ## Network Watchdog & Resume
 
