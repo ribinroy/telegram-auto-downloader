@@ -133,6 +133,7 @@ Main Thread
 - `url` (source URL for yt-dlp), `author`, `error`
 - `file_meta` (JSON: video/audio codec, resolution, bitrate)
 - `thumb_count`, `status_msg_id`
+- `dest_base` (destination folder a VPS transfer was started with, when it isn't derivable from the source spec - e.g. a torrent client's `local_dir`; a resume reads it back so it can't restart into the wrong folder)
 - `deleted_at` (soft delete), `file_deleted` (physical file removed)
 - `created_at`, `updated_at`
 
@@ -260,6 +261,7 @@ Live filesystem access - every call reads the disk, nothing is indexed or cached
 - `GET /api/files/stream|download|thumb?path=` - `@media_token_required`, range-streamed; `thumb` is a cached JPEG (Pillow for images, an ffmpeg frame grab for video)
 
 ### Video Streaming
+- `GET /api/video/check/<id>` - What is on disk for a download: `{exists, kind: 'video'|'dir'|'file', path, parent, size}`. The downloads list's view button uses `kind` to decide - play a video inline, or send a folder pull / non-video file to the file explorer (`/files?path=...`, plus `&select=<path>` for a single file, which `ExplorerPage` highlights and scrolls to, then drops). Keeps `file_deleted` honest for folders too, which the old video-only check always marked as missing.
 - `GET /api/video/stream/<id>` - Range-request video streaming
 - `GET /api/video/thumbs/<id>` - Thumbnail list
 - `GET /api/video/thumb/<id>/<filename>` - Single thumbnail
@@ -330,6 +332,15 @@ the transfer sits at 47% forever. That is what "the downloads look paused" is.
     the link dropping it snapshots every running download's byte count; on it
     returning it waits `RECONNECT_GRACE` (30s - Telethon often recovers by
     itself) and then resumes the ones that failed or never moved again.
+  - *Restarts*: a service or machine restart leaves every in-flight download
+    marked `downloading` with nothing behind it - the process that was
+    transferring is gone, so the row sits at its last percentage looking
+    paused. On the first online tick those orphans are resumed. Telethon may
+    still be connecting, so a Telegram one is retried across
+    `STARTUP_RESUME_ATTEMPTS` ticks and only then marked `failed` - an honest
+    failure with a retry button beats a row that claims to be downloading
+    forever. Resuming without `force` is safe for a download a user started
+    seconds earlier: every handler reports "already running" and declines.
   - *Stalls*: a download still marked `downloading` whose byte count hasn't
     changed for `NET_STALL_SECONDS` is force-restarted. A blip shorter than the
     probe interval never registers as an outage but still kills the socket -

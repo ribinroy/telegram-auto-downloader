@@ -1068,7 +1068,11 @@ export async function fetchAnalytics(days: number = 30, groupBy: 'day' | 'hour' 
 // Video playback API
 export interface VideoCheckResult {
   exists: boolean;
+  /** What is actually on disk: a playable video, a folder, or some other file. */
+  kind?: 'video' | 'dir' | 'file';
   path?: string;
+  /** Containing folder (files only) - where the explorer opens. */
+  parent?: string;
   size?: number;
   name?: string;
   error?: string;

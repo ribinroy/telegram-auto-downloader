@@ -185,6 +185,7 @@ function ListView({
           return (
             <div
               key={entry.path}
+              data-path={entry.path}
               {...press(entry)}
               onContextMenu={e => {
                 e.preventDefault();
@@ -255,6 +256,7 @@ function GridView({
         return (
           <div
             key={entry.path}
+            data-path={entry.path}
             {...press(entry)}
             onContextMenu={e => {
               e.preventDefault();

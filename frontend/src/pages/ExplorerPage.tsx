@@ -42,6 +42,9 @@ function loadPrefs(): Prefs {
 export function ExplorerPage() {
   const [params, setParams] = useSearchParams();
   const requestedPath = params.get('path') ?? '';
+  // ?select=<full path> - another page (the downloads list) pointing at one
+  // entry in this folder. Consumed once the listing it belongs to arrives.
+  const requestedSelect = params.get('select') ?? '';
 
   const [prefs, setPrefs] = useState<Prefs>(loadPrefs);
   useEffect(() => { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); }, [prefs]);
@@ -83,6 +86,19 @@ export function ExplorerPage() {
   const deleteMut = useDeletePaths();
   const transferMut = useTransferPaths();
   const uploadMut = useUploadFiles();
+
+  // Reveal the ?select= entry: highlight it and bring it into view, then drop
+  // the param so a later refresh doesn't re-select it.
+  useEffect(() => {
+    if (!requestedSelect || !listing.data) return;
+    if (!listing.data.entries.some(e => e.path === requestedSelect)) return;
+    setSelected(new Set([requestedSelect]));
+    setParams({ path: listing.data.path }, { replace: true });
+    requestAnimationFrame(() => {
+      document.querySelector(`[data-path="${CSS.escape(requestedSelect)}"]`)
+        ?.scrollIntoView({ block: 'center' });
+    });
+  }, [requestedSelect, listing.data, setParams]);
 
   const navigate = useCallback((path: string) => {
     setPlacesOpen(false);
