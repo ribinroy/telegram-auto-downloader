@@ -16,7 +16,7 @@ import {
   useFileRoots, useFileList, useFileSearch, useCreateFolder, useRenamePath,
   useDeletePaths, useTransferPaths, useUploadFiles,
 } from '../hooks/useFiles';
-import { getFileDownloadUrl, type FileEntry, type FileOpResponse } from '../api/files';
+import { getFileDownloadUrl, type FileEntry, type FileOpResponse, isRemotePath } from '../api/files';
 import { formatBytes } from '../utils/format';
 
 const PREFS_KEY = 'explorer_prefs';
@@ -79,6 +79,10 @@ export function ExplorerPage() {
   }, [placesOpen]);
   const listing = useFileList(requestedPath, prefs.showHidden, prefs.autoRefresh ? AUTO_REFRESH_MS : 0);
   const currentPath = listing.data?.path ?? requestedPath;
+  // The VPS is a second "drive" reached over SFTP. It is read-mostly: no
+  // rename/mkdir/upload, and a delete there can't use a trash folder, so the
+  // actions that don't apply are dropped rather than left to fail on click.
+  const remote = isRemotePath(currentPath);
   const search = useFileSearch(currentPath, searchQuery ?? '', prefs.showHidden, !!searchQuery);
 
   const createFolder = useCreateFolder();
@@ -178,8 +182,14 @@ export function ExplorerPage() {
   const handleLongPress = (entry: FileEntry) => toggle(entry);
 
   const open = useCallback((entry: FileEntry) => {
-    if (entry.is_dir) navigate(entry.path);
-    else setPreview(entry);
+    if (entry.is_dir) return navigate(entry.path);
+    // Previewing a remote image/video would stream it off the VPS; only text
+    // is cheap enough to fetch on a click.
+    if (entry.remote && entry.kind !== 'text') {
+      setNotice({ kind: 'info', text: 'Copy it to a local folder to open it — VPS files are not streamed.' });
+      return;
+    }
+    setPreview(entry);
   }, [navigate, setPreview]);
 
   // --- Mutations ----------------------------------------------------------
@@ -207,7 +217,7 @@ export function ExplorerPage() {
     setConfirmDelete(null);
     try {
       const res = await deleteMut.mutateAsync({ paths: entries.map(e => e.path), permanent });
-      if (reportErrors(res, 'Delete') && !permanent) {
+      if (reportErrors(res, 'Delete') && !permanent && !res.permanent) {
         setNotice({ kind: 'info', text: `Moved ${entries.length} item(s) to the trash folder on this disk.` });
       }
       setSelected(new Set());
@@ -220,7 +230,15 @@ export function ExplorerPage() {
     if (!clipboard || !writable) return;
     try {
       const res = await transferMut.mutateAsync({ paths: clipboard.paths, dest: currentPath, move: clipboard.move });
-      reportErrors(res, clipboard.move ? 'Move' : 'Copy');
+      const ok = reportErrors(res, clipboard.move ? 'Move' : 'Copy');
+      // Pasting from the VPS hands off to the SFTP downloader: nothing has
+      // arrived yet, so say so instead of letting the empty folder look broken.
+      if (ok && res.download) {
+        setNotice({
+          kind: 'info',
+          text: `Downloading ${res.results.length} item(s) from the VPS — follow the progress on the downloads page.`,
+        });
+      }
       if (clipboard.move) setClipboard(null);
     } catch (e) {
       setNotice({ kind: 'error', text: (e as Error).message });
@@ -272,12 +290,18 @@ export function ExplorerPage() {
     if (single && entry.is_dir) {
       items.push({ label: 'Open', icon: <FolderOpen className="w-4 h-4" />, onClick: () => open(entry) });
     } else if (single) {
-      items.push({ label: 'Preview', icon: <Eye className="w-4 h-4" />, onClick: () => setPreview(entry) });
-      items.push({
-        label: 'Download',
-        icon: <Download className="w-4 h-4" />,
-        onClick: () => window.open(getFileDownloadUrl(entry.path), '_blank'),
-      });
+      // A remote file can only be previewed as text: anything else would mean
+      // streaming it off the VPS byte by byte to render a thumbnail.
+      if (!remote || entry.kind === 'text') {
+        items.push({ label: 'Preview', icon: <Eye className="w-4 h-4" />, onClick: () => setPreview(entry) });
+      }
+      if (!remote) {
+        items.push({
+          label: 'Download',
+          icon: <Download className="w-4 h-4" />,
+          onClick: () => window.open(getFileDownloadUrl(entry.path), '_blank'),
+        });
+      }
     }
     if (!single) {
       items.push({
@@ -289,34 +313,44 @@ export function ExplorerPage() {
     }
 
     items.push({
-      label: 'Copy', icon: <Copy className="w-4 h-4" />, separated: true,
+      // On the VPS this is the download gesture: copy here, paste in a local
+      // folder, and the paste becomes an SFTP transfer with a progress record.
+      label: remote ? 'Copy (paste locally to download)' : 'Copy',
+      icon: <Copy className="w-4 h-4" />, separated: true,
       onClick: () => setClipboard({ paths: targets.map(t => t.path), move: false }),
     });
-    items.push({
-      label: 'Cut', icon: <Scissors className="w-4 h-4" />,
-      onClick: () => setClipboard({ paths: targets.map(t => t.path), move: true }),
-      disabled: !writable,
-    });
+    if (!remote) {
+      items.push({
+        label: 'Cut', icon: <Scissors className="w-4 h-4" />,
+        onClick: () => setClipboard({ paths: targets.map(t => t.path), move: true }),
+        disabled: !writable,
+      });
+    }
     items.push({
       label: 'Copy path', icon: <LinkIcon className="w-4 h-4" />,
       onClick: () => navigator.clipboard?.writeText(targets.map(t => t.path).join('\n')),
     });
 
-    if (single) {
+    if (single && !remote) {
       items.push({
         label: 'Rename', icon: <Pencil className="w-4 h-4" />, separated: true,
         onClick: () => setRenaming(entry.path), disabled: !writable,
       });
     }
+    if (!remote) {
+      items.push({
+        label: 'Move to trash', icon: <Trash2 className="w-4 h-4" />, danger: true, separated: single ? false : true,
+        onClick: () => setConfirmDelete({ entries: targets, permanent: false }),
+        disabled: !writable,
+      });
+    }
     items.push({
-      label: 'Move to trash', icon: <Trash2 className="w-4 h-4" />, danger: true, separated: single ? false : true,
-      onClick: () => setConfirmDelete({ entries: targets, permanent: false }),
-      disabled: !writable,
-    });
-    items.push({
-      label: 'Delete permanently', icon: <Trash2 className="w-4 h-4" />, danger: true,
+      // There is no trash on the VPS - a remote delete really is permanent,
+      // and the label has to say so.
+      label: remote ? 'Delete on the VPS' : 'Delete permanently',
+      icon: <Trash2 className="w-4 h-4" />, danger: true, separated: remote,
       onClick: () => setConfirmDelete({ entries: targets, permanent: true }),
-      disabled: !writable,
+      disabled: !remote && !writable,
     });
 
     if (single) {
@@ -424,6 +458,7 @@ export function ExplorerPage() {
           <ExplorerToolbar
             path={currentPath}
             parent={listing.data?.parent ?? null}
+            root={listing.data?.home}
             usage={listing.data?.usage ?? null}
             writable={writable}
             filter={filter}
@@ -641,11 +676,16 @@ export function ExplorerPage() {
       {properties && <PropertiesModal entry={properties} onClose={() => setProperties(null)} />}
       <ConfirmDialog
         isOpen={!!confirmDelete}
-        title={confirmDelete?.permanent ? 'Delete permanently?' : 'Move to trash?'}
+        title={
+          confirmDelete?.entries.some(e => e.remote) ? 'Delete on the VPS?'
+            : confirmDelete?.permanent ? 'Delete permanently?' : 'Move to trash?'
+        }
         message={
-          confirmDelete?.permanent
-            ? `${confirmDelete.entries.length} item(s) will be erased from the disk. This cannot be undone.`
-            : `${confirmDelete?.entries.length ?? 0} item(s) will be moved to .downlee-trash on the same disk, where you can still recover them.`
+          confirmDelete?.entries.some(e => e.remote)
+            ? `${confirmDelete.entries.length} item(s) will be erased from the VPS. There is no trash there, so this cannot be undone.`
+            : confirmDelete?.permanent
+              ? `${confirmDelete.entries.length} item(s) will be erased from the disk. This cannot be undone.`
+              : `${confirmDelete?.entries.length ?? 0} item(s) will be moved to .downlee-trash on the same disk, where you can still recover them.`
         }
         confirmText={confirmDelete?.permanent ? 'Delete forever' : 'Move to trash'}
         variant="danger"

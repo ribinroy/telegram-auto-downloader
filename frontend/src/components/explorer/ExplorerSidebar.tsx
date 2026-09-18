@@ -1,4 +1,4 @@
-import { HardDrive, Home, Download, Loader2, RefreshCw, Trash2, FolderCog } from 'lucide-react';
+import { HardDrive, Home, Download, Loader2, RefreshCw, Trash2, FolderCog, Server } from 'lucide-react';
 import { formatBytes } from '../../utils/format';
 import type { FileRoot } from '../../api/files';
 
@@ -18,6 +18,7 @@ function rootIcon(kind: FileRoot['kind']) {
   if (kind === 'home') return <Home className="w-4 h-4 text-cyan-400" />;
   if (kind === 'downloads') return <Download className="w-4 h-4 text-green-400" />;
   if (kind === 'configured') return <FolderCog className="w-4 h-4 text-amber-400" />;
+  if (kind === 'vps') return <Server className="w-4 h-4 text-pink-400" />;
   return <HardDrive className="w-4 h-4 text-purple-400" />;
 }
 

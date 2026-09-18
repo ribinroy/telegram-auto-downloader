@@ -79,6 +79,10 @@ def _fs_error(e):
 class FilesRoutesMixin:
     def register_files_routes(self):
 
+        # The VPS is a second, remote "drive". Paths carry a `vps:` prefix and
+        # are dispatched here, so backend/files.py stays pure local filesystem.
+        from backend import remote_files as rfs
+
         @self.app.route("/api/files/roots", methods=["GET"])
         @token_required
         def files_roots():
@@ -92,6 +96,9 @@ class FilesRoutesMixin:
             """
             include_hidden = request.args.get("include_hidden", "false").lower() == "true"
             roots = fs.list_roots()
+            # No SSH here: the VPS entry is built from the saved config alone,
+            # so a page load never waits on a login across the internet.
+            roots += rfs.list_roots()
             roots += _configured_roots({r["path"] for r in roots}, include_hidden)
             return jsonify({
                 "roots": roots,
@@ -105,17 +112,22 @@ class FilesRoutesMixin:
         def files_list():
             """Body: {path?, show_hidden?}. Live listing of one directory."""
             data = request.json or {}
+            backend = rfs if rfs.is_remote(data.get("path")) else fs
             try:
-                return jsonify(fs.list_dir(data.get("path"),
-                                           show_hidden=bool(data.get("show_hidden"))))
+                return jsonify(backend.list_dir(data.get("path"),
+                                                show_hidden=bool(data.get("show_hidden"))))
             except fs.FsError as e:
                 return _fs_error(e)
+            except ValueError as e:
+                return jsonify({"error": str(e)}), 400
 
         @self.app.route("/api/files/mkdir", methods=["POST"])
         @token_required
         def files_mkdir():
             """Body: {path, name}."""
             data = request.json or {}
+            if rfs.is_remote(data.get("path")):
+                return jsonify({"error": "Creating folders on the VPS isn't supported yet"}), 400
             try:
                 return jsonify({"entry": fs.make_dir(data.get("path"), data.get("name"))})
             except fs.FsError as e:
@@ -126,6 +138,8 @@ class FilesRoutesMixin:
         def files_rename():
             """Body: {path, name}."""
             data = request.json or {}
+            if rfs.is_remote(data.get("path")):
+                return jsonify({"error": "Renaming on the VPS isn't supported yet"}), 400
             try:
                 return jsonify({"entry": fs.rename(data.get("path"), data.get("name"))})
             except fs.FsError as e:
@@ -144,6 +158,18 @@ class FilesRoutesMixin:
             paths = data.get("paths") or ([data["path"]] if data.get("path") else [])
             if not paths:
                 return jsonify({"error": "paths is required"}), 400
+            if rfs.any_remote(paths):
+                if not all(rfs.is_remote(p) for p in paths):
+                    return jsonify({"error": "Select local or VPS items, not both"}), 400
+                try:
+                    # Always permanent remotely - see remote_files.delete.
+                    out = rfs.delete(paths)
+                except fs.FsError as e:
+                    return _fs_error(e)
+                except ValueError as e:
+                    return jsonify({"error": str(e)}), 400
+                return jsonify({"results": [{"path": p} for p in out["removed"]],
+                                "errors": out["errors"], "permanent": True})
             try:
                 results = fs.delete(paths, permanent=bool(data.get("permanent")))
             except fs.FsError as e:
@@ -157,10 +183,36 @@ class FilesRoutesMixin:
             """Body: {paths:[...], dest, move?} - copy or move a selection."""
             data = request.json or {}
             paths = data.get("paths") or []
-            if not paths or not data.get("dest"):
+            dest = data.get("dest")
+            if not paths or not dest:
                 return jsonify({"error": "paths and dest are required"}), 400
+
+            # VPS -> home server is a download, not a copy: hand it to the SFTP
+            # handler, which gives a proper record with progress, resume and the
+            # watchdog behind it. Doing it inline would block the request for
+            # however long a 50 GB folder takes.
+            if rfs.any_remote(paths):
+                if rfs.is_remote(dest):
+                    return jsonify({"error": "Copying within the VPS isn't supported yet"}), 400
+                if not all(rfs.is_remote(p) for p in paths):
+                    return jsonify({"error": "Select local or VPS items, not both"}), 400
+                if data.get("move"):
+                    return jsonify({"error": "Moving off the VPS isn't supported - copy, then delete"}), 400
+                if not self.vps_downloader:
+                    return jsonify({"error": "VPS downloader is not running"}), 503
+                started, errors = [], []
+                for raw in paths:
+                    res = self.vps_downloader.start_download(rfs.strip(raw), dest=dest)
+                    if res.get("error"):
+                        errors.append({"path": raw, "error": res["error"]})
+                    else:
+                        started.append({"path": raw, "message_id": res.get("message_id")})
+                return jsonify({"results": started, "errors": errors, "download": True})
+
+            if rfs.is_remote(dest):
+                return jsonify({"error": "Uploading to the VPS isn't supported yet"}), 400
             try:
-                results = fs.transfer(paths, data["dest"], move=bool(data.get("move")))
+                results = fs.transfer(paths, dest, move=bool(data.get("move")))
             except fs.FsError as e:
                 return _fs_error(e)
             return jsonify({"results": results,
@@ -174,6 +226,8 @@ class FilesRoutesMixin:
             uploaded = request.files.getlist("files")
             if not dest or not uploaded:
                 return jsonify({"error": "path and files are required"}), 400
+            if rfs.is_remote(dest):
+                return jsonify({"error": "Uploading to the VPS isn't supported yet"}), 400
             entries, errors = [], []
             for item in uploaded:
                 try:
@@ -188,11 +242,14 @@ class FilesRoutesMixin:
             """Body: {path, query, show_hidden?} - recursive name search,
             bounded by a result cap and a wall-clock deadline."""
             data = request.json or {}
+            backend = rfs if rfs.is_remote(data.get("path")) else fs
             try:
-                return jsonify(fs.search(data.get("path"), data.get("query"),
-                                         show_hidden=bool(data.get("show_hidden"))))
+                return jsonify(backend.search(data.get("path"), data.get("query"),
+                                              show_hidden=bool(data.get("show_hidden"))))
             except fs.FsError as e:
                 return _fs_error(e)
+            except ValueError as e:
+                return jsonify({"error": str(e)}), 400
 
         @self.app.route("/api/files/size", methods=["POST"])
         @token_required
@@ -200,11 +257,12 @@ class FilesRoutesMixin:
             """Body: {path} - recursive size of a folder (on demand: walking a
             library is far too slow to do for every row of a listing)."""
             data = request.json or {}
+            backend = rfs if rfs.is_remote(data.get("path")) else fs
             try:
-                return jsonify(fs.dir_size(data.get("path")))
+                return jsonify(backend.dir_size(data.get("path")))
             except fs.FsError as e:
                 return _fs_error(e)
-            except OSError as e:
+            except (OSError, ValueError) as e:
                 return jsonify({"error": str(e)}), 400
 
         @self.app.route("/api/files/text", methods=["POST"])
@@ -212,11 +270,12 @@ class FilesRoutesMixin:
         def files_text():
             """Body: {path} - decoded head of a text file for the preview."""
             data = request.json or {}
+            backend = rfs if rfs.is_remote(data.get("path")) else fs
             try:
-                return jsonify(fs.read_text(data.get("path")))
+                return jsonify(backend.read_text(data.get("path")))
             except fs.FsError as e:
                 return _fs_error(e)
-            except OSError as e:
+            except (OSError, ValueError) as e:
                 return jsonify({"error": str(e)}), 400
 
         @self.app.route("/api/files/stream", methods=["GET"])

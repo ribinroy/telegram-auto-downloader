@@ -17,7 +17,12 @@ export interface FileEntry {
   mode: string | null;
   kind: FileKind;
   ext: string;
+  /** Lives on the VPS (path carries the `vps:` prefix), not a local disk. */
+  remote?: boolean;
 }
+
+/** A `vps:`-prefixed path is browsed over SFTP rather than the local disk. */
+export const isRemotePath = (path: string | null | undefined) => !!path?.startsWith('vps:');
 
 export interface DiskUsage {
   total: number;
@@ -32,15 +37,18 @@ export interface FileListing {
   entries: FileEntry[];
   writable: boolean;
   usage: DiskUsage | null;
-  mount: string;
+  mount: string | null;
   /** Where a non-permanent delete parks files for this disk (null until used). */
   trash: string | null;
+  remote?: boolean;
+  /** Top of the browsable tree (the VPS login home); local listings omit it. */
+  home?: string;
 }
 
 export interface FileRoot {
   path: string;
   label: string;
-  kind: 'home' | 'downloads' | 'disk' | 'configured';
+  kind: 'home' | 'downloads' | 'disk' | 'configured' | 'vps';
   /** Sidebar section: mounted disks, general folders, DownLee's destinations. */
   group: 'drive' | 'folder' | 'configured';
   /** For configured folders: what points here ("youtube.com", "VPS /watch"). */
@@ -49,6 +57,7 @@ export interface FileRoot {
   fstype: string | null;
   usage: DiskUsage | null;
   writable: boolean;
+  remote?: boolean;
 }
 
 export interface FileRootsResponse {
@@ -69,6 +78,10 @@ export interface FileOpResult {
 export interface FileOpResponse {
   results: FileOpResult[];
   errors: FileOpResult[];
+  /** Set when a VPS->local paste was handed to the SFTP downloader. */
+  download?: boolean;
+  /** Set when a delete could not use the trash (remote deletes never can). */
+  permanent?: boolean;
 }
 
 export interface DirSize {

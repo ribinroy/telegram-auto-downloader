@@ -252,7 +252,10 @@ function GridView({
         // Thumbnails are only rendered in grid view: generating one for a
         // video means an ffmpeg frame grab, and a list of 500 files should
         // not kick off 500 of those.
-        const thumbable = !entry.is_dir && (entry.kind === 'image' || entry.kind === 'video');
+        // Never for a remote entry: a thumbnail means pulling the file off the
+        // VPS, and a grid of 100 would pull 100 files across the internet.
+        const thumbable = !entry.is_dir && !entry.remote
+          && (entry.kind === 'image' || entry.kind === 'video');
         return (
           <div
             key={entry.path}

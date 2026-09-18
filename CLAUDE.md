@@ -79,6 +79,7 @@ Main Thread
 |  |- vps_handler/__init__.py       # SFTP download handler + hourly autoSync
 |  |- utils/__init__.py             # Helpers (resolve_spec, encryption, MIME types)
 |  |- files.py                      # Filesystem service for the file explorer (mounts, listing, ops, thumbs)
+|  |- remote_files.py               # The VPS as a second explorer drive, over SFTP (`vps:` paths)
 |  |- jobs.py                       # Maintenance job bodies + schedule store + JobScheduler thread
 |  |- netwatch.py                   # Connectivity probe + stall sweep -> resumes interrupted downloads
 |  |- torrent_watch.py              # Polls the torrent clients; stops finished torrents from seeding
@@ -514,6 +515,56 @@ a pulled USB drive disappears from the sidebar.
   Ctrl+A/C/X/V, Enter to open, Backspace for up, drag-and-drop upload. On coarse
   pointers the native contextmenu is suppressed (the hold is the select gesture)
   and the row's ⋮ button opens the menu instead.
+
+## The VPS as an explorer drive
+
+The seedbox shows up in the file explorer's sidebar as a drive alongside the
+local disks, browsable in the same UI. `backend/remote_files.py` is the whole
+remote half; `files.py` stays pure local filesystem, which is what keeps it
+simple.
+
+- **Remote paths carry a `vps:` prefix** (`vps:/home6/user/downloads`), and
+  `routes/files.py` dispatches list/search/size/text/delete on it. Everything
+  above the transport - the URL, breadcrumb, selection, clipboard, context menu
+  - already treats a path as an opaque string, so the frontend needed almost
+  nothing. `vps:~` is the sidebar root: "wherever this login lands", which only
+  the far end can resolve.
+- **Copying VPS -> local is a download, not a copy.** A `transfer` with remote
+  sources hands off to `vps_handler.start_download()`, so a paste into a local
+  folder gets a real download record with progress, resume and the watchdog
+  behind it. Doing it inline would block the request for however long a 50 GB
+  folder takes. The UI says "Copy (paste locally to download)" and reports that
+  the transfer *started*.
+- **Read-mostly by design.** No remote rename/mkdir/upload and no remote-to-remote
+  copy (SFTP has no server-side copy); those routes refuse a `vps:` path with a
+  reason rather than failing obscurely. Remote delete works and is **always
+  permanent** - the local trash is a per-mount rename, which has no equivalent
+  on someone else's box, and inventing a hidden trash dir in a seedbox home
+  would be worse than saying so. The dialog says "Delete on the VPS".
+- **No thumbnails or streaming remotely.** A grid view would pull hundreds of
+  files across the internet to make JPEGs; only text preview is cheap enough.
+- **One pooled SSH session** (`vps_session()` in `web_app/vps.py`). Logging in
+  costs ~0.6s against a listing's ~0.15s, so reconnecting per click would spend
+  four fifths of the time on handshakes; measured 0.71s cold, 0.12s warm. It is
+  handed out under a lock (paramiko channels aren't safe to share), dropped
+  after `IDLE_TIMEOUT` (120s) so a closed tab isn't holding a connection open on
+  the seedbox, and `close_pooled_session()` is called when the VPS config
+  changes. A non-`ValueError` inside the session drops it rather than handing
+  the next caller a half-dead channel.
+- The sidebar capacity bar reuses the account quota, cached 60s, filled in by
+  the first listing rather than by `/api/files/roots` (which must not wait on an
+  SSH login during a page load).
+- **The tree stops at the login home.** Above it is the provider's shared
+  `/homeN`, which the account cannot list, so a remote listing reports
+  `parent: null` at home (the toolbar's Up button and Backspace are already
+  guarded on it) and `home` - the top of the tree - which the breadcrumb uses so
+  it never renders a crumb that can only fail. `_io_error()` maps `EACCES` to a
+  403 "Permission denied", because reporting an unreadable directory as "not
+  found" sends you hunting for a folder that is really just someone else's.
+- **The breadcrumb is prefix-aware.** `path.split('/')` on `vps:/home6/...`
+  yields targets like `/vps:` and a root button pointing at the *local* `/`, so
+  `splitPrefix()` strips the scheme, crumbs are built below `home`, and every
+  target gets the prefix put back.
 
 ## Key Patterns
 

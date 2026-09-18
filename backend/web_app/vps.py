@@ -1,5 +1,7 @@
 """VPS SSH/SFTP connection helpers."""
 import json
+import threading
+import time
 from backend.database import get_db
 
 
@@ -80,6 +82,99 @@ def open_vps_sftp(timeout=10):
         transport.set_keepalive(30)
     return client, client.open_sftp()
 
+
+
+# ---------------------------------------------------------------------------
+# Pooled session
+# ---------------------------------------------------------------------------
+# Logging in costs ~0.6s against a listing's ~0.15s, so a file browser that
+# reconnects per click spends four fifths of its time on SSH handshakes. One
+# session is kept warm and handed out under a lock (paramiko channels are not
+# safe to share concurrently), dropped after IDLE_TIMEOUT so a laptop that
+# closed the tab is not holding a connection open on the seedbox all day.
+_POOL = {"client": None, "sftp": None, "at": 0.0, "key": None}
+_POOL_LOCK = threading.RLock()
+IDLE_TIMEOUT = 120
+
+
+def _pool_key(creds):
+    return (creds["host"], creds["port"], creds["username"], creds["password"])
+
+
+def close_pooled_session():
+    """Drop the warm session (credentials changed, or it went bad)."""
+    with _POOL_LOCK:
+        client = _POOL["client"]
+        _POOL.update(client=None, sftp=None, at=0.0, key=None)
+    if client:
+        try:
+            client.close()
+        except Exception:
+            pass
+
+
+class vps_session:
+    """Context manager yielding a warm (client, sftp), reconnecting as needed.
+
+    Holds the pool lock for its body, so callers are serialized - the right
+    trade for a file browser, where every operation is short and a second
+    connection would cost more than the wait. A failure inside the body drops
+    the session rather than handing the next caller a half-dead channel.
+    """
+
+    def __init__(self, timeout=15):
+        self.timeout = timeout
+
+    def __enter__(self):
+        _POOL_LOCK.acquire()
+        try:
+            creds = load_vps_credentials()
+            if not creds:
+                raise ValueError("VPS connection is not configured")
+            key = _pool_key(creds)
+            fresh = (
+                _POOL["client"] is not None
+                and _POOL["key"] == key
+                and time.time() - _POOL["at"] < IDLE_TIMEOUT
+            )
+            if fresh:
+                transport = _POOL["client"].get_transport()
+                if transport is None or not transport.is_active():
+                    fresh = False
+            if not fresh:
+                client = _POOL["client"]
+                _POOL.update(client=None, sftp=None, key=None)
+                if client:
+                    try:
+                        client.close()
+                    except Exception:
+                        pass
+                client, sftp = open_vps_sftp(timeout=self.timeout)
+                _POOL.update(client=client, sftp=sftp, key=key)
+            _POOL["at"] = time.time()
+            return _POOL["client"], _POOL["sftp"]
+        except BaseException:
+            _POOL_LOCK.release()
+            raise
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            if exc_type is not None:
+                # Keep a ValueError (config/user error) from throwing away a
+                # perfectly good connection; a transport error must drop it.
+                if not issubclass(exc_type, ValueError):
+                    client = _POOL["client"]
+                    _POOL.update(client=None, sftp=None, at=0.0, key=None)
+                    if client:
+                        try:
+                            client.close()
+                        except Exception:
+                            pass
+            else:
+                _POOL["at"] = time.time()
+        finally:
+            _POOL_LOCK.release()
+        return False
 
 
 def _parse_quota(text: str):
