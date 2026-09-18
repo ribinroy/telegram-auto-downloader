@@ -136,7 +136,13 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
   const pauseMut = usePauseDownload();
   const resumeMut = useResumeDownload();
   const deleteMut = useDeleteDownload();
-  const onRetry = async (id: number) => { await retryMut.mutateAsync(id); };
+  const onRetry = async (id: number) => {
+    try {
+      await retryMut.mutateAsync(id);
+    } catch (e) {
+      addToast({ type: 'error', title: 'Retry failed', message: (e as Error).message, duration: 6000 });
+    }
+  };
   const onStop = async (message_id: string) => { await stopMut.mutateAsync(message_id); };
   const onPause = async (message_id: string) => { await pauseMut.mutateAsync(message_id); };
   const onResume = async (message_id: string) => { await resumeMut.mutateAsync(message_id); };

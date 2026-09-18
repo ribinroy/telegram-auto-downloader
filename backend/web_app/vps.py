@@ -72,5 +72,11 @@ def open_vps_sftp(timeout=10):
         hostname=creds["host"], port=creds["port"], username=creds["username"],
         password=creds["password"], timeout=timeout, allow_agent=False, look_for_keys=False,
     )
+    # Keepalives so a transfer notices a dead link. Without them paramiko sits
+    # in a blocking read on a socket the other end has long forgotten, and a
+    # download just stops moving instead of failing (and being resumable).
+    transport = client.get_transport()
+    if transport:
+        transport.set_keepalive(30)
     return client, client.open_sftp()
 

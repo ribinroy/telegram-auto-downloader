@@ -153,6 +153,26 @@ else:
 # Download Configuration
 MAX_RETRIES = int(os.getenv('MAX_RETRIES', '6'))
 
+# --- Network watchdog -----------------------------------------------------
+# A home uplink drops, and every handler reacts differently - none of them
+# recovers on its own. The watchdog probes connectivity, and when the link
+# comes back it resumes the downloads that died with it; separately it
+# restarts downloads whose byte count has been frozen for NET_STALL_SECONDS
+# (a blip shorter than the probe interval never registers as an outage but
+# still kills the socket). Set NET_WATCHDOG=0 to turn the whole thing off, or
+# NET_STALL_SECONDS=0 to keep only the reconnect handling.
+NET_WATCHDOG = _env_bool('NET_WATCHDOG', True)
+NET_PROBE_INTERVAL = int(os.getenv('NET_PROBE_INTERVAL', '20'))
+NET_STALL_SECONDS = int(os.getenv('NET_STALL_SECONDS', '600'))
+# host:port pairs to TCP-connect to. DNS resolution is deliberately not part of
+# the probe - a working link with a sulking resolver would read as an outage.
+_probe_hosts_env = (os.getenv('NET_PROBE_HOSTS') or '').strip()
+NET_PROBE_HOSTS = [
+    (h.rsplit(':', 1)[0], int(h.rsplit(':', 1)[1]) if ':' in h else 53)
+    for h in (_probe_hosts_env.split(',') if _probe_hosts_env else ['1.1.1.1:53', '8.8.8.8:53'])
+    if h.strip()
+]
+
 # Screenshots directory for video thumbnails
 _screenshots_dir_env = os.getenv('SCREENSHOTS_DIR', '').strip().strip('"').strip("'")
 SCREENSHOTS_DIR = Path(_screenshots_dir_env) if _screenshots_dir_env else DOWNLOAD_DIR / '.thumbs'

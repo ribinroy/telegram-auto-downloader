@@ -569,6 +569,23 @@ class TelegramDownloader:
         if task and not task.done():
             task.cancel()
 
+    async def resume_download(self, message_id: int, force: bool = False):
+        """Pick an interrupted download back up.
+
+        With `force`, an in-flight task is cancelled first and awaited to
+        completion - its `finally` deregisters the download, so starting the
+        replacement before it has exited would leave the new task untracked
+        (and two writers appending to the same partial file)."""
+        task = self.download_tasks.get(message_id)
+        if task and not task.done():
+            if not force:
+                return True  # already running, nothing to recover
+            task.cancel()
+            # Not `await task`: a cancelled task re-raises CancelledError into
+            # whoever awaits it, which would cancel us too.
+            await asyncio.wait({task}, timeout=30)
+        return await self.restart_download(message_id)
+
     async def restart_download(self, message_id: int):
         """Re-fetch a Telegram message and restart the download (resumes from partial file)."""
         db = get_db()
@@ -766,7 +783,12 @@ class TelegramDownloader:
                     error_msg = f"Attempt {attempt}/{MAX_RETRIES} failed: {str(e)}"
                     db.update_download_by_message_id(message_id, error=error_msg)
                     logging.error(error_msg)
-                    await asyncio.sleep(5)
+                    # Back off rather than burning every attempt in half a
+                    # minute: most failures here are the uplink dropping, and
+                    # the retries are worth nothing if they all land while it
+                    # is still down. Capped so a long outage hands over to the
+                    # network watchdog instead.
+                    await asyncio.sleep(min(5 * 2 ** (attempt - 1), 60))
 
             # All retries exhausted
             db.update_download_by_message_id(message_id, status='failed', speed=0, pending_time=None)

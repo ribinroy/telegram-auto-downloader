@@ -12,6 +12,7 @@ from backend.ytdlp_handler import YtdlpDownloader
 from backend.vps_handler import VpsDownloader
 from backend.web_app import WebApp
 from backend.jobs import JobScheduler
+from backend.netwatch import NetworkWatchdog
 
 
 def setup_logging():
@@ -115,6 +116,12 @@ def main(argv=None):
     # Start the maintenance job scheduler (thumbnail sync, yt-dlp upgrade)
     JobScheduler().start()
     print("⏰ Job scheduler started")
+
+    # Watch the uplink and resume downloads it interrupted
+    from backend.config import NET_WATCHDOG
+    if NET_WATCHDOG:
+        NetworkWatchdog().start()
+        print("📡 Network watchdog started")
 
     # Start Telegram client (this will block)
     telegram_downloader.start()

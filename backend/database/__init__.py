@@ -703,6 +703,17 @@ class DatabaseManager:
         finally:
             self.close_session()
 
+    def get_downloads_by_status(self, status: str):
+        """Every non-deleted download in one status (the watchdog polls this
+        every probe interval, so it is a filtered query rather than a scan of
+        the whole history)."""
+        session = self.get_session()
+        try:
+            rows = session.query(Download).filter_by(status=status, deleted_at=None).all()
+            return [d.to_dict() for d in rows]
+        finally:
+            self.close_session()
+
     def get_download_by_message_id(self, message_id, chat_id=None):
         """Get a download entry by message ID (string UUID or Telegram ID).
 

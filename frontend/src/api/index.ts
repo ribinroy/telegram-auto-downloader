@@ -271,11 +271,17 @@ export async function fetchStats(): Promise<Stats> {
 }
 
 export async function retryDownload(id: number): Promise<void> {
-  await authFetch(`/api/retry`, {
+  const response = await authFetch(`/api/retry`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ id }),
   });
+  // A retry that quietly fails to restart anything looks exactly like one that
+  // worked, so surface the server's reason.
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.error || 'Failed to restart the download');
+  }
 }
 
 export async function stopDownload(message_id: string): Promise<void> {

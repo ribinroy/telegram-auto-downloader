@@ -19,6 +19,8 @@ Main Thread
   |- Flask thread (daemon) ........... REST API + WebSocket (SocketIO, threading mode)
   |- Event loop thread (daemon) ..... asyncio loop for yt-dlp subprocesses
   |- VPS threads (daemon) ........... one thread per SFTP transfer + hourly autoSync loop
+  |- Job scheduler (daemon) ......... fires due maintenance jobs (backend/jobs.py)
+  |- Network watchdog (daemon) ...... resumes downloads the uplink interrupted
   '- Telegram thread (blocking) ..... Telethon client.start() - blocks main thread
 ```
 
@@ -77,6 +79,8 @@ Main Thread
 |  |- utils/__init__.py             # Helpers (resolve_spec, encryption, MIME types)
 |  |- files.py                      # Filesystem service for the file explorer (mounts, listing, ops, thumbs)
 |  |- jobs.py                       # Maintenance job bodies + schedule store + JobScheduler thread
+|  |- netwatch.py                   # Connectivity probe + stall sweep -> resumes interrupted downloads
+|  |- resume.py                     # Single resume path shared by /api/retry and the watchdog
 |  |- file_meta.py                  # Video metadata extraction (ffprobe)
 |  |- browser_downloader.py         # Playwright fallback for yt-dlp
 |  '- metrics/__init__.py           # Prometheus counters
@@ -179,7 +183,7 @@ Access/refresh token pair. Access tokens are short (`ACCESS_TOKEN_MINUTES`, defa
 - `GET /api/stats` - Aggregate statistics
 - `GET /api/authors` - Distinct author list
 - `GET /api/analytics` - Time-series & breakdown analytics
-- `POST /api/retry` - Retry failed download
+- `POST /api/retry` - Restart a failed/stopped download from the bytes on disk (via `backend/resume.py`; 400/404/500 carry the reason)
 - `POST /api/stop` - Stop active download
 - `POST /api/pause` / `POST /api/resume` - Telegram only
 - `POST /api/delete` - Soft delete
@@ -296,6 +300,47 @@ All config via `.env` file at project root (loaded by python-dotenv):
 | `SCREENSHOTS_DIR` | `DOWNLOAD_DIR/.thumbs` | Thumbnail storage |
 | `JWT_SECRET` | auto-generated, persisted to `.jwt_secret` | App secret: JWT signing + Fernet key for stored secrets |
 | `EXPLORER_READONLY` | `0` | Refuse every file-explorer write (rename/delete/move/copy/upload/mkdir) |
+| `NET_WATCHDOG` | `1` | Resume downloads the network interrupted (see below) |
+| `NET_PROBE_INTERVAL` | `20` | Seconds between connectivity probes |
+| `NET_STALL_SECONDS` | `600` | Restart a download frozen this long; `0` disables |
+| `NET_PROBE_HOSTS` | `1.1.1.1:53,8.8.8.8:53` | `host:port` pairs the probe TCP-connects to |
+
+## Network Watchdog & Resume
+
+A home uplink drops for ten seconds and nothing recovers on its own. Each
+handler fails differently - Telethon burns its retry budget and the record goes
+`failed`, a yt-dlp subprocess exits, an SFTP transfer dies on a socket error -
+and the worst case is silent: the TCP connection is gone but nothing raises, so
+the transfer sits at 47% forever. That is what "the downloads look paused" is.
+
+- **`backend/resume.py` is the single resume path.** `resume_download(download,
+  force)` dispatches to the owning handler; `/api/retry` and the watchdog both
+  call it, so an automatic recovery can't drift from the button. Everything
+  resumes from the bytes already on disk (Telethon seeks past the partial file,
+  yt-dlp runs with `-c`, SFTP resumes at the local size).
+- **`force` is the difference between dead and wedged.** Without it a transfer
+  still registered as running is left alone; with it the in-flight task is
+  cancelled *and awaited* before the replacement starts - skipping that wait
+  gives you two writers on one partial file, or lets the old task's cleanup
+  deregister the new download.
+- **`backend/netwatch.py`** is a daemon thread (started in `backend/main.py`
+  alongside the Flask/asyncio/VPS/job threads) doing two things, both on
+  observed trouble rather than guesswork:
+  - *Reconnects*: TCP-probes `NET_PROBE_HOSTS` every `NET_PROBE_INTERVAL`. On
+    the link dropping it snapshots every running download's byte count; on it
+    returning it waits `RECONNECT_GRACE` (30s - Telethon often recovers by
+    itself) and then resumes the ones that failed or never moved again.
+  - *Stalls*: a download still marked `downloading` whose byte count hasn't
+    changed for `NET_STALL_SECONDS` is force-restarted. A blip shorter than the
+    probe interval never registers as an outage but still kills the socket -
+    the common case. Downloads past 99% are skipped (yt-dlp muxing moves no
+    bytes for minutes on a big file).
+- **`stopped` and `paused` are decisions, not failures**, and are never
+  auto-resumed.
+- Supporting fixes, all aimed at failing *fast* instead of hanging: the SFTP
+  transport sets a 30s keepalive, yt-dlp runs with `--socket-timeout 30` plus
+  explicit retries, and the Telegram per-attempt backoff grew from a flat 5s to
+  5/10/20/40/60s so `MAX_RETRIES` isn't burnt inside half a minute.
 
 ## Download Flow
 
