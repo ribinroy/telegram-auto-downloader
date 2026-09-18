@@ -28,6 +28,8 @@ os.environ.setdefault('SKIP_STARTUP_GREETING', '1')
 
 import pytest  # noqa: E402
 
+TEST_PASSWORD = 'test-password-123'
+
 
 @pytest.fixture
 def tmp_tree(tmp_path):
@@ -126,3 +128,85 @@ def fake_sftp():
         '/home6/tester/downloads/Show.S01': {'ep01.mkv': 2048},
         '/home6/tester/.cache': {},
     }, restricted=('/home6',))
+
+
+# ---------------------------------------------------------------------------
+# Flask app / API client
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _fast_bcrypt(monkeypatch):
+    """Cost 12 is right in production and absurd in a test suite - it turned a
+    1-second run into a minute. Lowered to the bcrypt minimum; the hashing code
+    path is identical, only the work factor differs."""
+    import backend.database as database
+    monkeypatch.setattr(database.User, 'BCRYPT_ROUNDS', 4, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _reset_login_limiter():
+    """The login limiter is a process-global singleton keyed by IP+username,
+    and every test logs in from 127.0.0.1 as admin. Without this reset, one
+    test exercising the lockout locks out every test that runs after it."""
+    from backend.web_app.ratelimit import login_limiter
+    login_limiter._failures.clear()
+    login_limiter._locked_until.clear()
+    yield
+    login_limiter._failures.clear()
+    login_limiter._locked_until.clear()
+
+
+@pytest.fixture
+def db(tmp_path, monkeypatch):
+    """A fresh SQLite database per test, wired in as the global manager."""
+    import backend.database as database
+    manager = database.DatabaseManager(f'sqlite:///{tmp_path / "t.db"}')
+    manager.seed_default_user()
+    monkeypatch.setattr(database, 'db_manager', manager)
+    return manager
+
+
+@pytest.fixture
+def app(db, tmp_path, monkeypatch):
+    """The real WebApp with every outbound integration left unwired.
+
+    Passing None for the downloaders is deliberate: a route that needs one
+    should say so with a clear error rather than reach a live Telegram client
+    or a seedbox from a test.
+    """
+    from backend.web_app import WebApp
+    web = WebApp(download_tasks={}, ytdlp_downloader=None, event_loop=None,
+                 telegram_downloader=None, vps_downloader=None)
+    web.app.config.update(TESTING=True)
+    return web
+
+
+@pytest.fixture
+def client(app):
+    return app.app.test_client()
+
+
+@pytest.fixture
+def auth(client, db):
+    """Log in as a user with a known password and return an auth header.
+
+    The seeded admin is must_change_password, which restricts its token to
+    three auth routes - useless for exercising the API - so the fixture
+    changes it the way a real first login does.
+    """
+    user = db.get_user_by_username('admin')
+    db.update_user_password(user.id, 'admin', TEST_PASSWORD)
+    res = client.post('/api/auth/login',
+                      json={'username': 'admin', 'password': TEST_PASSWORD})
+    assert res.status_code == 200, res.get_data(as_text=True)
+    token = res.get_json()['token']
+    return {'Authorization': f'Bearer {token}'}
+
+
+@pytest.fixture
+def login(client, db):
+    """Log in again (e.g. to get a fresh refresh token) after `auth` ran."""
+    def _login(password=TEST_PASSWORD):
+        return client.post('/api/auth/login',
+                           json={'username': 'admin', 'password': password}).get_json()
+    return _login

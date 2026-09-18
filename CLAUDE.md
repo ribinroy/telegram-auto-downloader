@@ -624,6 +624,14 @@ cd frontend && npm test          # frontend (src/**/*.test.ts)
   from a dict tree, including a `restricted` directory that resolves but refuses
   to be listed - which is exactly how the shared `/homeN` above a seedbox account
   behaves, and what the 403-vs-404 test depends on.
+- **Route tests run the real `WebApp`** against SQLite (`app`/`client`/`auth`
+  fixtures), with the downloaders left unwired on purpose: a route that needs
+  one should say so with a clear error rather than reach a live Telegram client
+  or a seedbox from a test. Two fixtures exist only for isolation - bcrypt's
+  cost factor is dropped to 4 (cost 12 turned a 1s run into a minute, same code
+  path, different work factor), and the process-global login rate limiter is
+  cleared between tests, since every test logs in from 127.0.0.1 as admin and
+  one lockout test would otherwise lock out everything after it.
 - Frontend logic that lived inside JSX was extracted so it can be tested
   directly: `buildCrumbs`/`splitPrefix` (ExplorerToolbar), `downleeState`/
   `isPendingPull` (TorrentStatusPanel), `isTorrentFile`, `magnetName`.
