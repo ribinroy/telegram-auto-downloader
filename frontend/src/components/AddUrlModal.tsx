@@ -47,10 +47,19 @@ interface AddUrlModalProps {
   onClose: () => void;
   initialUrl?: string | null;
   /** A .torrent dropped onto the page - loaded straight into torrent mode. */
-  initialFile?: File | null;
+  /** .torrent files dropped on the page - loaded straight into torrent mode. */
+  initialFiles?: File[] | null;
 }
 
-export function AddUrlModal({ isOpen, onClose, initialUrl, initialFile }: AddUrlModalProps) {
+/** One queued .torrent and how its upload went. */
+interface TorrentUpload {
+  file: File;
+  state: 'pending' | 'sending' | 'added' | 'duplicate' | 'error';
+  name?: string;
+  error?: string;
+}
+
+export function AddUrlModal({ isOpen, onClose, initialUrl, initialFiles }: AddUrlModalProps) {
   const [url, setUrl] = useState('');
   const [checkResult, setCheckResult] = useState<UrlCheckResult | null>(null);
   const [selectedFormat, setSelectedFormat] = useState<VideoFormat | null>(null);
@@ -62,8 +71,14 @@ export function AddUrlModal({ isOpen, onClose, initialUrl, initialFile }: AddUrl
   const [magnetClient, setMagnetClient] = useState<TorrentClient | ''>('');
   const [torrentDest, setTorrentDest] = useState('');
   const [magnetResult, setMagnetResult] = useState<{ status?: 'added' | 'duplicate'; name?: string } | null>(null);
-  // Uploaded .torrent file (alternative to a magnet link).
-  const [torrentFile, setTorrentFile] = useState<File | null>(null);
+  // Uploaded .torrent files (alternative to a magnet link). A batch is sent
+  // one at a time: each add is a multipart upload plus a client round-trip, and
+  // firing ten at once at a seedbox WebUI is a good way to get some rejected.
+  const [torrentFiles, setTorrentFiles] = useState<TorrentUpload[]>([]);
+  const [batchDone, setBatchDone] = useState(false);
+  // The mutation's isPending goes false *between* files, which would re-enable
+  // the send button mid-batch and let a second click start a parallel run.
+  const [batchRunning, setBatchRunning] = useState(false);
   const hasAutoChecked = useRef(false);
   const filenameInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -86,8 +101,10 @@ export function AddUrlModal({ isOpen, onClose, initialUrl, initialFile }: AddUrl
   const vpsFolders = useMemo(() => (allFolders ?? []).filter(f => f.active), [allFolders]);
 
   // Files (uploaded torrent) and magnets share the same submit UI.
-  const inTorrentMode = magnetMode || !!torrentFile;
-  const sending = addTorrentMut.isPending || addTorrentFileMut.isPending;
+  const inTorrentMode = magnetMode || torrentFiles.length > 0;
+  // Either send finished: the footer swaps to "Done".
+  const finished = !!magnetResult || batchDone;
+  const sending = addTorrentMut.isPending || addTorrentFileMut.isPending || batchRunning;
   const checking = checkUrlMut.isPending;
   const downloading = downloadUrlMut.isPending;
 
@@ -108,15 +125,18 @@ export function AddUrlModal({ isOpen, onClose, initialUrl, initialFile }: AddUrl
   const enterMagnetMode = (magnet: string) => {
     setUrl(magnet);
     setMagnetMode(true);
-    setTorrentFile(null);
+    setTorrentFiles([]);
+    setBatchDone(false);
     setError(null);
     setCheckResult(null);
     setSelectedFormat(null);
     setMagnetResult(null);
   };
 
-  const enterTorrentFileMode = (file: File) => {
-    setTorrentFile(file);
+  const enterTorrentFileMode = (files: File[]) => {
+    setTorrentFiles(files.map(file => ({ file, state: 'pending' })));
+    setBatchDone(false);
+    setBatchRunning(false);
     setMagnetMode(false);
     setError(null);
     setCheckResult(null);
@@ -136,16 +156,31 @@ export function AddUrlModal({ isOpen, onClose, initialUrl, initialFile }: AddUrl
     }
   };
 
-  const handleSendTorrentFile = async () => {
-    if (!torrentFile || !magnetClient || sending) return;
+  const handleSendTorrentFiles = async () => {
+    if (torrentFiles.length === 0 || !magnetClient || sending) return;
     setError(null);
-    try {
-      const res = await addTorrentFileMut.mutateAsync({ file: torrentFile, client: magnetClient, downloadDir: torrentDest || null });
-      if (res.error) setError(res.error);
-      else setMagnetResult(res);
-    } catch {
-      setError('Failed to upload the torrent file');
+    setBatchRunning(true);
+    const patch = (i: number, next: Partial<TorrentUpload>) =>
+      setTorrentFiles(prev => prev.map((u, idx) => (idx === i ? { ...u, ...next } : u)));
+
+    // Serial on purpose - see the state declaration. A failure on one file
+    // must not abandon the rest of the batch, so each is caught individually.
+    for (let i = 0; i < torrentFiles.length; i++) {
+      const { file, state } = torrentFiles[i];
+      if (state === 'added' || state === 'duplicate') continue;  // retry only what failed
+      patch(i, { state: 'sending', error: undefined });
+      try {
+        const res = await addTorrentFileMut.mutateAsync({
+          file, client: magnetClient, downloadDir: torrentDest || null,
+        });
+        if (res.error) patch(i, { state: 'error', error: res.error });
+        else patch(i, { state: res.status === 'duplicate' ? 'duplicate' : 'added', name: res.name });
+      } catch {
+        patch(i, { state: 'error', error: 'Upload failed' });
+      }
     }
+    setBatchRunning(false);
+    setBatchDone(true);
   };
 
   const doCheck = async (urlToCheck: string) => {
@@ -207,8 +242,8 @@ export function AddUrlModal({ isOpen, onClose, initialUrl, initialFile }: AddUrl
   // itself rather than a once-only ref, so dropping a second one onto an
   // already-open modal replaces the first.
   useEffect(() => {
-    if (isOpen && initialFile) enterTorrentFileMode(initialFile);
-  }, [isOpen, initialFile]);
+    if (isOpen && initialFiles?.length) enterTorrentFileMode(initialFiles);
+  }, [isOpen, initialFiles]);
 
   // Auto-fill and check when initialUrl is provided
   useEffect(() => {
@@ -269,7 +304,9 @@ export function AddUrlModal({ isOpen, onClose, initialUrl, initialFile }: AddUrl
     setCustomFilename('');
     setSourceMapping(null);
     setMagnetMode(false);
-    setTorrentFile(null);
+    setTorrentFiles([]);
+    setBatchDone(false);
+    setBatchRunning(false);
     setTorrentDest('');
     setMagnetResult(null);
     onClose();
@@ -291,8 +328,8 @@ export function AddUrlModal({ isOpen, onClose, initialUrl, initialFile }: AddUrl
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !checking && !downloading && !sending) {
-      if (inTorrentMode && !magnetResult) {
-        if (torrentFile) handleSendTorrentFile(); else handleSendMagnet();
+      if (inTorrentMode && !finished) {
+        if (torrentFiles.length) handleSendTorrentFiles(); else handleSendMagnet();
       } else if (checkResult?.supported) {
         handleDownload();
       } else if (!inTorrentMode) {
@@ -341,7 +378,8 @@ export function AddUrlModal({ isOpen, onClose, initialUrl, initialFile }: AddUrl
                 setSelectedFormat(null);
                 setError(null);
                 setMagnetMode(false);
-                setTorrentFile(null);
+                setTorrentFiles([]);
+                setBatchDone(false);
                 setMagnetResult(null);
               }}
               onKeyDown={handleKeyDown}
@@ -355,10 +393,11 @@ export function AddUrlModal({ isOpen, onClose, initialUrl, initialFile }: AddUrl
                   ref={fileInputRef}
                   type="file"
                   accept=".torrent,application/x-bittorrent"
+                  multiple
                   className="hidden"
                   onChange={(e) => {
                     const f = e.target.files?.[0];
-                    if (f) enterTorrentFileMode(f);
+                    if (f) enterTorrentFileMode(Array.from(e.target.files ?? []));
                     e.target.value = '';  // allow re-selecting the same file
                   }}
                 />
@@ -367,7 +406,7 @@ export function AddUrlModal({ isOpen, onClose, initialUrl, initialFile }: AddUrl
                   onClick={() => fileInputRef.current?.click()}
                   className="mt-2 inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-purple-300 transition-colors"
                 >
-                  <Upload className="w-3.5 h-3.5" /> or upload a .torrent file — or drop one on the page
+                  <Upload className="w-3.5 h-3.5" /> or upload .torrent files — or drop them on the page
                 </button>
               </>
             )}
@@ -385,15 +424,60 @@ export function AddUrlModal({ isOpen, onClose, initialUrl, initialFile }: AddUrl
           {inTorrentMode && (
             <div className="p-2.5 sm:p-3 bg-purple-500/10 border border-purple-500/30 rounded-lg space-y-2 sm:space-y-3">
               <div className="flex items-center gap-2">
-                {torrentFile ? <Upload className="w-4 h-4 sm:w-5 sm:h-5 text-purple-400" /> : <Magnet className="w-4 h-4 sm:w-5 sm:h-5 text-purple-400" />}
+                {torrentFiles.length ? <Upload className="w-4 h-4 sm:w-5 sm:h-5 text-purple-400" /> : <Magnet className="w-4 h-4 sm:w-5 sm:h-5 text-purple-400" />}
                 <span className="text-xs sm:text-sm text-purple-300 font-medium">
-                  {torrentFile ? '.torrent file — sends to a VPS torrent client' : 'Magnet link — sends to a VPS torrent client'}
+                  {torrentFiles.length
+                    ? `${torrentFiles.length} .torrent file${torrentFiles.length > 1 ? 's' : ''} — sends to a VPS torrent client`
+                    : 'Magnet link — sends to a VPS torrent client'}
                 </span>
               </div>
-              {(torrentFile ? torrentFile.name : magnetName(url)) && (
-                <p className="text-xs sm:text-sm text-white font-medium break-all">{torrentFile ? torrentFile.name : magnetName(url)}</p>
+              {/* One row per file, so a batch shows which ones landed and which
+                  did not, instead of collapsing to a single pass/fail. */}
+              {torrentFiles.length > 0 && (
+                <div className="max-h-40 overflow-y-auto space-y-1 pr-0.5">
+                  {torrentFiles.map((u, i) => (
+                    <div key={`${u.file.name}-${i}`} className="flex items-center gap-2 text-xs sm:text-sm">
+                      <span className="shrink-0 w-4">
+                        {u.state === 'sending' && <Loader2 className="w-3.5 h-3.5 animate-spin text-purple-300" />}
+                        {u.state === 'added' && <CheckCircle className="w-3.5 h-3.5 text-green-400" />}
+                        {u.state === 'duplicate' && <CheckCircle className="w-3.5 h-3.5 text-slate-400" />}
+                        {u.state === 'error' && <AlertCircle className="w-3.5 h-3.5 text-red-400" />}
+                      </span>
+                      <span className={`truncate ${u.state === 'error' ? 'text-red-300' : 'text-white'}`}
+                            title={u.name || u.file.name}>
+                        {u.name || u.file.name}
+                      </span>
+                      <span className="ml-auto shrink-0 text-[11px] text-slate-500">
+                        {u.state === 'duplicate' ? 'already added'
+                          : u.state === 'error' ? u.error
+                          : u.state === 'added' ? 'sent' : ''}
+                      </span>
+                    </div>
+                  ))}
+                </div>
               )}
-              {magnetResult ? (
+              {!torrentFiles.length && magnetName(url) && (
+                <p className="text-xs sm:text-sm text-white font-medium break-all">{magnetName(url)}</p>
+              )}
+              {batchDone ? (
+                (() => {
+                  const failed = torrentFiles.filter(u => u.state === 'error').length;
+                  const ok = torrentFiles.filter(u => u.state === 'added').length;
+                  const dup = torrentFiles.filter(u => u.state === 'duplicate').length;
+                  return (
+                    <div className={`flex items-center gap-2 p-2 rounded-lg border ${
+                      failed ? 'bg-amber-500/10 border-amber-500/30' : 'bg-green-500/10 border-green-500/30'
+                    }`}>
+                      {failed
+                        ? <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+                        : <CheckCircle className="w-4 h-4 text-green-400 shrink-0" />}
+                      <span className={`text-xs sm:text-sm ${failed ? 'text-amber-300' : 'text-green-400'}`}>
+                        {ok} sent{dup ? `, ${dup} already there` : ''}{failed ? `, ${failed} failed — send again to retry those` : ''}
+                      </span>
+                    </div>
+                  );
+                })()
+              ) : magnetResult ? (
                 <div className="flex items-center gap-2 p-2 bg-green-500/10 border border-green-500/30 rounded-lg">
                   <CheckCircle className="w-4 h-4 text-green-400 shrink-0" />
                   <span className="text-xs sm:text-sm text-green-400">
@@ -538,7 +622,7 @@ export function AddUrlModal({ isOpen, onClose, initialUrl, initialFile }: AddUrl
             Cancel
           </button>
           {inTorrentMode ? (
-            magnetResult ? (
+            finished ? (
               <button
                 onClick={handleClose}
                 className="flex-1 py-2 sm:py-2.5 px-3 sm:px-4 bg-green-600 hover:bg-green-500 text-white text-sm sm:text-base rounded-lg transition-colors flex items-center justify-center gap-2"
@@ -548,19 +632,27 @@ export function AddUrlModal({ isOpen, onClose, initialUrl, initialFile }: AddUrl
               </button>
             ) : (
               <button
-                onClick={torrentFile ? handleSendTorrentFile : handleSendMagnet}
+                onClick={torrentFiles.length ? handleSendTorrentFiles : handleSendMagnet}
                 disabled={sending || !magnetClient}
                 className="flex-1 py-2 sm:py-2.5 px-3 sm:px-4 bg-purple-600 hover:bg-purple-500 disabled:bg-purple-900 disabled:cursor-not-allowed text-white text-sm sm:text-base rounded-lg transition-colors flex items-center justify-center gap-2"
               >
                 {sending ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin" />
-                    <span className="hidden sm:inline">Sending...</span>
+                    <span className="hidden sm:inline">
+                      {torrentFiles.length > 1
+                        ? `Sending ${torrentFiles.filter(u => u.state === 'added' || u.state === 'duplicate' || u.state === 'error').length + 1}/${torrentFiles.length}...`
+                        : 'Sending...'}
+                    </span>
                   </>
                 ) : (
                   <>
                     <Send className="w-4 h-4" />
-                    <span>Send to torrent client</span>
+                    <span>
+                      {torrentFiles.length > 1
+                        ? `Send ${torrentFiles.length} to torrent client`
+                        : 'Send to torrent client'}
+                    </span>
                   </>
                 )}
               </button>

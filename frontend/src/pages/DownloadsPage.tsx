@@ -25,7 +25,7 @@ export function DownloadsPage() {
   const searchRef = useRef<HTMLInputElement>(null);
 
   // Drag-and-drop: a .torrent (or a dragged magnet/URL) opens the add modal.
-  const [droppedTorrent, setDroppedTorrent] = useState<File | null>(null);
+  const [droppedTorrents, setDroppedTorrents] = useState<File[] | null>(null);
   const [dragState, setDragState] = useState<'active' | 'reject' | null>(null);
   // dragenter/dragleave fire for every child element the pointer crosses, so
   // the overlay is driven by a depth counter rather than the last event.
@@ -102,15 +102,17 @@ export function DownloadsPage() {
       if (!hasFiles(e)) return;
       e.preventDefault();
       dragDepth.current = 0;
-      const torrent = Array.from(e.dataTransfer?.files ?? []).find(isTorrentFile);
-      if (!torrent) {
+      // Take every .torrent in the drop, not just the first: dropping a folder
+      // of them is the whole point of dragging more than one.
+      const torrents = Array.from(e.dataTransfer?.files ?? []).filter(isTorrentFile);
+      if (!torrents.length) {
         // Only .torrent files mean anything here - say so instead of
         // silently dropping it on the floor.
         flash('reject', 2500);
         return;
       }
       flash(null);
-      setDroppedTorrent(torrent);
+      setDroppedTorrents(torrents);
       setPastedUrl(null);
       setAddUrlOpen(true);
     };
@@ -310,9 +312,9 @@ export function DownloadsPage() {
       {/* Add URL Modal */}
       <AddUrlModal
         isOpen={addUrlOpen}
-        onClose={() => { setAddUrlOpen(false); setPastedUrl(null); setDroppedTorrent(null); }}
+        onClose={() => { setAddUrlOpen(false); setPastedUrl(null); setDroppedTorrents(null); }}
         initialUrl={pastedUrl}
-        initialFile={droppedTorrent}
+        initialFiles={droppedTorrents}
       />
 
       {/* Drag-and-drop overlay - above the modal, so a torrent can be dropped
@@ -327,14 +329,14 @@ export function DownloadsPage() {
             {dragState === 'reject' ? (
               <>
                 <AlertCircle className="w-10 h-10 text-red-400" />
-                <p className="text-base font-medium text-red-300">That isn't a .torrent file</p>
-                <p className="text-sm text-slate-400">Drop a .torrent to send it to a VPS torrent client.</p>
+                <p className="text-base font-medium text-red-300">No .torrent files in that drop</p>
+                <p className="text-sm text-slate-400">Drop one or more .torrent files to send them to a VPS torrent client.</p>
               </>
             ) : (
               <>
                 <Magnet className="w-10 h-10 text-purple-300" />
-                <p className="text-base font-medium text-white">Drop a .torrent file</p>
-                <p className="text-sm text-slate-400">It opens the add dialog, ready to send to a torrent client.</p>
+                <p className="text-base font-medium text-white">Drop .torrent files</p>
+                <p className="text-sm text-slate-400">Drop as many as you like — they open in the add dialog and are sent one after another.</p>
               </>
             )}
           </div>
