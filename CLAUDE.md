@@ -608,6 +608,28 @@ calls `logsafe.install(LOG_FILE)`.
 - **CORS**: closed by default to `CORS_ORIGINS` (Vite dev ports); Socket.IO uses a callable origin check so same-origin handshakes always pass (`_socketio_origin_allowed`)
 - **Frontend serves from Flask**: Built `frontend/dist/` served as static files
 
+## Tests
+
+```bash
+./venv/bin/python -m pytest      # backend  (tests/)
+cd frontend && npm test          # frontend (src/**/*.test.ts)
+```
+
+- **Nothing in the suite touches the real deployment.** `tests/conftest.py`
+  redirects `DOWNLOAD_DIR`, `SCREENSHOTS_DIR` and `DATABASE_URL` to a temp
+  directory *before* `backend.config` is imported - that module creates its
+  directories at import time, so the import order in conftest is load-bearing.
+- **Nothing touches the network.** A seedbox, a Telegram account and two torrent
+  clients are not fixtures. `FakeSFTP` (conftest) drives the remote-drive tests
+  from a dict tree, including a `restricted` directory that resolves but refuses
+  to be listed - which is exactly how the shared `/homeN` above a seedbox account
+  behaves, and what the 403-vs-404 test depends on.
+- Frontend logic that lived inside JSX was extracted so it can be tested
+  directly: `buildCrumbs`/`splitPrefix` (ExplorerToolbar), `downleeState`/
+  `isPendingPull` (TorrentStatusPanel), `isTorrentFile`, `magnetName`.
+- Vitest config is separate from `vite.config.ts` so a build never loads the
+  test setup (and the service-worker plugin never runs in a test).
+
 ## Development Commands
 
 ```bash

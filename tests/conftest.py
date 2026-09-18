@@ -48,16 +48,22 @@ class FakeSFTP:
     "this entry is a directory".
     """
 
-    def __init__(self, tree, home='/home6/tester'):
+    def __init__(self, tree, home='/home6/tester', restricted=()):
         self.tree = tree
         self.home = home
+        # Dirs that exist and resolve, but refuse to be listed - the shared
+        # /homeN above a seedbox account behaves exactly like this.
+        self.restricted = set(restricted)
         self.removed = []
 
     def normalize(self, path):
         if path in ('.', '', '~'):
             return self.home
         path = path.rstrip('/') or '/'
-        if path not in self.tree and path not in self._all_files():
+        # realpath() resolves a path it has no permission to read into, so the
+        # fake must not turn an unreadable directory into "no such file".
+        if (path not in self.tree and path not in self.restricted
+                and path not in self._all_files()):
             raise IOError(2, 'No such file')
         return path
 
@@ -70,8 +76,10 @@ class FakeSFTP:
 
     def listdir_attr(self, path):
         import stat as st
-        if path not in self.tree:
+        if path in self.restricted:
             raise IOError(13, 'Permission denied')
+        if path not in self.tree:
+            raise IOError(2, 'No such file')
         out = []
         for name, size in self.tree[path].items():
             attr = type('Attr', (), {})()
@@ -117,4 +125,4 @@ def fake_sftp():
         '/home6/tester/downloads': {'Show.S01': None, 'movie.mkv': 4096},
         '/home6/tester/downloads/Show.S01': {'ep01.mkv': 2048},
         '/home6/tester/.cache': {},
-    })
+    }, restricted=('/home6',))

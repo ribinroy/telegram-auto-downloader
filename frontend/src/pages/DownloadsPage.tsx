@@ -7,7 +7,7 @@ import { DownloadItem } from '../components/DownloadItem';
 import { AddUrlModal } from '../components/AddUrlModal';
 import type { SortBy, SortOrder } from '../api';
 
-const isTorrentFile = (f: File) =>
+export const isTorrentFile = (f: File) =>
   /\.torrent$/i.test(f.name) || f.type === 'application/x-bittorrent';
 
 export function DownloadsPage() {

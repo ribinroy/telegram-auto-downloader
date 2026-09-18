@@ -26,7 +26,7 @@ const PENDING_FILTER = '@todo';
  *  Computed in one place because both the row and the "To download" filter
  *  need it - two copies of this would drift the first time either changed.
  */
-function downleeState(t: TorrentStatus, downloads: Download[], started: Set<string>) {
+export function downleeState(t: TorrentStatus, downloads: Download[], started: Set<string>) {
   const transfer = t.downlee;
   const live = transfer?.message_id
     ? downloads.find(d => d.message_id === transfer.message_id)
@@ -46,7 +46,7 @@ function downleeState(t: TorrentStatus, downloads: Download[], started: Set<stri
 
 /** Finished on the VPS, not yet on the home server - i.e. still to be pulled.
  *  A failed or stopped transfer counts: it is still not here. */
-function isPendingPull(t: TorrentStatus, dl: ReturnType<typeof downleeState>) {
+export function isPendingPull(t: TorrentStatus, dl: ReturnType<typeof downleeState>) {
   return t.percent_done >= 100 && !dl.done && !dl.running;
 }
 

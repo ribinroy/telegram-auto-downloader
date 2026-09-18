@@ -186,11 +186,14 @@ def guard_write(path):
     p = str(path)
     if p == '/':
         raise FsError('Refusing to modify the filesystem root', 403)
-    if _mountpoint_for(path) != '/':
-        return  # a mounted data disk - exactly what this feature is for
+    # PROTECTED_ROOTS is checked *before* the data-disk shortcut below: /boot
+    # (and /var, /home on some layouts) is very often its own mount, and
+    # letting "not on /" mean "fair game" waved the bootloader straight through.
     for prefix in PROTECTED_ROOTS:
         if p == prefix or p.startswith(prefix + '/'):
             raise FsError(f'{prefix} belongs to the operating system and is read-only here', 403)
+    if _mountpoint_for(path) != '/':
+        return  # a mounted data disk - exactly what this feature is for
 
 
 def guard_target(path):
