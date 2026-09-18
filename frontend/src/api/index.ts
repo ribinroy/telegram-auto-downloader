@@ -761,6 +761,26 @@ export interface VpsClientStats {
   error?: string;
 }
 
+/** The shared machine, not your account - every tenant's numbers combined. */
+export interface VpsServerStats {
+  volume: {
+    filesystem: string; mount: string;
+    total: number; used: number; avail: number; percent: number | null;
+  } | null;
+  load: {
+    load1: number; load5: number; load15: number;
+    cores: number; percent: number | null;
+  } | null;
+  net: {
+    iface: string;
+    rx_bytes: number; tx_bytes: number;
+    /** Bytes/sec, derived from the delta between two polls; absent on the first. */
+    rx_rate?: number; tx_rate?: number;
+    /** Seconds the rate was averaged over. */
+    window?: number;
+  } | null;
+}
+
 export interface VpsUsage {
   host: string | null;
   disk: {
@@ -774,6 +794,7 @@ export interface VpsUsage {
   disk_error?: string;
   clients: VpsClientStats[];
   traffic: { downloaded: number; uploaded: number };
+  server: VpsServerStats | null;
   cached_at: number;
 }
 

@@ -7,6 +7,7 @@ import {
 import ReactTimeAgo from 'react-time-ago';
 import { useLayoutContext } from '../components/Layout';
 import { TorrentStatusPanel } from '../components/TorrentStatusPanel';
+import { VpsUsageBar } from '../components/VpsUsageBar';
 import { type VpsFileEntry } from '../api';
 import { useVpsFiles, useDownloadVpsFile, useDeleteVpsRemote } from '../hooks/useVps';
 import { useTorrentConfig } from '../hooks/useTorrents';
@@ -291,6 +292,9 @@ export function VpsPage() {
           </button>
         </div>
       </div>
+
+      {/* Account usage (quota + traffic), with server health behind the chevron */}
+      <VpsUsageBar />
 
       {/* Tabs */}
       <div className="flex items-center gap-1 mb-4 border-b border-slate-700/60">
