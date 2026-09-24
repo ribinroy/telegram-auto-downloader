@@ -276,6 +276,10 @@ function useWarmThumbs(entries: FileEntry[]) {
   }, [key]);
 }
 
+/** Tries after the first before a preview gives up: 3+6+12+20+20+20s covers
+ *  a queue of 8K sheets on a busy box. */
+const THUMB_RETRIES = 6;
+
 /** One grid cell's preview.
  *
  *  An image is a single scaled frame. A video is a 2x2 contact sheet: the cell
@@ -283,16 +287,28 @@ function useWarmThumbs(entries: FileEntry[]) {
  *  .thumb-sheet in index.css). A preview that 404s - no ffmpeg, an unreadable
  *  container - falls back to the kind icon rather than a broken image. */
 function FilePreview({ entry }: { entry: FileEntry }) {
+  // The server answers 503 rather than hold a connection while ffmpeg runs
+  // (holding six of them starved every other request in the tab), and an
+  // <img> can't read the status - so any error is retried a few times with
+  // backoff before settling on the icon. A real failure is remembered
+  // server-side and answers instantly, so the retries cost nothing.
+  const [attempt, setAttempt] = useState(0);
   const [failed, setFailed] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(timer.current), []);
   if (failed) return <EntryIcon entry={entry} className="w-10 h-10" />;
+  const url = getFileThumbUrl(entry.path);
   return (
     <img
-      src={getFileThumbUrl(entry.path)}
+      src={attempt ? `${url}&retry=${attempt}` : url}
       alt=""
       loading="lazy"
       draggable={false}
       className={entry.kind === 'video' ? 'thumb-sheet' : 'w-full h-full object-cover'}
-      onError={() => setFailed(true)}
+      onError={() => {
+        if (attempt >= THUMB_RETRIES) return setFailed(true);
+        timer.current = setTimeout(() => setAttempt(n => n + 1), Math.min(3000 * 2 ** attempt, 20000));
+      }}
     />
   );
 }

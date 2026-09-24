@@ -19,7 +19,7 @@ import stat as stat_module
 import subprocess
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -647,6 +647,38 @@ _thumb_pool = None
 _thumb_inflight = {}
 _thumb_lock = threading.Lock()
 
+# Cache name -> when its generation failed (an unreadable container, a codec
+# ffmpeg can't decode, a download that is still arriving). A miss is not
+# written to disk, so without this every grid view would re-run the same
+# doomed ffmpeg - up to three 60s attempts - on each request. Failures expire
+# after FAIL_RETRY_AFTER rather than sticking, because the commonest cause is a
+# file still being downloaded: once it finishes it deserves another go, and a
+# stalled download never changes the (mtime, size) key that would force one.
+_thumb_failed = {}
+FAIL_RETRY_AFTER = 600
+
+# A file written to this recently is probably still arriving (a download, a
+# copy in progress). ffmpeg would only fail on it, or worse, succeed on a
+# truncated head and cache that; skip it and let a later view try.
+SETTLING_SECONDS = 60
+
+
+def _recently_failed(name):
+    at = _thumb_failed.get(name)
+    if at is None:
+        return False
+    if time.time() - at < FAIL_RETRY_AFTER:
+        return True
+    _thumb_failed.pop(name, None)
+    return False
+
+
+def _still_arriving(st):
+    return time.time() - st.st_mtime < SETTLING_SECONDS
+
+# Returned by thumbnail(wait=...) when the preview is still being made.
+PENDING = object()
+
 
 def _pool():
     global _thumb_pool
@@ -692,12 +724,18 @@ def _thumb_target(raw_path):
     return path, THUMB_CACHE / _thumb_key(str(path), st), kind, st
 
 
-def thumbnail(raw_path):
+def thumbnail(raw_path, wait=None):
     """Path to a cached JPEG preview for an image or video, or None.
 
     Images are a single scaled frame; videos are a 2x2 contact sheet. Keyed by
     (path, mtime, size), so replacing a file in place invalidates its preview
     without anyone having to clear a cache.
+
+    `wait` bounds how long to block on a preview still being made, returning
+    PENDING past it. The HTTP route needs that: a browser runs ~6 requests per
+    origin, and a grid of 8K videos each holding its connection open for a
+    minute of ffmpeg starves everything else in the tab - the video the user
+    just clicked never even gets sent.
     """
     target = _thumb_target(raw_path)
     if target is None:
@@ -705,8 +743,14 @@ def thumbnail(raw_path):
     path, cached, kind, st = target
     if cached.exists():
         return cached
+    if _recently_failed(cached.name) or _still_arriving(st):
+        return None
     THUMB_CACHE.mkdir(parents=True, exist_ok=True)
-    return _submit(cached, _generate, path, cached, kind, st).result()
+    future = _submit(cached, _generate, path, cached, kind, st)
+    try:
+        return future.result(timeout=wait)
+    except FutureTimeout:
+        return PENDING
 
 
 def warm_thumbs(raw_paths):
@@ -730,6 +774,9 @@ def warm_thumbs(raw_paths):
         if cached.exists():
             stats['cached'] += 1
             continue
+        if _recently_failed(cached.name) or _still_arriving(st):
+            stats['skipped'] += 1
+            continue
         THUMB_CACHE.mkdir(parents=True, exist_ok=True)
         _submit(cached, _generate, path, cached, kind, st)
         stats['queued'] += 1
@@ -749,11 +796,14 @@ def _generate(path, cached, kind, st):
     try:
         made = _image_thumb(path, tmp) if kind == 'image' else _video_sheet(path, tmp)
         if made != tmp:
+            if made is None:
+                _thumb_failed[cached.name] = time.time()
             return made      # None, or the original file (no Pillow)
         os.replace(tmp, cached)
         _write_sidecar(cached, path, st, '1x1' if kind == 'image' else '2x2')
         return cached
     except Exception:
+        _thumb_failed[cached.name] = time.time()
         return None
     finally:
         try:
@@ -806,7 +856,7 @@ def _video_sheet(path, out):
     if duration and duration > 1:
         inputs, filters, labels = [], [], []
         for i, frac in enumerate(SHEET_AT):
-            inputs += ['-ss', f'{duration * frac:.3f}', '-i', str(path)]
+            inputs += [*_ONE_KEYFRAME, '-ss', f'{duration * frac:.3f}', '-i', str(path)]
             filters.append(f'[{i}:v]scale={THUMB_MAX}:-2,setsar=1,format=yuv420p[t{i}]')
             labels.append(f'[t{i}]')
         filters.append(
@@ -822,11 +872,34 @@ def _video_sheet(path, out):
     # to one frame and repeat it across the sheet, so a video preview is always
     # the same shape and the client needs no negotiation to lay one out.
     for seek in (['-ss', '5'], []):
-        if _run_ffmpeg([FFMPEG_PATH, '-y', '-loglevel', 'error', *seek, '-i', str(path),
+        if _run_ffmpeg([FFMPEG_PATH, '-y', '-loglevel', 'error',
+                        *_ONE_KEYFRAME, *seek, '-i', str(path),
                         '-frames:v', '1', '-vf', f'scale={THUMB_MAX}:-2',
                         '-f', 'image2', str(out)], out):
             return _tile_single(out)
     return None
+
+
+# Per-input options: decode exactly one frame - the keyframe the seek lands on
+# - on one thread. By default ffmpeg decodes from that keyframe up to the exact
+# timestamp, and frame threading keeps a frame per thread in flight; on an 8K
+# HEVC file that was ~1.4 GB and several cores per ffmpeg, four inputs each,
+# times the pool width. The keyframe is at most a GOP away from the mark,
+# which is invisible in a 480px tile.
+_ONE_KEYFRAME = ['-threads', '1', '-skip_frame', 'nokey', '-noaccurate_seek']
+
+
+def _background():
+    """preexec_fn: previews yield the CPU to playback and downloads."""
+    try:
+        os.nice(19)
+    except OSError:
+        pass
+
+
+# Idle IO class, when util-linux is there: a thumbnail's seeks on a spinning
+# disk should never make the video streaming off that same disk stutter.
+_IONICE = ['ionice', '-c', '3'] if shutil.which('ionice') else []
 
 
 def _run_ffmpeg(cmd, out):
@@ -834,7 +907,8 @@ def _run_ffmpeg(cmd, out):
     # sheet). The old single-frame limit of 20s would have timed that out; much
     # more than this and one pathological file holds a pool worker for minutes.
     try:
-        proc = subprocess.run(cmd, capture_output=True, timeout=60)
+        proc = subprocess.run([*_IONICE, *cmd], capture_output=True, timeout=60,
+                              preexec_fn=_background)
     except (OSError, subprocess.SubprocessError):
         return False
     return proc.returncode == 0 and out.exists() and out.stat().st_size > 0

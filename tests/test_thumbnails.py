@@ -6,6 +6,7 @@ for it, the cache bookkeeping around it, and the fact that two requests for one
 file do the work once. Images go through Pillow for real, since that is cheap.
 """
 import json
+import os
 import threading
 import time
 
@@ -18,9 +19,14 @@ from backend import files as fs
 def cache(tmp_path, monkeypatch):
     """Point the thumbnail cache at a temp dir and drain the in-flight map."""
     monkeypatch.setattr(fs, 'THUMB_CACHE', tmp_path / 'cache')
+    # Every fixture file was written a moment ago; the settling check has its
+    # own test.
+    monkeypatch.setattr(fs, 'SETTLING_SECONDS', 0)
     fs._thumb_inflight.clear()
+    fs._thumb_failed.clear()
     yield tmp_path / 'cache'
     fs._thumb_inflight.clear()
+    fs._thumb_failed.clear()
 
 
 @pytest.fixture
@@ -223,3 +229,70 @@ def test_pruning_sweeps_orphans_and_half_written_temp_files(cache):
     assert not (cache / 'orphan.json').exists()
     assert not (cache / 'aborted.tmp').exists()
     assert not (cache / 'nosidecar.jpg').exists()
+
+
+# --- never holding a connection hostage -----------------------------------
+
+def test_a_slow_preview_answers_pending_instead_of_blocking(cache, tmp_path, monkeypatch):
+    """A grid of 8K videos used to hold every browser connection open for a
+    minute of ffmpeg each, so the video the user clicked was never sent."""
+    release = threading.Event()
+
+    def slow_run(cmd, out):
+        release.wait(5)
+        out.write_bytes(b'jpeg')
+        return True
+
+    monkeypatch.setattr(fs, '_video_duration', lambda _p: 100.0)
+    monkeypatch.setattr(fs, '_run_ffmpeg', slow_run)
+    clip = tmp_path / 'huge.mp4'
+    clip.write_bytes(b'x')
+
+    assert fs.thumbnail(str(clip), wait=0.05) is fs.PENDING
+    release.set()
+    assert fs.thumbnail(str(clip)) not in (None, fs.PENDING)
+
+
+def test_a_failed_preview_is_not_regenerated(cache, tmp_path, monkeypatch):
+    calls = []
+
+    def failing_run(cmd, out):
+        calls.append(cmd)
+        return False
+
+    monkeypatch.setattr(fs, '_video_duration', lambda _p: 100.0)
+    monkeypatch.setattr(fs, '_run_ffmpeg', failing_run)
+    clip = tmp_path / 'broken.mp4'
+    clip.write_bytes(b'x')
+
+    assert fs.thumbnail(str(clip)) is None
+    tried = len(calls)
+    assert fs.thumbnail(str(clip)) is None
+    assert len(calls) == tried          # remembered, not re-run
+
+    # ...but only for a while: the file may simply have been mid-download.
+    monkeypatch.setattr(fs.time, 'time', lambda: 10**12)
+    fs.thumbnail(str(clip))
+    assert len(calls) > tried
+
+
+def test_a_file_still_being_written_is_left_alone(cache, tmp_path, monkeypatch):
+    calls = _captured(monkeypatch, duration=100.0)
+    monkeypatch.setattr(fs, 'SETTLING_SECONDS', 60)
+    clip = tmp_path / 'arriving.mp4'
+    clip.write_bytes(b'x')
+    now = time.time()
+    os.utime(clip, (now, now))
+
+    assert fs.thumbnail(str(clip)) is None
+    assert fs.warm_thumbs([str(clip)])['skipped'] == 1
+    assert calls == []
+
+
+def test_each_sheet_input_decodes_one_keyframe_on_one_thread(cache, tmp_path, monkeypatch):
+    calls = _captured(monkeypatch, duration=1000.0)
+    clip = tmp_path / 'movie.mkv'
+    clip.write_bytes(b'x')
+    fs.thumbnail(str(clip))
+    cmd = calls[0]
+    assert cmd.count('-skip_frame') == 4 and cmd.count('-threads') == 4
