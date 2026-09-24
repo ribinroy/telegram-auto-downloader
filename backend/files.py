@@ -556,6 +556,7 @@ THUMB_VERSION = 2        # bump to orphan (and prune) every cached entry
 # it is also one request instead of four.
 SHEET_COLS, SHEET_ROWS = 2, 2
 SHEET_AT = (0.2, 0.4, 0.6, 0.8)  # fractions of the duration
+QUICK_AT = 0.4                   # the first-pass single frame
 
 
 def _thumb_key(path, st):
@@ -563,7 +564,7 @@ def _thumb_key(path, st):
     return hashlib.sha1(raw).hexdigest() + '.jpg'
 
 
-def _write_sidecar(cached, source, st, layout):
+def _write_sidecar(cached, source, st, layout, stage='final'):
     """Record which file a thumbnail came from, and in what shape.
 
     The cache name is a one-way hash, so without this a cleanup pass could
@@ -571,11 +572,15 @@ def _write_sidecar(cached, source, st, layout):
     let a format change (a still becoming a contact sheet) sweep the old
     entries instead of leaving them cached forever behind a key nobody asks
     for. Best-effort: a thumbnail that fails to get one is treated as stale.
+
+    `stage` is 'quick' for a video's first-pass preview (one frame, tiled into
+    the sheet's shape) that the idle upgrader will replace with the real
+    four-frame sheet, and 'final' for everything else.
     """
     try:
         cached.with_suffix('.json').write_text(json.dumps({
             'path': str(source), 'mtime_ns': st.st_mtime_ns, 'size': st.st_size,
-            'version': THUMB_VERSION, 'layout': layout,
+            'version': THUMB_VERSION, 'layout': layout, 'stage': stage,
         }))
     except OSError:
         pass
@@ -783,6 +788,157 @@ def warm_thumbs(raw_paths):
     return stats
 
 
+# --- first pass, then the real sheet when the box is idle --------------------
+#
+# A video's first preview is one frame (_video_quick): on an 8K file that is
+# ~2s against ~7s for the four-frame sheet, so a folder fills in about four
+# times sooner. The sheet follows once nothing is left to snapshot and the CPU
+# is idle, and only for files in a folder someone still has open - "open"
+# meaning the grid polled thumb_status() for it within PRESENCE_SECONDS. The
+# poll is the presence signal; there is no other notion of a viewer here.
+
+UPGRADE_TICK = 3          # seconds between upgrader checks
+UPGRADE_IDLE = 0.5        # CPU idle fraction over the last tick needed to start one
+PRESENCE_SECONDS = 30     # how long after its last poll a folder counts as open
+
+# cache name -> (source path, cache path, stat, last polled). Insertion order
+# is grid order, so a folder upgrades top to bottom.
+_upgrade_queue = {}
+_upgrader = None
+
+
+def _sidecar(cached):
+    try:
+        return json.loads(cached.with_suffix('.json').read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def thumb_status(raw_paths):
+    """Where each path's preview stands, for the grid's poll.
+
+    'ready' (final), 'quick' (first pass; now queued for a sheet), 'pending'
+    (being made), 'waiting' (not made yet, or held back - still arriving, or a
+    recent failure that will be retried), 'none' (never will be: not an image
+    or video, or gone).
+    """
+    now = time.time()
+    states = {}
+    wants_upgrade = False
+    for raw in raw_paths:
+        try:
+            target = _thumb_target(raw)
+        except FsError:
+            target = None
+        if target is None:
+            states[raw] = 'none'
+            continue
+        path, cached, kind, st = target
+        if cached.exists():
+            if (_sidecar(cached) or {}).get('stage') == 'quick':
+                states[raw] = 'quick'
+                with _thumb_lock:
+                    _upgrade_queue[cached.name] = (path, cached, st, now)
+                wants_upgrade = True
+            else:
+                states[raw] = 'ready'
+        elif cached.name in _thumb_inflight:
+            states[raw] = 'pending'
+        else:
+            states[raw] = 'waiting'
+    if wants_upgrade:
+        _ensure_upgrader()
+    return states
+
+
+def _cpu_sample():
+    """(idle, total) jiffies from /proc/stat; iowait counts as busy - a disk
+    being waited on is exactly when a sheet's four seeks would hurt."""
+    try:
+        with open('/proc/stat') as f:
+            fields = [int(x) for x in f.readline().split()[1:]]
+        return fields[3], sum(fields)
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _idle_since(prev):
+    cur = _cpu_sample()
+    if prev is None or cur is None or cur[1] <= prev[1]:
+        return 0.0, cur
+    return (cur[0] - prev[0]) / (cur[1] - prev[1]), cur
+
+
+def _upgrade_step(idle):
+    """One upgrader decision. Returns True if it built (or settled) a sheet."""
+    now = time.time()
+    with _thumb_lock:
+        for name, entry in list(_upgrade_queue.items()):
+            if now - entry[3] > PRESENCE_SECONDS:
+                del _upgrade_queue[name]      # folder closed: forget its files
+        if _thumb_inflight or not _upgrade_queue or idle < UPGRADE_IDLE:
+            return False
+        # Most recently polled first, in grid order within that poll.
+        name = max(_upgrade_queue, key=lambda k: _upgrade_queue[k][3])
+        path, cached, st, _seen = _upgrade_queue.pop(name)
+    _upgrade(path, cached, st)
+    return True
+
+
+def _upgrade_loop():
+    prev = _cpu_sample()
+    while True:
+        time.sleep(UPGRADE_TICK)
+        idle, prev = _idle_since(prev)
+        try:
+            if _upgrade_step(idle):
+                prev = _cpu_sample()          # don't count our own sheet next tick
+        except Exception:
+            pass                              # never let one bad file end the thread
+
+
+def _ensure_upgrader():
+    global _upgrader
+    with _thumb_lock:
+        if _upgrader is None or not _upgrader.is_alive():
+            _upgrader = threading.Thread(target=_upgrade_loop, name='thumb-upgrade',
+                                         daemon=True)
+            _upgrader.start()
+
+
+def _upgrade(path, cached, st):
+    """Replace a quick preview with the four-frame sheet, in place.
+
+    If the sheet can't be made the quick frame stays and is marked final, so
+    the upgrader doesn't return to it every time the folder is opened.
+    """
+    meta = _sidecar(cached)
+    if not cached.exists() or (meta or {}).get('stage') != 'quick':
+        return cached
+    tmp = cached.with_name(f'{cached.stem}.up.tmp')
+    try:
+        if _video_sheet(path, tmp, _video_duration(path)):
+            os.replace(tmp, cached)
+        _write_sidecar(cached, path, st, '2x2')
+    except Exception:
+        pass
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+    return cached
+
+
+def upgrade_thumb(raw_path):
+    """Synchronously upgrade one quick preview (the upgrader's work, callable)."""
+    target = _thumb_target(raw_path)
+    if target is None:
+        return None
+    path, cached, _kind, st = target
+    return _upgrade(path, cached, st)
+
+
 def _generate(path, cached, kind, st):
     """Build one cache entry. Runs on the pool; never raises."""
     if cached.exists():      # a queued warm-up the foreground request beat to it
@@ -794,13 +950,17 @@ def _generate(path, cached, kind, st):
     # ffmpeg run below.
     tmp = cached.with_suffix('.tmp')
     try:
-        made = _image_thumb(path, tmp) if kind == 'image' else _video_sheet(path, tmp)
+        stage = 'final'
+        if kind == 'image':
+            made = _image_thumb(path, tmp)
+        else:
+            made, stage = _video_quick(path, tmp)
         if made != tmp:
             if made is None:
                 _thumb_failed[cached.name] = time.time()
             return made      # None, or the original file (no Pillow)
         os.replace(tmp, cached)
-        _write_sidecar(cached, path, st, '1x1' if kind == 'image' else '2x2')
+        _write_sidecar(cached, path, st, '1x1' if kind == 'image' else '2x2', stage)
         return cached
     except Exception:
         _thumb_failed[cached.name] = time.time()
@@ -840,44 +1000,118 @@ def _video_duration(path):
         return None
 
 
-def _video_sheet(path, out):
+def _video_sheet(path, out, duration):
     """A 2x2 contact sheet from four points spread through the runtime.
 
-    One ffmpeg process with the file opened four times, each input seeked
-    before `-i` (a keyframe seek, so it does not decode up to the mark) and
-    the four frames xstacked. Four separate processes would finish a single
-    file sooner, but ffmpeg already threads its own decode - on a 4K HEVC clip
-    one frame grab costs ~1.1s and all four cost ~4.2s, i.e. the seeks are
-    nearly free and the CPU is the wall. Spending it on more files at once
-    (the pool) beats spending it on more processes per file.
+    Each point is its own ffmpeg, all four at once, joined with Pillow. Every
+    grab decodes exactly one keyframe (_ONE_KEYFRAME), so the cost is that one
+    decode plus the disk seek to reach it - and on a spinning disk the seek is
+    as much of it as the decode. Measured on an 8K 10-bit HEVC VR file on this
+    box: ~2s of CPU per keyframe, whatever the thread count; one process with
+    four inputs took 14.7s, because it works through its inputs one after the
+    other, while four processes took 7.4s. (Decoding up to the exact timestamp
+    instead, as this used to, meant up to 600 8K frames per point: it never
+    finished inside the timeout.)
+
+    Without Pillow the four inputs go through one ffmpeg and xstack instead -
+    slower, but no new dependency.
+    """
+    from backend.file_meta import FFMPEG_PATH
+    if duration and duration > 1:
+        seeks = [f'{duration * frac:.3f}' for frac in SHEET_AT]
+        try:
+            from PIL import Image  # noqa: F401
+            have_pillow = True
+        except ImportError:
+            have_pillow = False
+        if have_pillow:
+            if _parallel_sheet(FFMPEG_PATH, path, seeks, out):
+                return out
+        else:
+            inputs, filters, labels = [], [], []
+            for i, seek in enumerate(seeks):
+                inputs += [*_ONE_KEYFRAME, '-ss', seek, '-i', str(path)]
+                filters.append(f'[{i}:v]scale={THUMB_MAX}:-2,setsar=1,format=yuv420p[t{i}]')
+                labels.append(f'[t{i}]')
+            filters.append(
+                f'{"".join(labels)}xstack=inputs={len(SHEET_AT)}'
+                ':layout=0_0|w0_0|0_h0|w0_h0[sheet]')
+            if _run_ffmpeg([FFMPEG_PATH, '-y', '-loglevel', 'error', *inputs,
+                            '-filter_complex', ';'.join(filters),
+                            '-map', '[sheet]', '-frames:v', '1', '-q:v', '4',
+                            '-f', 'image2', str(out)], out):
+                return out
+
+    return None
+
+
+def _video_quick(path, out):
+    """First-pass video preview: one frame, tiled into the sheet's shape.
+
+    A quarter of a sheet's work - one keyframe instead of four - so opening a
+    folder of 8K files fills the whole grid before any single file gets its
+    full treatment. Returns (out or None, stage): 'quick' when a sheet can
+    follow, 'final' when it can't (no duration to spread four seeks over).
+
+    Tiled rather than served as a lone frame so every video preview is the
+    same shape and the client never has to know which one it got.
     """
     from backend.file_meta import FFMPEG_PATH
     duration = _video_duration(path)
-    if duration and duration > 1:
-        inputs, filters, labels = [], [], []
-        for i, frac in enumerate(SHEET_AT):
-            inputs += [*_ONE_KEYFRAME, '-ss', f'{duration * frac:.3f}', '-i', str(path)]
-            filters.append(f'[{i}:v]scale={THUMB_MAX}:-2,setsar=1,format=yuv420p[t{i}]')
-            labels.append(f'[t{i}]')
-        filters.append(
-            f'{"".join(labels)}xstack=inputs={len(SHEET_AT)}'
-            ':layout=0_0|w0_0|0_h0|w0_h0[sheet]')
-        if _run_ffmpeg([FFMPEG_PATH, '-y', '-loglevel', 'error', *inputs,
-                        '-filter_complex', ';'.join(filters),
-                        '-map', '[sheet]', '-frames:v', '1', '-q:v', '4',
-                        '-f', 'image2', str(out)], out):
-            return out
-
-    # No duration (a stream, a broken container) or the stack failed: fall back
-    # to one frame and repeat it across the sheet, so a video preview is always
-    # the same shape and the client needs no negotiation to lay one out.
-    for seek in (['-ss', '5'], []):
+    sheetable = bool(duration and duration > 1)
+    seeks = [['-ss', f'{duration * QUICK_AT:.3f}']] if sheetable else []
+    # A fixed 5s when the length is unknown, then from the top for a clip
+    # shorter than that.
+    for seek in (*seeks, ['-ss', '5'], []):
         if _run_ffmpeg([FFMPEG_PATH, '-y', '-loglevel', 'error',
                         *_ONE_KEYFRAME, *seek, '-i', str(path),
                         '-frames:v', '1', '-vf', f'scale={THUMB_MAX}:-2',
                         '-f', 'image2', str(out)], out):
-            return _tile_single(out)
-    return None
+            return _tile_single(out), ('quick' if sheetable else 'final')
+    return None, 'final'
+
+
+def _parallel_sheet(ffmpeg, path, seeks, out):
+    """Grab one frame per seek concurrently and tile them into `out`.
+
+    All four or nothing: a sheet with a hole in it would read as a broken
+    preview, so any failed grab sends the caller to its single-frame fallback.
+    """
+    frames = [out.with_name(f'{out.stem}.{i}.tmp') for i in range(len(seeks))]
+
+    def grab(i):
+        return _run_ffmpeg([ffmpeg, '-y', '-loglevel', 'error', *_ONE_KEYFRAME,
+                            '-ss', seeks[i], '-i', str(path), '-frames:v', '1',
+                            '-vf', f'scale={THUMB_MAX}:-2', '-f', 'image2',
+                            str(frames[i])], frames[i])
+
+    try:
+        # Per-sheet threads rather than more pool work: the pool bounds how
+        # many files are in progress, and these only ever wait on ffmpeg.
+        with ThreadPoolExecutor(max_workers=len(seeks)) as ex:
+            if not all(ex.map(grab, range(len(seeks)))):
+                return False
+        from PIL import Image
+        tiles = []
+        for f in frames:
+            with Image.open(f) as im:
+                tiles.append(im.convert('RGB'))
+        w, h = tiles[0].size
+        sheet = Image.new('RGB', (w * SHEET_COLS, h * SHEET_ROWS))
+        for i, tile in enumerate(tiles):
+            if tile.size != (w, h):
+                tile = tile.resize((w, h))
+            sheet.paste(tile, ((i % SHEET_COLS) * w, (i // SHEET_COLS) * h))
+        sheet.save(out, 'JPEG', quality=80)
+        return True
+    except Exception:
+        return False
+    finally:
+        for f in frames:
+            try:
+                f.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 # Per-input options: decode exactly one frame - the keyframe the seek lands on
@@ -897,9 +1131,10 @@ def _background():
         pass
 
 
-# Idle IO class, when util-linux is there: a thumbnail's seeks on a spinning
-# disk should never make the video streaming off that same disk stutter.
-_IONICE = ['ionice', '-c', '3'] if shutil.which('ionice') else []
+# Lowest best-effort IO priority, when util-linux is there, so playback off the
+# same spinning disk goes first. Not the idle class: that waits for the disk
+# to go quiet and measured 6.8s against 3.0s for one cold 8K frame.
+_IONICE = ['ionice', '-c', '2', '-n', '7'] if shutil.which('ionice') else []
 
 
 def _run_ffmpeg(cmd, out):

@@ -85,13 +85,21 @@ def test_a_failed_generation_leaves_nothing_behind(cache, png, monkeypatch):
 
 # --- the contact sheet ----------------------------------------------------
 
+def _jpeg(out):
+    """A real frame where Pillow is there (the sheet tiles it), else bytes."""
+    try:
+        from PIL import Image
+        Image.new('RGB', (48, 27), 'teal').save(out, 'JPEG')
+    except ImportError:
+        out.write_bytes(b'jpeg')
+
 def _captured(monkeypatch, duration):
     """Record the ffmpeg command a sheet would run, without running it."""
     calls = []
 
     def fake_run(cmd, out):
         calls.append(cmd)
-        out.write_bytes(b'jpeg')
+        _jpeg(out)
         return True
 
     monkeypatch.setattr(fs, '_video_duration', lambda _p: duration)
@@ -105,16 +113,26 @@ def test_a_video_is_sampled_across_its_whole_runtime(cache, tmp_path, monkeypatc
     clip = tmp_path / 'movie.mkv'
     clip.write_bytes(b'x')
 
+    pytest.importorskip('PIL.Image')
     assert fs.thumbnail(str(clip))
-    assert len(calls) == 1            # one process, four seeks
-    cmd = calls[0]
-    assert [cmd[i + 1] for i, a in enumerate(cmd) if a == '-ss'] == \
+    assert len(calls) == 1                      # first pass: one frame
+    assert calls[0][calls[0].index('-ss') + 1] == '400.000'
+    calls.clear()
+    assert fs.upgrade_thumb(str(clip))
+    # Four single-frame grabs run side by side, then tiled: one process with
+    # four inputs works through them in turn, which on an 8K file was twice
+    # as slow.
+    assert len(calls) == 4
+    assert sorted(c[c.index('-ss') + 1] for c in calls) == \
         ['200.000', '400.000', '600.000', '800.000']
-    assert cmd.count('-i') == 4
-    assert 'xstack=inputs=4' in ' '.join(cmd)
+    assert all(c.count('-i') == 1 for c in calls)
+    from PIL import Image
+    with Image.open(fs.thumbnail(str(clip))) as sheet:
+        assert sheet.size == (96, 54)     # 2x2 of 48x27
+    assert not list(cache.glob('*.tmp'))  # the per-frame temps are gone
 
     meta = json.loads(fs.thumbnail(str(clip)).with_suffix('.json').read_text())
-    assert meta['layout'] == '2x2'
+    assert meta['layout'] == '2x2' and meta['stage'] == 'final'
 
 
 def test_a_video_with_no_readable_duration_falls_back_to_one_frame(cache, tmp_path, monkeypatch):
@@ -294,5 +312,69 @@ def test_each_sheet_input_decodes_one_keyframe_on_one_thread(cache, tmp_path, mo
     clip = tmp_path / 'movie.mkv'
     clip.write_bytes(b'x')
     fs.thumbnail(str(clip))
-    cmd = calls[0]
-    assert cmd.count('-skip_frame') == 4 and cmd.count('-threads') == 4
+    fs.upgrade_thumb(str(clip))
+    assert calls and all('-skip_frame' in c and '-noaccurate_seek' in c
+                         and c[c.index('-threads') + 1] == '1' for c in calls)
+
+
+# --- quick first pass, sheet when idle -----------------------------------
+
+def test_a_video_starts_quick_and_is_queued_for_its_sheet_while_viewed(
+        cache, tmp_path, monkeypatch):
+    _captured(monkeypatch, duration=100.0)
+    monkeypatch.setattr(fs, '_ensure_upgrader', lambda: None)
+    fs._upgrade_queue.clear()
+    clip = tmp_path / 'a.mp4'
+    clip.write_bytes(b'x')
+
+    assert fs.thumb_status([str(clip)]) == {str(clip): 'waiting'}
+    fs.thumbnail(str(clip))
+    assert fs.thumb_status([str(clip)]) == {str(clip): 'quick'}
+    assert len(fs._upgrade_queue) == 1
+
+    assert not fs._upgrade_step(idle=0.1)       # busy box: wait
+    assert fs._upgrade_step(idle=0.9)
+    assert fs.thumb_status([str(clip)]) == {str(clip): 'ready'}
+    assert not fs._upgrade_queue
+
+
+def test_leaving_the_folder_drops_its_upgrades(cache, tmp_path, monkeypatch):
+    _captured(monkeypatch, duration=100.0)
+    monkeypatch.setattr(fs, '_ensure_upgrader', lambda: None)
+    fs._upgrade_queue.clear()
+    clip = tmp_path / 'b.mp4'
+    clip.write_bytes(b'x')
+    fs.thumbnail(str(clip))
+    fs.thumb_status([str(clip)])
+
+    later = time.time() + fs.PRESENCE_SECONDS + 1
+    monkeypatch.setattr(fs.time, 'time', lambda: later)
+    assert not fs._upgrade_step(idle=1.0)
+    assert not fs._upgrade_queue
+
+
+def test_no_upgrade_while_previews_are_still_being_made(cache, tmp_path, monkeypatch):
+    _captured(monkeypatch, duration=100.0)
+    monkeypatch.setattr(fs, '_ensure_upgrader', lambda: None)
+    fs._upgrade_queue.clear()
+    clip = tmp_path / 'c.mp4'
+    clip.write_bytes(b'x')
+    fs.thumbnail(str(clip))
+    fs.thumb_status([str(clip)])
+    fs._thumb_inflight['someone-else.jpg'] = object()
+    try:
+        assert not fs._upgrade_step(idle=1.0)
+    finally:
+        fs._thumb_inflight.pop('someone-else.jpg')
+
+
+def test_a_failed_sheet_keeps_the_quick_frame_and_stops_trying(cache, tmp_path, monkeypatch):
+    calls = _captured(monkeypatch, duration=100.0)
+    clip = tmp_path / 'd.mp4'
+    clip.write_bytes(b'x')
+    quick = fs.thumbnail(str(clip))
+    before = quick.read_bytes()
+    monkeypatch.setattr(fs, '_run_ffmpeg', lambda cmd, out: False)
+    fs.upgrade_thumb(str(clip))
+    assert quick.read_bytes() == before
+    assert json.loads(quick.with_suffix('.json').read_text())['stage'] == 'final'

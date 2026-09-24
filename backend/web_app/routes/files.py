@@ -355,3 +355,21 @@ class FilesRoutesMixin:
             local = [p for p in paths[:MAX_WARM] if isinstance(p, str)
                      and not rfs.is_remote(p)]
             return jsonify(fs.warm_thumbs(local))
+
+        @self.app.route("/api/files/thumb/status", methods=["POST"])
+        @token_required
+        def files_thumb_status():
+            """Body: {paths} - where each preview stands ({states: {path: state}}).
+
+            Polled by the grid while a folder is open. The poll doubles as the
+            "still looking at this folder" signal: first-pass previews it
+            reports are what the idle upgrader turns into full sheets, and
+            only while the polls keep coming.
+            """
+            data = request.get_json(silent=True) or {}
+            paths = data.get("paths") or []
+            if not isinstance(paths, list):
+                return jsonify({"error": "paths must be a list"}), 400
+            local = [p for p in paths[:MAX_WARM] if isinstance(p, str)
+                     and not rfs.is_remote(p)]
+            return jsonify({"states": fs.thumb_status(local)})

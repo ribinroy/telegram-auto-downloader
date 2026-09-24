@@ -141,6 +141,13 @@ export const dirSize = (path: string) => filesRequest<DirSize>('/size', { path }
 export const warmThumbs = (paths: string[]) =>
   filesRequest<{ queued: number; cached: number; skipped: number }>('/thumb/warm', { paths });
 
+/** Where each preview stands. 'quick' is a first-pass single frame the server
+ *  upgrades to the four-frame sheet once idle - but only while this keeps
+ *  being polled, so the poll is also how the server knows the folder is open. */
+export type ThumbState = 'ready' | 'quick' | 'pending' | 'waiting' | 'none';
+export const thumbStatus = (paths: string[]) =>
+  filesRequest<{ states: Record<string, ThumbState> }>('/thumb/status', { paths });
+
 export const readTextFile = (path: string) =>
   filesRequest<{ path: string; text: string; truncated: boolean; size: number }>('/text', { path });
 

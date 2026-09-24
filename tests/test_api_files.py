@@ -239,3 +239,14 @@ def test_warming_previews_queues_local_files_and_skips_the_vps(
 def test_warming_previews_rejects_a_non_list(client, db, auth):
     res = client.post('/api/files/thumb/warm', headers=auth, json={'paths': 'everything'})
     assert res.status_code == 400
+
+
+def test_thumb_status_skips_remote_paths(client, auth, monkeypatch):
+    from backend import files as fs
+    seen = []
+    monkeypatch.setattr(fs, 'thumb_status', lambda paths: seen.extend(paths) or {})
+    res = client.post('/api/files/thumb/status', headers=auth,
+                      json={'paths': ['/a.mp4', 'vps:/b.mp4']})
+    assert res.status_code == 200 and seen == ['/a.mp4']
+    assert client.post('/api/files/thumb/status', headers=auth,
+                       json={'paths': 'x'}).status_code == 400
