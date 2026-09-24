@@ -18,6 +18,7 @@ import type { Download } from '../types';
 // Reserved filter values: not statuses the clients report, so they can't collide.
 const FORCED_FILTER = '@forced';
 const PENDING_FILTER = '@todo';
+const DONE_FILTER = '@done';
 
 /** What has become of this torrent on the DownLee side.
  *
@@ -48,6 +49,12 @@ export function downleeState(t: TorrentStatus, downloads: Download[], started: S
  *  A failed or stopped transfer counts: it is still not here. */
 export function isPendingPull(t: TorrentStatus, dl: ReturnType<typeof downleeState>) {
   return t.percent_done >= 100 && !dl.done && !dl.running;
+}
+
+/** The other end of the same queue: finished on the VPS *and* already pulled
+ *  to DownLee, so there is nothing left to do with it. */
+export function isAlreadyDownloaded(t: TorrentStatus, dl: ReturnType<typeof downleeState>) {
+  return t.percent_done >= 100 && dl.done;
 }
 
 const STATUS_STYLES: Record<TorrentStatus['status'], { label: string; cls: string }> = {
@@ -176,6 +183,8 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
   const forcedCount = torrents.filter(t => t.force_start === true).length;
   const pendingCount = torrents.filter(
     t => isPendingPull(t, downleeState(t, downloads, dlStarted))).length;
+  const doneCount = torrents.filter(
+    t => isAlreadyDownloaded(t, downleeState(t, downloads, dlStarted))).length;
   const comparators: Record<typeof sortBy, (a: TorrentStatus, b: TorrentStatus) => number> = {
     created: (a, b) => b.added_date - a.added_date,
     name: (a, b) => (a.name || '').localeCompare(b.name || ''),
@@ -188,6 +197,9 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
       if (statusFilter === FORCED_FILTER) return t.force_start === true;
       if (statusFilter === PENDING_FILTER) {
         return isPendingPull(t, downleeState(t, downloads, dlStarted));
+      }
+      if (statusFilter === DONE_FILTER) {
+        return isAlreadyDownloaded(t, downleeState(t, downloads, dlStarted));
       }
       return t.status === statusFilter;
     })
@@ -260,6 +272,9 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
           )}
           {pendingCount > 0 && (
             <option value={PENDING_FILTER}>To be downloaded ({pendingCount})</option>
+          )}
+          {doneCount > 0 && (
+            <option value={DONE_FILTER}>Already downloaded ({doneCount})</option>
           )}
         </select>
 
