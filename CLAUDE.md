@@ -509,11 +509,9 @@ a pulled USB drive disappears from the sidebar.
   - **An image is one scaled frame (Pillow); a video is a 2x2 contact sheet.**
     A fixed "5 seconds in" lands on a fade-in, a studio card or plain black on
     most films; four frames at 20/40/60/80% of the runtime say what a clip
-    actually is. One ffmpeg process opens the file four times with a keyframe
-    seek before each `-i` and `xstack`es the result, so it is one process and
-    one cache entry - and one HTTP request instead of four. Measured on a 4K
-    HEVC film: 1.1s for a single frame, 4.2s for the sheet, i.e. the seeks are
-    nearly free and decode is the wall. No duration (a stream, a broken
+    actually is. The four frames are tiled into one JPEG, so it is one cache
+    entry - and one HTTP request instead of four (without Pillow, one ffmpeg
+    `xstack`s four inputs instead). No duration (a stream, a broken
     container) falls back to a single frame repeated across the sheet, so a
     video preview is always the same shape and the client needs no negotiation.
   - **Two passes for video: one frame first, the sheet when idle.** An 8K
