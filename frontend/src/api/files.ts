@@ -135,6 +135,12 @@ export const searchFiles = (path: string, query: string, showHidden = false) =>
 
 export const dirSize = (path: string) => filesRequest<DirSize>('/size', { path });
 
+/** Ask the server to build previews for a page of files before the <img> tags
+ *  request them. Fire-and-forget: the browser's ~6 connections per origin
+ *  would otherwise meter the work six files at a time. */
+export const warmThumbs = (paths: string[]) =>
+  filesRequest<{ queued: number; cached: number; skipped: number }>('/thumb/warm', { paths });
+
 export const readTextFile = (path: string) =>
   filesRequest<{ path: string; text: string; truncated: boolean; size: number }>('/text', { path });
 

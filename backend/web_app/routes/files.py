@@ -17,6 +17,10 @@ from flask import jsonify, request, send_file
 
 from backend import files as fs
 from backend.database import get_db
+
+# One screenful of a grid, generously. A warm-up is fire-and-forget work the
+# caller never waits on, so the cap is about not queueing a 20k-file folder.
+MAX_WARM = 300
 from backend.web_app.base import token_required, media_token_required
 from backend.web_app.helpers import range_response
 
@@ -319,3 +323,24 @@ class FilesRoutesMixin:
                 return jsonify({"error": "No preview available"}), 404
             mime = mimetypes.guess_type(str(thumb))[0] or 'image/jpeg'
             return send_file(str(thumb), mimetype=mime, conditional=True)
+
+        @self.app.route("/api/files/thumb/warm", methods=["POST"])
+        @token_required
+        def files_thumb_warm():
+            """Queue previews for a page of files and return immediately.
+
+            The browser opens ~6 connections per origin, so a grid of 100
+            videos trickles in six at a time no matter how idle the machine
+            is. One call here hands the whole visible page to the generation
+            pool, which runs it at its own width; the <img> requests that
+            follow then mostly hit a finished file.
+            """
+            data = request.get_json(silent=True) or {}
+            paths = data.get("paths") or []
+            if not isinstance(paths, list):
+                return jsonify({"error": "paths must be a list"}), 400
+            # Remote entries are skipped, not refused: a vps: thumbnail would
+            # mean pulling the file across the internet to make a JPEG.
+            local = [p for p in paths[:MAX_WARM] if isinstance(p, str)
+                     and not rfs.is_remote(p)]
+            return jsonify(fs.warm_thumbs(local))

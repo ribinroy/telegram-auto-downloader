@@ -17,11 +17,15 @@ import os
 import shutil
 import stat as stat_module
 import subprocess
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
-from backend.config import BASE_DIR, DOWNLOAD_DIR, SCREENSHOTS_DIR, EXPLORER_READONLY
+from backend.config import (
+    BASE_DIR, DOWNLOAD_DIR, SCREENSHOTS_DIR, EXPLORER_READONLY, THUMB_WORKERS,
+)
 from backend.rename import unique_name
 
 
@@ -542,36 +546,49 @@ def read_text(raw_path, max_bytes=TEXT_PREVIEW_MAX):
 # --------------------------------------------------------------------------
 
 THUMB_CACHE = Path(SCREENSHOTS_DIR) / '.explorer'
-THUMB_MAX = 480
+THUMB_MAX = 480          # long edge of a still; one tile of a contact sheet
+THUMB_VERSION = 2        # bump to orphan (and prune) every cached entry
+
+# A video preview is a 2x2 contact sheet, not a single frame. Two reasons:
+# a fixed "5 seconds in" lands on a fade-in, a studio card or plain black on
+# most films, and four frames spread through the runtime say what a clip
+# actually is. The client shows one tile and scrubs the others on hover, so
+# it is also one request instead of four.
+SHEET_COLS, SHEET_ROWS = 2, 2
+SHEET_AT = (0.2, 0.4, 0.6, 0.8)  # fractions of the duration
 
 
 def _thumb_key(path, st):
-    raw = f'{path}:{st.st_mtime_ns}:{st.st_size}'.encode()
+    raw = f'v{THUMB_VERSION}:{path}:{st.st_mtime_ns}:{st.st_size}'.encode()
     return hashlib.sha1(raw).hexdigest() + '.jpg'
 
 
-def _write_sidecar(cached, source, st):
-    """Record which file a thumbnail came from.
+def _write_sidecar(cached, source, st, layout):
+    """Record which file a thumbnail came from, and in what shape.
 
     The cache name is a one-way hash, so without this a cleanup pass could
-    never tell whether a thumbnail's source still exists. Best-effort: a
-    thumbnail that fails to get one is simply treated as stale later.
+    never tell whether a thumbnail's source still exists. `version`/`layout`
+    let a format change (a still becoming a contact sheet) sweep the old
+    entries instead of leaving them cached forever behind a key nobody asks
+    for. Best-effort: a thumbnail that fails to get one is treated as stale.
     """
     try:
         cached.with_suffix('.json').write_text(json.dumps({
             'path': str(source), 'mtime_ns': st.st_mtime_ns, 'size': st.st_size,
+            'version': THUMB_VERSION, 'layout': layout,
         }))
     except OSError:
         pass
 
 
 def prune_thumb_cache():
-    """Delete explorer thumbnails whose source file is gone or has changed.
+    """Delete explorer thumbnails whose source file is gone, changed or stale.
 
     Run by the sync-thumbnails job. Each thumbnail is checked against its
     sidecar; one that has no sidecar (written before sidecars existed, or a
     half-finished write) counts as stale and goes too - it costs one ffmpeg
-    frame grab to come back the next time someone looks at that folder.
+    run to come back the next time someone looks at that folder. So does one
+    written by an older THUMB_VERSION, which nothing will ever request again.
     """
     stats = {'checked': 0, 'deleted': 0, 'kept': 0, 'freed': 0}
     if not THUMB_CACHE.is_dir():
@@ -583,7 +600,9 @@ def prune_thumb_cache():
         try:
             meta = json.loads(sidecar.read_text())
             st = os.stat(meta['path'])
-            stale = st.st_mtime_ns != meta.get('mtime_ns') or st.st_size != meta.get('size')
+            stale = (st.st_mtime_ns != meta.get('mtime_ns')
+                     or st.st_size != meta.get('size')
+                     or meta.get('version') != THUMB_VERSION)
         except (OSError, ValueError, KeyError, TypeError):
             stale = True
         if not stale:
@@ -597,23 +616,69 @@ def prune_thumb_cache():
         except OSError:
             continue
 
-    # Sidecars whose thumbnail is already gone.
-    for sidecar in THUMB_CACHE.glob('*.json'):
-        if not sidecar.with_suffix('.jpg').exists():
-            try:
-                sidecar.unlink(missing_ok=True)
-            except OSError:
-                pass
+    # Sidecars whose thumbnail is already gone, and temp files an ffmpeg run
+    # that died mid-write left behind.
+    for leftover in (*THUMB_CACHE.glob('*.json'), *THUMB_CACHE.glob('*.tmp')):
+        if leftover.suffix == '.json' and leftover.with_suffix('.jpg').exists():
+            continue
+        try:
+            leftover.unlink(missing_ok=True)
+        except OSError:
+            pass
     return stats
 
 
-def thumbnail(raw_path):
-    """Path to a cached JPEG preview for an image or video, or None.
+# --- generation pool ------------------------------------------------------
+#
+# Two problems the pool solves, neither of which more browser tabs can.
+#
+# A grid of 100 videos issues 100 thumbnail requests. The browser caps itself
+# at ~6 concurrent connections per origin, so without `warm_thumbs()` the work
+# arrives six at a time however idle the machine is; with it, one request hands
+# the whole visible page over and the pool runs it at its own width. The other
+# way round, nothing stopped 100 requests from starting 100 ffmpeg processes on
+# a box that is also downloading - the pool is the ceiling as well as the floor.
+#
+# The in-flight map is the other half: two viewers opening the same folder used
+# to run the same ffmpeg twice, both writing the same output path. Now the
+# second waits on the first's future.
 
-    Keyed by (path, mtime, size), so replacing a file in place invalidates its
-    thumbnail without anyone having to clear a cache. Each entry gets a JSON
-    sidecar naming its source, which is what makes prune_thumb_cache() possible.
-    """
+_thumb_pool = None
+_thumb_inflight = {}
+_thumb_lock = threading.Lock()
+
+
+def _pool():
+    global _thumb_pool
+    if _thumb_pool is None:
+        _thumb_pool = ThreadPoolExecutor(
+            max_workers=THUMB_WORKERS, thread_name_prefix='thumb')
+    return _thumb_pool
+
+
+def _submit(cached, fn, *args):
+    """Run `fn` on the pool, or join the run already making this same file."""
+    key = cached.name
+    with _thumb_lock:
+        future = _thumb_inflight.get(key)
+        fresh = future is None
+        if fresh:
+            future = _pool().submit(fn, *args)
+            _thumb_inflight[key] = future
+    if fresh:
+        # Registered outside the lock: an already-finished future runs its
+        # callback inline, and _forget() wants the same lock.
+        future.add_done_callback(lambda _f, k=key: _forget(k))
+    return future
+
+
+def _forget(key):
+    with _thumb_lock:
+        _thumb_inflight.pop(key, None)
+
+
+def _thumb_target(raw_path):
+    """(source path, cache path, kind, stat) for a thumbnailable file, or None."""
     path = resolve_path(raw_path)
     if path.is_dir():
         return None
@@ -621,23 +686,83 @@ def thumbnail(raw_path):
         st = path.stat()
     except OSError:
         return None
-
     kind = kind_for(path.name)
     if kind not in ('image', 'video'):
         return None
+    return path, THUMB_CACHE / _thumb_key(str(path), st), kind, st
 
-    THUMB_CACHE.mkdir(parents=True, exist_ok=True)
-    cached = THUMB_CACHE / _thumb_key(str(path), st)
+
+def thumbnail(raw_path):
+    """Path to a cached JPEG preview for an image or video, or None.
+
+    Images are a single scaled frame; videos are a 2x2 contact sheet. Keyed by
+    (path, mtime, size), so replacing a file in place invalidates its preview
+    without anyone having to clear a cache.
+    """
+    target = _thumb_target(raw_path)
+    if target is None:
+        return None
+    path, cached, kind, st = target
     if cached.exists():
         return cached
-
-    made = _image_thumb(path, cached) if kind == 'image' else _video_thumb(path, cached)
-    if made == cached:
-        _write_sidecar(cached, path, st)
-    return made
+    THUMB_CACHE.mkdir(parents=True, exist_ok=True)
+    return _submit(cached, _generate, path, cached, kind, st).result()
 
 
-def _image_thumb(path, cached):
+def warm_thumbs(raw_paths):
+    """Queue previews for a batch of files without waiting for them.
+
+    What makes the pool worth having: the explorer hands over every video on
+    the page it just rendered in one request, and by the time the individual
+    <img> requests arrive - six at a time, as the browser allows - the files
+    are either built or being built, and nothing is generated twice.
+    """
+    stats = {'queued': 0, 'cached': 0, 'skipped': 0}
+    for raw in raw_paths:
+        try:
+            target = _thumb_target(raw)
+        except FsError:
+            target = None
+        if target is None:
+            stats['skipped'] += 1
+            continue
+        path, cached, kind, st = target
+        if cached.exists():
+            stats['cached'] += 1
+            continue
+        THUMB_CACHE.mkdir(parents=True, exist_ok=True)
+        _submit(cached, _generate, path, cached, kind, st)
+        stats['queued'] += 1
+    return stats
+
+
+def _generate(path, cached, kind, st):
+    """Build one cache entry. Runs on the pool; never raises."""
+    if cached.exists():      # a queued warm-up the foreground request beat to it
+        return cached
+    # ffmpeg and Pillow both write the output incrementally, so they write to a
+    # temp name and get moved into place: a reader either sees no thumbnail or
+    # a whole one, never the half a concurrent request used to be served.
+    # `.tmp` carries no format, hence the explicit `-f image2` on every
+    # ffmpeg run below.
+    tmp = cached.with_suffix('.tmp')
+    try:
+        made = _image_thumb(path, tmp) if kind == 'image' else _video_sheet(path, tmp)
+        if made != tmp:
+            return made      # None, or the original file (no Pillow)
+        os.replace(tmp, cached)
+        _write_sidecar(cached, path, st, '1x1' if kind == 'image' else '2x2')
+        return cached
+    except Exception:
+        return None
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _image_thumb(path, out):
     try:
         from PIL import Image, ImageOps
     except ImportError:
@@ -646,28 +771,86 @@ def _image_thumb(path, cached):
         with Image.open(path) as im:
             im = ImageOps.exif_transpose(im)
             im.thumbnail((THUMB_MAX, THUMB_MAX))
-            im.convert('RGB').save(cached, 'JPEG', quality=80)
-        return cached
+            im.convert('RGB').save(out, 'JPEG', quality=80)
+        return out
     except Exception:
         return None
 
 
-def _video_thumb(path, cached):
-    from backend.file_meta import FFMPEG_PATH
+def _video_duration(path):
+    from backend.file_meta import FFPROBE_PATH
     try:
         proc = subprocess.run(
-            [FFMPEG_PATH, '-y', '-loglevel', 'error', '-ss', '5', '-i', str(path),
-             '-frames:v', '1', '-vf', f'scale={THUMB_MAX}:-2', str(cached)],
-            capture_output=True, timeout=20,
+            [FFPROBE_PATH, '-v', 'error', '-show_entries', 'format=duration',
+             '-of', 'default=nw=1:nk=1', str(path)],
+            capture_output=True, timeout=20, text=True,
         )
-        if proc.returncode == 0 and cached.exists() and cached.stat().st_size:
-            return cached
-        # Clips shorter than the seek offset need a seek-to-zero retry.
-        proc = subprocess.run(
-            [FFMPEG_PATH, '-y', '-loglevel', 'error', '-i', str(path),
-             '-frames:v', '1', '-vf', f'scale={THUMB_MAX}:-2', str(cached)],
-            capture_output=True, timeout=20,
-        )
-        return cached if cached.exists() and cached.stat().st_size else None
-    except (OSError, subprocess.SubprocessError):
+        return float(proc.stdout.strip())
+    except (OSError, ValueError, subprocess.SubprocessError):
         return None
+
+
+def _video_sheet(path, out):
+    """A 2x2 contact sheet from four points spread through the runtime.
+
+    One ffmpeg process with the file opened four times, each input seeked
+    before `-i` (a keyframe seek, so it does not decode up to the mark) and
+    the four frames xstacked. Four separate processes would finish a single
+    file sooner, but ffmpeg already threads its own decode - on a 4K HEVC clip
+    one frame grab costs ~1.1s and all four cost ~4.2s, i.e. the seeks are
+    nearly free and the CPU is the wall. Spending it on more files at once
+    (the pool) beats spending it on more processes per file.
+    """
+    from backend.file_meta import FFMPEG_PATH
+    duration = _video_duration(path)
+    if duration and duration > 1:
+        inputs, filters, labels = [], [], []
+        for i, frac in enumerate(SHEET_AT):
+            inputs += ['-ss', f'{duration * frac:.3f}', '-i', str(path)]
+            filters.append(f'[{i}:v]scale={THUMB_MAX}:-2,setsar=1,format=yuv420p[t{i}]')
+            labels.append(f'[t{i}]')
+        filters.append(
+            f'{"".join(labels)}xstack=inputs={len(SHEET_AT)}'
+            ':layout=0_0|w0_0|0_h0|w0_h0[sheet]')
+        if _run_ffmpeg([FFMPEG_PATH, '-y', '-loglevel', 'error', *inputs,
+                        '-filter_complex', ';'.join(filters),
+                        '-map', '[sheet]', '-frames:v', '1', '-q:v', '4',
+                        '-f', 'image2', str(out)], out):
+            return out
+
+    # No duration (a stream, a broken container) or the stack failed: fall back
+    # to one frame and repeat it across the sheet, so a video preview is always
+    # the same shape and the client needs no negotiation to lay one out.
+    for seek in (['-ss', '5'], []):
+        if _run_ffmpeg([FFMPEG_PATH, '-y', '-loglevel', 'error', *seek, '-i', str(path),
+                        '-frames:v', '1', '-vf', f'scale={THUMB_MAX}:-2',
+                        '-f', 'image2', str(out)], out):
+            return _tile_single(out)
+    return None
+
+
+def _run_ffmpeg(cmd, out):
+    # 60s, against ~14s measured for the slowest thing on this box (a 4K AV1
+    # sheet). The old single-frame limit of 20s would have timed that out; much
+    # more than this and one pathological file holds a pool worker for minutes.
+    try:
+        proc = subprocess.run(cmd, capture_output=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return proc.returncode == 0 and out.exists() and out.stat().st_size > 0
+
+
+def _tile_single(out):
+    """Repeat a single frame into the 2x2 grid a video preview is expected to be."""
+    try:
+        from PIL import Image
+        with Image.open(out) as im:
+            frame = im.convert('RGB')
+            sheet = Image.new('RGB', (frame.width * SHEET_COLS, frame.height * SHEET_ROWS))
+            for row in range(SHEET_ROWS):
+                for col in range(SHEET_COLS):
+                    sheet.paste(frame, (col * frame.width, row * frame.height))
+        sheet.save(out, 'JPEG', quality=80)
+    except Exception:
+        pass  # leave the single frame; it renders as the first tile, zoomed
+    return out

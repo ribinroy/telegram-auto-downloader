@@ -43,3 +43,41 @@ body {
 .animate-thumb-pop {
   animation: thumb-pop 0.12s ease-out;
 }
+
+/* Video previews in the explorer grid are a 2x2 contact sheet (four frames
+   spread through the runtime) served as one image. Only one tile is shown at a
+   time, and hovering steps through all four - a scrub preview for free, with no
+   JS and no second request.
+
+   The sheet is an <img>, not a background: that keeps loading="lazy" and the
+   onError fallback to an icon. It is sized to twice the cell and cropped with
+   object-fit: cover, so one quadrant is exactly what a single-frame thumbnail
+   used to be - and because a 2x2 sheet has the same aspect ratio as one tile,
+   that holds for portrait clips too. Panning is a transform rather than a
+   clip-path: clipping alone would still need a transform to bring the wanted
+   quadrant into the cell, and a transform composites on the GPU. */
+.thumb-sheet {
+  position: absolute;
+  inset: 0;
+  width: 200%;
+  height: 200%;
+  max-width: none;
+  object-fit: cover;
+}
+
+@keyframes thumb-scrub {
+  0%,  24.99% { transform: translate(0, 0); }
+  25%, 49.99% { transform: translate(-50%, 0); }
+  50%, 74.99% { transform: translate(0, -50%); }
+  75%, 100%   { transform: translate(-50%, -50%); }
+}
+
+@media (hover: hover) {
+  .thumb-cell:hover .thumb-sheet {
+    animation: thumb-scrub 2.8s steps(1, end) infinite;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thumb-cell:hover .thumb-sheet { animation: none; }
+}

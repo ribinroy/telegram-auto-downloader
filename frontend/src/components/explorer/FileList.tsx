@@ -1,11 +1,11 @@
-import { useEffect, useRef, type MouseEvent, type PointerEvent } from 'react';
+import { useEffect, useRef, useState, type MouseEvent, type PointerEvent } from 'react';
 import {
   Folder, Film, Image as ImageIcon, Music, FileArchive, FileText, FileType, File as FileIcon,
   Link2, ArrowUp, ArrowDown, MoreVertical,
 } from 'lucide-react';
 import ReactTimeAgo from 'react-time-ago';
 import { formatBytes } from '../../utils/format';
-import { getFileThumbUrl, type FileEntry, type FileKind } from '../../api/files';
+import { getFileThumbUrl, warmThumbs, type FileEntry, type FileKind } from '../../api/files';
 
 export type SortKey = 'name' | 'size' | 'modified' | 'kind';
 export type ViewMode = 'list' | 'grid';
@@ -241,21 +241,75 @@ function ListView({
   );
 }
 
+/** Only local images and videos get a preview.
+ *
+ *  Never a remote entry: a thumbnail means pulling the file off the VPS, and a
+ *  grid of 100 would pull 100 files across the internet. */
+const thumbable = (entry: FileEntry) =>
+  !entry.is_dir && !entry.remote && (entry.kind === 'image' || entry.kind === 'video');
+
+/** Roughly the first few screens of a 6-column grid. Deliberately not the
+ *  whole listing: the pool is FIFO, so queueing 400 files would put the ones
+ *  the user is actually looking at behind every other file in the folder.
+ *  Past this, loading="lazy" requests previews in scroll order, which is the
+ *  right order anyway - the pool still bounds and de-duplicates them. */
+const WARM_AHEAD = 60;
+
+/** Hand the first screens of the grid to the server's generation pool in one
+ *  call.
+ *
+ *  The <img> tags below request the same files, but the browser runs ~6
+ *  requests per origin at a time, so on a folder of videos the grid would fill
+ *  in six-at-a-time however idle the machine is. One warm-up lets the pool work
+ *  at its own width; the image requests then mostly land on a finished file.
+ *  Failures are ignored - this is an optimisation, and every <img> still works
+ *  on its own. */
+function useWarmThumbs(entries: FileEntry[]) {
+  const paths = entries.filter(thumbable).slice(0, WARM_AHEAD).map(e => e.path);
+  const key = paths.join('\n');
+  useEffect(() => {
+    if (!paths.length) return;
+    warmThumbs(paths).catch(() => {});
+    // Keyed on the paths themselves: re-warming on every render would post the
+    // same list on each keystroke of a filter.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+}
+
+/** One grid cell's preview.
+ *
+ *  An image is a single scaled frame. A video is a 2x2 contact sheet: the cell
+ *  shows the first tile, and CSS scrubs through the other three on hover (see
+ *  .thumb-sheet in index.css). A preview that 404s - no ffmpeg, an unreadable
+ *  container - falls back to the kind icon rather than a broken image. */
+function FilePreview({ entry }: { entry: FileEntry }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return <EntryIcon entry={entry} className="w-10 h-10" />;
+  return (
+    <img
+      src={getFileThumbUrl(entry.path)}
+      alt=""
+      loading="lazy"
+      draggable={false}
+      className={entry.kind === 'video' ? 'thumb-sheet' : 'w-full h-full object-cover'}
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
 function GridView({
   entries, selected, renaming, onActivate, onLongPress, onContext, onRename, onRenameCancel,
 }: FileListProps) {
   const press = useRowPress(onActivate, onLongPress);
+  useWarmThumbs(entries);
   return (
     <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
       {entries.map(entry => {
         const isSelected = selected.has(entry.path);
-        // Thumbnails are only rendered in grid view: generating one for a
-        // video means an ffmpeg frame grab, and a list of 500 files should
-        // not kick off 500 of those.
-        // Never for a remote entry: a thumbnail means pulling the file off the
-        // VPS, and a grid of 100 would pull 100 files across the internet.
-        const thumbable = !entry.is_dir && !entry.remote
-          && (entry.kind === 'image' || entry.kind === 'video');
+        // Previews are only rendered in grid view: generating one for a video
+        // means an ffmpeg run, and a list of 500 files should not kick off 500
+        // of those.
+        const preview = thumbable(entry);
         return (
           <div
             key={entry.path}
@@ -272,15 +326,9 @@ function GridView({
                 : 'border-slate-700/50 bg-slate-800/30 hover:bg-slate-800/60'
             }`}
           >
-            <div className="aspect-square rounded-lg bg-slate-900/60 flex items-center justify-center overflow-hidden mb-2">
-              {thumbable ? (
-                <img
-                  src={getFileThumbUrl(entry.path)}
-                  alt=""
-                  loading="lazy"
-                  className="w-full h-full object-cover"
-                  onError={e => { e.currentTarget.style.display = 'none'; }}
-                />
+            <div className="thumb-cell relative aspect-square rounded-lg bg-slate-900/60 flex items-center justify-center overflow-hidden mb-2">
+              {preview ? (
+                <FilePreview entry={entry} />
               ) : (
                 <EntryIcon entry={entry} className="w-10 h-10" />
               )}
