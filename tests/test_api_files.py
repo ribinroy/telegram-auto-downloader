@@ -215,3 +215,38 @@ def test_size_and_text_preview(client, db, auth, tmp_tree):
     text = client.post('/api/files/text', headers=auth,
                        json={'path': str(tmp_tree / 'notes.txt')})
     assert text.get_json()['text'].startswith('hello')
+
+
+def test_warming_previews_queues_local_files_and_skips_the_vps(
+        client, db, auth, tmp_tree, monkeypatch):
+    """The grid hands over a whole page at once; remote entries are dropped.
+
+    A vps: preview would mean pulling the file across the internet to make a
+    JPEG, so it is skipped here rather than refused - the caller is sending
+    whatever it just rendered, which can legitimately mix the two.
+    """
+    from backend import files as fs
+    warmed = []
+    monkeypatch.setattr(fs, 'warm_thumbs', lambda paths: warmed.extend(paths) or {'queued': len(paths)})
+
+    res = client.post('/api/files/thumb/warm', headers=auth, json={'paths': [
+        str(tmp_tree / 'Movies' / 'a.mkv'), 'vps:/home6/user/b.mkv',
+    ]})
+    assert res.status_code == 200
+    assert warmed == [str(tmp_tree / 'Movies' / 'a.mkv')]
+
+
+def test_warming_previews_rejects_a_non_list(client, db, auth):
+    res = client.post('/api/files/thumb/warm', headers=auth, json={'paths': 'everything'})
+    assert res.status_code == 400
+
+
+def test_thumb_status_skips_remote_paths(client, auth, monkeypatch):
+    from backend import files as fs
+    seen = []
+    monkeypatch.setattr(fs, 'thumb_status', lambda paths: seen.extend(paths) or {})
+    res = client.post('/api/files/thumb/status', headers=auth,
+                      json={'paths': ['/a.mp4', 'vps:/b.mp4']})
+    assert res.status_code == 200 and seen == ['/a.mp4']
+    assert client.post('/api/files/thumb/status', headers=auth,
+                       json={'paths': 'x'}).status_code == 400

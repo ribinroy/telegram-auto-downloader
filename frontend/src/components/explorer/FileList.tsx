@@ -1,11 +1,12 @@
-import { useEffect, useRef, type MouseEvent, type PointerEvent } from 'react';
+import { useEffect, useRef, useState, type MouseEvent, type PointerEvent } from 'react';
 import {
   Folder, Film, Image as ImageIcon, Music, FileArchive, FileText, FileType, File as FileIcon,
   Link2, ArrowUp, ArrowDown, MoreVertical,
 } from 'lucide-react';
 import ReactTimeAgo from 'react-time-ago';
 import { formatBytes } from '../../utils/format';
-import { getFileThumbUrl, type FileEntry, type FileKind } from '../../api/files';
+import { getFileThumbUrl, thumbStatus, warmThumbs, type FileEntry, type FileKind, type ThumbState } from '../../api/files';
+import { thumbsToReload } from './thumbReload';
 
 export type SortKey = 'name' | 'size' | 'modified' | 'kind';
 export type ViewMode = 'list' | 'grid';
@@ -241,21 +242,143 @@ function ListView({
   );
 }
 
+/** Only local images and videos get a preview.
+ *
+ *  Never a remote entry: a thumbnail means pulling the file off the VPS, and a
+ *  grid of 100 would pull 100 files across the internet. */
+const thumbable = (entry: FileEntry) =>
+  !entry.is_dir && !entry.remote && (entry.kind === 'image' || entry.kind === 'video');
+
+/** Roughly the first few screens of a 6-column grid. Deliberately not the
+ *  whole listing: the pool is FIFO, so queueing 400 files would put the ones
+ *  the user is actually looking at behind every other file in the folder.
+ *  Past this, loading="lazy" requests previews in scroll order, which is the
+ *  right order anyway - the pool still bounds and de-duplicates them. */
+const WARM_AHEAD = 60;
+
+/** Hand the first screens of the grid to the server's generation pool in one
+ *  call.
+ *
+ *  The <img> tags below request the same files, but the browser runs ~6
+ *  requests per origin at a time, so on a folder of videos the grid would fill
+ *  in six-at-a-time however idle the machine is. One warm-up lets the pool work
+ *  at its own width; the image requests then mostly land on a finished file.
+ *  Failures are ignored - this is an optimisation, and every <img> still works
+ *  on its own. */
+function useWarmThumbs(entries: FileEntry[]) {
+  const paths = entries.filter(thumbable).slice(0, WARM_AHEAD).map(e => e.path);
+  const key = paths.join('\n');
+  useEffect(() => {
+    if (!paths.length) return;
+    warmThumbs(paths).catch(() => {});
+    // Keyed on the paths themselves: re-warming on every render would post the
+    // same list on each keystroke of a filter.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+}
+
+/** How often an open grid asks where its previews stand. */
+const STATUS_POLL_MS = 5000;
+
+/** States after which a preview can still change, so the poll keeps going. */
+const UNSETTLED: ReadonlySet<ThumbState> = new Set(['quick', 'pending', 'waiting']);
+
+/** Poll the server for the grid's previews while the folder is open.
+ *
+ *  Videos first arrive as a single frame; the server builds the full
+ *  four-frame sheet once it is idle, for folders that are still being
+ *  polled. So this runs only while the tab is visible - a hidden tab is not
+ *  someone looking at the folder - and stops once nothing can change. */
+function useThumbRevisions(entries: FileEntry[]) {
+  const paths = entries.filter(thumbable).slice(0, 300).map(e => e.path);
+  const key = paths.join('\n');
+  const [revs, setRevs] = useState<Record<string, number>>({});
+  useEffect(() => {
+    if (!paths.length) return;
+    let prev: Record<string, ThumbState> | null = null;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const tick = async () => {
+      if (stopped) return;
+      if (document.visibilityState === 'visible') {
+        try {
+          const { states } = await thumbStatus(paths);
+          if (stopped) return;
+          const bump = thumbsToReload(prev, states);
+          if (bump.length) {
+            setRevs(r => {
+              const out = { ...r };
+              for (const p of bump) out[p] = (out[p] ?? 0) + 1;
+              return out;
+            });
+          }
+          prev = states;
+          if (!Object.values(states).some(st => UNSETTLED.has(st))) return;
+        } catch {
+          // A failed poll just waits for the next one.
+        }
+      }
+      timer = setTimeout(tick, STATUS_POLL_MS);
+    };
+    timer = setTimeout(tick, STATUS_POLL_MS);
+    return () => { stopped = true; clearTimeout(timer); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+  return revs;
+}
+
+/** Tries after the first before a preview gives up: 3+6+12+20+20+20s covers
+ *  a queue of 8K sheets on a busy box. */
+const THUMB_RETRIES = 6;
+
+/** One grid cell's preview.
+ *
+ *  An image is a single scaled frame. A video is a 2x2 contact sheet: the cell
+ *  shows the first tile, and CSS scrubs through the other three on hover (see
+ *  .thumb-sheet in index.css). A preview that 404s - no ffmpeg, an unreadable
+ *  container - falls back to the kind icon rather than a broken image. */
+function FilePreview({ entry, rev = 0 }: { entry: FileEntry; rev?: number }) {
+  // The server answers 503 rather than hold a connection while ffmpeg runs
+  // (holding six of them starved every other request in the tab), and an
+  // <img> can't read the status - so any error is retried a few times with
+  // backoff before settling on the icon. A real failure is remembered
+  // server-side and answers instantly, so the retries cost nothing.
+  const [attempt, setAttempt] = useState(0);
+  const [failed, setFailed] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  if (failed) return <EntryIcon entry={entry} className="w-10 h-10" />;
+  const url = getFileThumbUrl(entry.path);
+  const bust = [rev && `v=${rev}`, attempt && `retry=${attempt}`].filter(Boolean).join('&');
+  return (
+    <img
+      src={bust ? `${url}&${bust}` : url}
+      alt=""
+      loading="lazy"
+      draggable={false}
+      className={entry.kind === 'video' ? 'thumb-sheet' : 'w-full h-full object-cover'}
+      onError={() => {
+        if (attempt >= THUMB_RETRIES) return setFailed(true);
+        timer.current = setTimeout(() => setAttempt(n => n + 1), Math.min(3000 * 2 ** attempt, 20000));
+      }}
+    />
+  );
+}
+
 function GridView({
   entries, selected, renaming, onActivate, onLongPress, onContext, onRename, onRenameCancel,
 }: FileListProps) {
   const press = useRowPress(onActivate, onLongPress);
+  useWarmThumbs(entries);
+  const revs = useThumbRevisions(entries);
   return (
     <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
       {entries.map(entry => {
         const isSelected = selected.has(entry.path);
-        // Thumbnails are only rendered in grid view: generating one for a
-        // video means an ffmpeg frame grab, and a list of 500 files should
-        // not kick off 500 of those.
-        // Never for a remote entry: a thumbnail means pulling the file off the
-        // VPS, and a grid of 100 would pull 100 files across the internet.
-        const thumbable = !entry.is_dir && !entry.remote
-          && (entry.kind === 'image' || entry.kind === 'video');
+        // Previews are only rendered in grid view: generating one for a video
+        // means an ffmpeg run, and a list of 500 files should not kick off 500
+        // of those.
+        const preview = thumbable(entry);
         return (
           <div
             key={entry.path}
@@ -272,15 +395,12 @@ function GridView({
                 : 'border-slate-700/50 bg-slate-800/30 hover:bg-slate-800/60'
             }`}
           >
-            <div className="aspect-square rounded-lg bg-slate-900/60 flex items-center justify-center overflow-hidden mb-2">
-              {thumbable ? (
-                <img
-                  src={getFileThumbUrl(entry.path)}
-                  alt=""
-                  loading="lazy"
-                  className="w-full h-full object-cover"
-                  onError={e => { e.currentTarget.style.display = 'none'; }}
-                />
+            <div className="thumb-cell relative aspect-square rounded-lg bg-slate-900/60 flex items-center justify-center overflow-hidden mb-2">
+              {preview ? (
+                // Keyed on the revision: a new one (the sheet replaced the first
+                // pass, or a preview the cell gave up on now exists) remounts
+                // it with a fresh retry budget.
+                <FilePreview key={revs[entry.path] ?? 0} entry={entry} rev={revs[entry.path]} />
               ) : (
                 <EntryIcon entry={entry} className="w-10 h-10" />
               )}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { downleeState, isPendingPull } from './TorrentStatusPanel';
+import { downleeState, isPendingPull, isAlreadyDownloaded } from './TorrentStatusPanel';
 import type { TorrentStatus } from '../api';
 import type { Download } from '../types';
 
@@ -77,5 +77,43 @@ describe('isPendingPull - the "To be downloaded" filter', () => {
 
   it('excludes one whose pull was only just accepted', () => {
     expect(pending(torrent(), [], new Set(['abc']))).toBe(false);
+  });
+});
+
+describe('isAlreadyDownloaded - the "Already downloaded" filter', () => {
+  const done = (t: TorrentStatus, live: Download[] = [], started = NONE) =>
+    isAlreadyDownloaded(t, downleeState(t, live, started));
+
+  it('includes a torrent finished on the VPS and pulled to DownLee', () => {
+    const t = torrent({ downlee: { id: 1, message_id: 'm', status: 'done', progress: 100 } });
+    expect(done(t)).toBe(true);
+  });
+
+  it('excludes one never pulled', () => {
+    expect(done(torrent())).toBe(false);
+  });
+
+  it('excludes one still being pulled', () => {
+    const t = torrent({ downlee: { id: 1, message_id: 'm', status: 'downloading', progress: 30 } });
+    expect(done(t)).toBe(false);
+  });
+
+  it('excludes one whose pull failed', () => {
+    const t = torrent({ downlee: { id: 1, message_id: 'm', status: 'failed', progress: 12 } });
+    expect(done(t)).toBe(false);
+  });
+
+  it('follows the live downloads list when the transfer just finished', () => {
+    const t = torrent({ downlee: { id: 1, message_id: 'm', status: 'downloading', progress: 90 } });
+    const live = [{ message_id: 'm', status: 'done', progress: 100 } as unknown as Download];
+    expect(done(t, live)).toBe(true);
+  });
+
+  it('is the exact complement of isPendingPull on a completed torrent', () => {
+    // Every finished torrent is either still to pull or already here - unless a
+    // pull is in flight, where both are false.
+    const t = torrent({ downlee: { id: 1, message_id: 'm', status: 'done', progress: 100 } });
+    expect(done(t)).toBe(true);
+    expect(isPendingPull(t, downleeState(t, [], NONE))).toBe(false);
   });
 });

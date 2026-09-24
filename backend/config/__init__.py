@@ -135,6 +135,12 @@ TRUSTED_PROXY_COUNT = int(os.getenv('TRUSTED_PROXY_COUNT', '1'))
 # is worth doing on an instance reachable from outside the LAN.
 EXPLORER_READONLY = _env_bool('EXPLORER_READONLY', False)
 
+# Explorer thumbnails are generated on a bounded worker pool: a video preview
+# costs an ffmpeg run, and a grid of 100 clips must not start 100 of them.
+# ffmpeg already threads its own decode, so more workers than cores makes the
+# whole batch slower, not faster. Default: one below the core count.
+THUMB_WORKERS = max(1, int(os.getenv('THUMB_WORKERS', '0')) or min(4, max(1, (os.cpu_count() or 2) - 1)))
+
 # --- CORS -----------------------------------------------------------------
 # In production the React app is served by this same Flask process, so no
 # cross-origin access is needed at all. The defaults only allow the Vite dev

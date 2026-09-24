@@ -292,7 +292,9 @@ Live filesystem access - every call reads the disk, nothing is indexed or cached
 - `POST /api/files/list` - `{path?, show_hidden?}` -> entries + `writable`, `usage`, `mount`, `trash`
 - `POST /api/files/mkdir` / `rename` / `delete` (`{paths, permanent?}`) / `transfer` (`{paths, dest, move}`) / `upload` (multipart)
 - `POST /api/files/search` (recursive, capped by results **and** a wall-clock deadline), `POST /api/files/size` (on-demand `du`), `POST /api/files/text` (preview head)
-- `GET /api/files/stream|download|thumb?path=` - `@media_token_required`, range-streamed; `thumb` is a cached JPEG (Pillow for images, an ffmpeg frame grab for video)
+- `POST /api/files/thumb/warm` - `{paths}`; queue a page of previews on the generation pool and return at once
+- `POST /api/files/thumb/status` - `{paths}` -> `{states}` (`ready`/`quick`/`pending`/`waiting`/`none`); the open grid's poll, and the "folder is still open" signal for the idle sheet upgrade
+- `GET /api/files/stream|download|thumb?path=` - `@media_token_required`, range-streamed; `thumb` is a cached JPEG (Pillow for images, a 2x2 ffmpeg contact sheet for video)
 
 ### Video Streaming
 - `GET /api/video/check/<id>` - What is on disk for a download: `{exists, kind: 'video'|'dir'|'file', path, parent, size}`. The downloads list's view button uses `kind` to decide - play a video inline, or send a folder pull / non-video file to the file explorer (`/files?path=...`, plus `&select=<path>` for a single file, which `ExplorerPage` highlights and scrolls to, then drops). Keeps `file_deleted` honest for folders too, which the old video-only check always marked as missing.
@@ -340,6 +342,7 @@ All config via `.env` file at project root (loaded by python-dotenv):
 | `NET_PROBE_INTERVAL` | `20` | Seconds between connectivity probes |
 | `NET_STALL_SECONDS` | `600` | Restart a download frozen this long; `0` disables |
 | `NET_PROBE_HOSTS` | `1.1.1.1:53,8.8.8.8:53` | `host:port` pairs the probe TCP-connects to |
+| `THUMB_WORKERS` | cores - 1 (max 4) | Explorer thumbnail generation pool width |
 | `TORRENT_WATCH` | `1` | Run the torrent watcher thread (stop seeding on completion) |
 | `TORRENT_WATCH_INTERVAL` | `30` | Seconds between torrent-client polls |
 
@@ -492,15 +495,71 @@ a pulled USB drive disappears from the sidebar.
   deadline as well as a result cap, because "search from the root of a 20 TB array"
   is a reasonable thing to ask a web request to do exactly once.
 - **Thumbnails** (`/api/files/thumb`) are cached under `SCREENSHOTS_DIR/.explorer`,
-  keyed by `(path, mtime, size)` so replacing a file in place invalidates its own
-  thumbnail. That name is a one-way hash, so each `<sha1>.jpg` gets a `<sha1>.json`
-  sidecar naming its source - without it nothing could ever tell a live entry from
-  a dead one. `prune_thumb_cache()`, run by `POST /api/jobs/sync-thumbnails`
-  (`explorer_pruned`/`explorer_kept`/`explorer_freed` in its stats), drops every
-  thumbnail whose source is gone, moved or changed, plus any entry with no sidecar
-  and any sidecar with no thumbnail. Images go through Pillow; videos get an ffmpeg frame grab (~1s each),
-  which is why they are only requested in **grid** view - a 500-file list would
-  otherwise start 500 ffmpeg processes.
+  keyed by `(THUMB_VERSION, path, mtime, size)` so replacing a file in place
+  invalidates its own thumbnail and a format change orphans every old entry at
+  once. That name is a one-way hash, so each `<sha1>.jpg` gets a `<sha1>.json`
+  sidecar naming its source, version and layout - without it nothing could ever
+  tell a live entry from a dead one. `prune_thumb_cache()`, run by
+  `POST /api/jobs/sync-thumbnails` (`explorer_pruned`/`explorer_kept`/
+  `explorer_freed` in its stats), drops every thumbnail whose source is gone,
+  moved or changed or whose version is stale, plus any entry with no sidecar,
+  any sidecar with no thumbnail and any `.tmp` a killed ffmpeg left behind.
+  They are only requested in **grid** view - a 500-file list would otherwise
+  start 500 ffmpeg runs.
+  - **An image is one scaled frame (Pillow); a video is a 2x2 contact sheet.**
+    A fixed "5 seconds in" lands on a fade-in, a studio card or plain black on
+    most films; four frames at 20/40/60/80% of the runtime say what a clip
+    actually is. The four frames are tiled into one JPEG, so it is one cache
+    entry - and one HTTP request instead of four (without Pillow, one ffmpeg
+    `xstack`s four inputs instead). No duration (a stream, a broken
+    container) falls back to a single frame repeated across the sheet, so a
+    video preview is always the same shape and the client needs no negotiation.
+  - **Two passes for video: one frame first, the sheet when idle.** An 8K
+    10-bit HEVC keyframe costs ~2s of CPU on this box however many threads it
+    gets, so the first preview is a single keyframe (at 40%) tiled into the
+    sheet's shape (sidecar `stage: 'quick'`) and a folder fills in ~4x sooner.
+    A `thumb-upgrade` daemon thread replaces quick entries in place with the
+    four-frame sheet, one at a time, only when the pool has nothing in flight,
+    the CPU was >50% idle over the last 3s tick (iowait counts as busy), and the
+    folder was polled via `/thumb/status` in the last 30s - the grid polls every
+    5s while the tab is visible, so leaving the folder stops its upgrades. The
+    grid bumps a per-path revision when a state turns `ready`, reloading that
+    cell. A sheet that fails leaves the quick frame and marks it final.
+  - **Every grab decodes exactly one keyframe on one thread**
+    (`-threads 1 -skip_frame nokey -noaccurate_seek`). Accurate seeking used
+    to decode from the previous keyframe to the mark - on VR files with 10s
+    GOPs, up to 600 8K frames per point - and never finished inside the 60s
+    timeout. Sheet frames are grabbed by four ffmpegs in parallel and tiled
+    with Pillow (7.4s vs 14.7s for one four-input process). ffmpeg runs at
+    `nice 19` and `ionice -c2 -n7` (not the idle class, which made a cold
+    frame 6.8s instead of 3.0s).
+  - **A thumb request never holds a connection for long.** `thumbnail(wait=4)`
+    returns `PENDING` and the route answers 503 + `Retry-After`; the `<img>`
+    retries with backoff. Holding the browser's ~6 per-origin slots on minutes
+    of ffmpeg starved every other request in the tab - video playback and
+    `/api/files/list` sat pending. Failures are remembered for 10 minutes, and
+    files modified in the last 60s (still downloading) are skipped, not failed.
+  - **Generated on a bounded pool** (`THUMB_WORKERS`, default cores-1) with an
+    in-flight map keyed by cache name, so two viewers opening one folder do the
+    work once instead of running two ffmpegs onto the same output path. Output
+    goes to a `.tmp` and is `os.replace`d into place: a reader sees a whole
+    thumbnail or none, never the half that a concurrent request used to get.
+  - **`POST /api/files/thumb/warm`** (`{paths}`, capped at 300, `vps:` entries
+    skipped) is what makes the pool pay off. The browser runs ~6 requests per
+    origin, so a grid of 100 videos would trickle in six at a time however idle
+    the machine is; the grid hands its first ~60 entries over in one call and
+    the `<img>` requests that follow mostly hit a finished file. Only the first
+    screens, because the pool is FIFO - warming a whole 400-file folder would
+    queue everything the user is looking at behind everything they are not,
+    and past that `loading="lazy"` already requests in scroll order.
+  - Frontend: `.thumb-sheet` in `index.css`. The sheet is an `<img>` (so
+    `loading="lazy"` and the onError fallback to a kind icon still work) sized
+    to twice the cell and cropped with `object-fit: cover`, panned by a
+    `transform` - a 2x2 sheet has the same aspect ratio as one tile, so a
+    quadrant is exactly the centre crop a single-frame thumbnail used to be,
+    portrait clips included. Hover runs a `steps(1)` keyframe animation through
+    all four: a scrub preview with no JS and no second request, off under
+    `prefers-reduced-motion` and on coarse pointers.
 - **Streaming/download by path** reuse `helpers.range_response()` (shared with the
   per-download video route) and sit behind `@media_token_required`, so no API token
   ever lands in a URL.
