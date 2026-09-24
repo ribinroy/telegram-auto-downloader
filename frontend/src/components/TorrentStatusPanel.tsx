@@ -13,9 +13,42 @@ import { useNavigate } from 'react-router-dom';
 import { useTorrentList, useTorrentAction } from '../hooks/useTorrents';
 import { useDownloadVpsFile } from '../hooks/useVps';
 import { useLayoutContext } from './Layout';
+import type { Download } from '../types';
 
-// Reserved filter value: not a status the clients report, so it can't collide.
+// Reserved filter values: not statuses the clients report, so they can't collide.
 const FORCED_FILTER = '@forced';
+const PENDING_FILTER = '@todo';
+
+/** What has become of this torrent on the DownLee side.
+ *
+ *  The server's `downlee` match survives a reload; the shared downloads list
+ *  (fed by the WebSocket) overrides it while a transfer is actually running.
+ *  Computed in one place because both the row and the "To download" filter
+ *  need it - two copies of this would drift the first time either changed.
+ */
+export function downleeState(t: TorrentStatus, downloads: Download[], started: Set<string>) {
+  const transfer = t.downlee;
+  const live = transfer?.message_id
+    ? downloads.find(d => d.message_id === transfer.message_id)
+    : undefined;
+  const status = live?.status ?? transfer?.status ?? null;
+  return {
+    transfer,
+    status,
+    progress: live?.progress ?? transfer?.progress ?? 0,
+    done: status === 'done',
+    // `started` covers the window between "transfer accepted" and the list
+    // refetch that first reports it.
+    running: status === 'downloading' || (!status && started.has(t.hash)),
+    retryable: (status === 'failed' || status === 'stopped') && !!transfer,
+  };
+}
+
+/** Finished on the VPS, not yet on the home server - i.e. still to be pulled.
+ *  A failed or stopped transfer counts: it is still not here. */
+export function isPendingPull(t: TorrentStatus, dl: ReturnType<typeof downleeState>) {
+  return t.percent_done >= 100 && !dl.done && !dl.running;
+}
 
 const STATUS_STYLES: Record<TorrentStatus['status'], { label: string; cls: string }> = {
   downloading: { label: 'Downloading', cls: 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30' },
@@ -141,6 +174,8 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
   // rides in the same dropdown under a reserved value, and only when there is
   // something to find. Transmission can't report it, so its list never offers it.
   const forcedCount = torrents.filter(t => t.force_start === true).length;
+  const pendingCount = torrents.filter(
+    t => isPendingPull(t, downleeState(t, downloads, dlStarted))).length;
   const comparators: Record<typeof sortBy, (a: TorrentStatus, b: TorrentStatus) => number> = {
     created: (a, b) => b.added_date - a.added_date,
     name: (a, b) => (a.name || '').localeCompare(b.name || ''),
@@ -151,6 +186,9 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
     .filter(t => {
       if (!statusFilter) return true;
       if (statusFilter === FORCED_FILTER) return t.force_start === true;
+      if (statusFilter === PENDING_FILTER) {
+        return isPendingPull(t, downleeState(t, downloads, dlStarted));
+      }
       return t.status === statusFilter;
     })
     .sort(comparators[sortBy]);
@@ -219,6 +257,9 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
           ))}
           {forcedCount > 0 && (
             <option value={FORCED_FILTER}>Forced ({forcedCount})</option>
+          )}
+          {pendingCount > 0 && (
+            <option value={PENDING_FILTER}>To be downloaded ({pendingCount})</option>
           )}
         </select>
 
@@ -322,20 +363,9 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
         const isBusy = busy.has(t.hash);
         const done = t.percent_done >= 100;
         const dlInFlight = dlBusy.has(t.hash);
-        // The transfer this torrent was already pulled through, if any. The
-        // server's match survives reloads; the shared downloads list (fed by the
-        // WebSocket) overrides it while a transfer is actually running.
-        const transfer = t.downlee;
-        const live = transfer?.message_id
-          ? downloads.find(d => d.message_id === transfer.message_id)
-          : undefined;
-        const dlStatus = live?.status ?? transfer?.status ?? null;
-        const dlProgress = live?.progress ?? transfer?.progress ?? 0;
-        const dlDone = dlStatus === 'done';
-        // dlStarted covers the window between "transfer accepted" and the list
-        // refetch that first reports it.
-        const dlRunning = dlStatus === 'downloading' || (!dlStatus && dlStarted.has(t.hash));
-        const dlRetryable = (dlStatus === 'failed' || dlStatus === 'stopped') && !!transfer;
+        const dl = downleeState(t, downloads, dlStarted);
+        const { transfer, status: dlStatus, progress: dlProgress,
+                done: dlDone, running: dlRunning, retryable: dlRetryable } = dl;
         return (
           <div
             key={t.hash}

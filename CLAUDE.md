@@ -228,6 +228,7 @@ Access/refresh token pair. Access tokens are short (`ACCESS_TOKEN_MINUTES`, defa
 - `POST /api/torrent/action` - `{client, action:start|force-start|stop|remove|verify, hashes:[str], delete_data?}` (legacy `ids` still accepted as hashes). **`force-start`** jumps the client's own download queue - Transmission `torrent-start-now` instead of `torrent-start`, qBittorrent `setForceStart` (a per-torrent flag, not a verb, so it is set and then the torrent is started). A plain start only queues a torrent, which on a busy seedbox looks like nothing happened. The panel offers it per row (⚡, hidden once a torrent is complete - there it would only force seeding) and for a bulk selection.
   **Order matters on qBittorrent**: a plain start *clears* the force flag, so the backend starts first (covering a stopped torrent) and forces after - doing it the other way round is a silent no-op. That same fact makes the button a toggle: a forced torrent's ⚡ sends a plain `start` to un-force it.
   The normalized shape carries `force_start` - qBittorrent reports it per torrent (plus the `forcedDL`/`forcedUP` states as a second witness), while Transmission has **no persistent forced flag** (`torrent-start-now` jumps the queue once and nothing records it), so it is `None` there. The UI only lights up on `=== true`: null is "can't tell", not "not forced". A forced row also gets a "Forced" badge, since the status label still just reads "downloading", and the panel's status dropdown carries a **`Forced (n)`** entry (reserved value `@forced`, so it can't collide with a real status) to list just those - shown only when there are any, which means never on Transmission.
+- **`To be downloaded (n)`** (reserved value `@todo`) is the other pseudo-status: finished on the VPS but not yet pulled to DownLee - the queue of things still to fetch. A failed or stopped transfer counts, because the file still is not here. `downleeState()` derives the transfer state (server's `downlee` match, overridden by the WebSocket-fed downloads list while a pull runs) and `isPendingPull()` the predicate; both the filter and the row read them, so the count and what the row shows cannot drift.
 - `POST /api/settings/torrent/stop-on-complete` - `{client, enabled}`; its own route so the toggle doesn't round-trip (and risk clobbering) the whole client config
 - Temp folder: `apply_torrent_session()` pushes the incomplete/temp dir (Transmission `session-set incomplete-dir`; qBittorrent `setPreferences temp_path`), applied on config save + re-applied before each add. The client downloads into the temp dir, then moves to the torrent's download dir on completion.
 - Frontend: Settings → VPS shows a `TorrentClientCard` per client; the VPS page has per-client tabs (Files · Transmission · qBittorrent), each its own `TorrentStatusPanel` (hash-based multi-select). Pasted magnets pick the client in `AddUrlModal`.
@@ -606,6 +607,36 @@ calls `logsafe.install(LOG_FILE)`.
 - **JWT auth**: All API routes use `@token_required` (except `/metrics`); media routes use `@media_token_required`, which also accepts a `?token=` media token
 - **CORS**: closed by default to `CORS_ORIGINS` (Vite dev ports); Socket.IO uses a callable origin check so same-origin handshakes always pass (`_socketio_origin_allowed`)
 - **Frontend serves from Flask**: Built `frontend/dist/` served as static files
+
+## Tests
+
+```bash
+./venv/bin/python -m pytest      # backend  (tests/)
+cd frontend && npm test          # frontend (src/**/*.test.ts)
+```
+
+- **Nothing in the suite touches the real deployment.** `tests/conftest.py`
+  redirects `DOWNLOAD_DIR`, `SCREENSHOTS_DIR` and `DATABASE_URL` to a temp
+  directory *before* `backend.config` is imported - that module creates its
+  directories at import time, so the import order in conftest is load-bearing.
+- **Nothing touches the network.** A seedbox, a Telegram account and two torrent
+  clients are not fixtures. `FakeSFTP` (conftest) drives the remote-drive tests
+  from a dict tree, including a `restricted` directory that resolves but refuses
+  to be listed - which is exactly how the shared `/homeN` above a seedbox account
+  behaves, and what the 403-vs-404 test depends on.
+- **Route tests run the real `WebApp`** against SQLite (`app`/`client`/`auth`
+  fixtures), with the downloaders left unwired on purpose: a route that needs
+  one should say so with a clear error rather than reach a live Telegram client
+  or a seedbox from a test. Two fixtures exist only for isolation - bcrypt's
+  cost factor is dropped to 4 (cost 12 turned a 1s run into a minute, same code
+  path, different work factor), and the process-global login rate limiter is
+  cleared between tests, since every test logs in from 127.0.0.1 as admin and
+  one lockout test would otherwise lock out everything after it.
+- Frontend logic that lived inside JSX was extracted so it can be tested
+  directly: `buildCrumbs`/`splitPrefix` (ExplorerToolbar), `downleeState`/
+  `isPendingPull` (TorrentStatusPanel), `isTorrentFile`, `magnetName`.
+- Vitest config is separate from `vite.config.ts` so a build never loads the
+  test setup (and the service-worker plugin never runs in a test).
 
 ## Development Commands
 

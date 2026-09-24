@@ -14,8 +14,36 @@ const SORT_LABELS: Record<SortKey, string> = {
 
 /** Clickable path segments, with a click-to-type escape hatch for deep paths. */
 /** Split a path into its scheme prefix (`vps:`, or none) and the bare path. */
-function splitPrefix(p: string): [string, string] {
+export function splitPrefix(p: string): [string, string] {
   return p.startsWith('vps:') ? ['vps:', p.slice(4)] : ['', p];
+}
+
+/**
+ * Breadcrumb segments for a path, scheme intact.
+ *
+ * `path.split('/')` on `vps:/home6/x` yields targets like `/vps:` and a root
+ * button pointing at the *local* filesystem, so the prefix is split off and put
+ * back on every target. Crumbs stop at `root` (the VPS login home) because above
+ * it is the provider's shared /homeN, which the account cannot list; a path
+ * somehow outside the root still gets full crumbs rather than none.
+ */
+export function buildCrumbs(path: string, root?: string) {
+  const [prefix, bare] = splitPrefix(path);
+  const rootPath = root ?? (prefix ? prefix : '/');
+  const [, bareRoot] = splitPrefix(rootPath);
+  const rootParts = bareRoot.split('/').filter(Boolean);
+  const allParts = bare.split('/').filter(Boolean);
+  const withinRoot = rootParts.every((seg, i) => allParts[i] === seg);
+  const baseParts = withinRoot ? rootParts : [];
+  const parts = withinRoot ? allParts.slice(rootParts.length) : allParts;
+  return {
+    rootLabel: prefix && withinRoot ? (rootParts[rootParts.length - 1] ?? 'vps') : '/',
+    rootTarget: withinRoot ? rootPath : prefix + '/',
+    crumbs: parts.map((name, i) => ({
+      name,
+      target: prefix + '/' + [...baseParts, ...parts.slice(0, i + 1)].join('/'),
+    })),
+  };
 }
 
 function Breadcrumbs({
@@ -45,33 +73,18 @@ function Breadcrumbs({
     );
   }
 
-  // A remote path carries a `vps:` prefix that must survive every crumb: split
-  // it off, and put it back on each target. Without this the crumbs point at
-  // the local filesystem, which is either a 404 or - worse - the wrong disk.
-  const [prefix, bare] = splitPrefix(path);
-  const rootPath = root ?? (prefix ? prefix : '/');
-  const [, bareRoot] = splitPrefix(rootPath);
-  const rootParts = bareRoot.split('/').filter(Boolean);
-  const allParts = bare.split('/').filter(Boolean);
-  // Crumbs stop at the tree's root (the VPS login home): above it is the
-  // provider's shared /homeN, which this account cannot list. A path somehow
-  // outside the root still gets full crumbs rather than none.
-  const withinRoot = rootParts.every((seg, i) => allParts[i] === seg);
-  const baseParts = withinRoot ? rootParts : [];
-  const parts = withinRoot ? allParts.slice(rootParts.length) : allParts;
-  const rootLabel = prefix && withinRoot ? (rootParts[rootParts.length - 1] ?? 'vps') : '/';
+  const { rootLabel, rootTarget, crumbs } = buildCrumbs(path, root);
 
   return (
     <div className="flex-1 min-w-0 flex items-center gap-0.5 overflow-x-auto">
       <button
-        onClick={() => onNavigate(withinRoot ? rootPath : prefix + '/')}
+        onClick={() => onNavigate(rootTarget)}
         className="px-1.5 py-1 text-sm text-slate-400 hover:text-white transition-colors shrink-0"
       >
         {rootLabel}
       </button>
-      {parts.map((part, i) => {
-        const target = prefix + '/' + [...baseParts, ...parts.slice(0, i + 1)].join('/');
-        const last = i === parts.length - 1;
+      {crumbs.map(({ name: part, target }, i) => {
+        const last = i === crumbs.length - 1;
         return (
           <div key={target} className="flex items-center shrink-0">
             {i > 0 && <ChevronRight className="w-3.5 h-3.5 text-slate-600" />}

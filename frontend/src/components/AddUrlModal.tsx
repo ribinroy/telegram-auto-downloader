@@ -10,10 +10,10 @@ import { useMappings } from '../hooks/useSettings';
 import { useCheckUrl } from '../hooks/useMisc';
 import { useDownloadUrl } from '../hooks/useDownloads';
 
-const isMagnetLink = (s: string) => s.trim().toLowerCase().startsWith('magnet:');
+export const isMagnetLink = (s: string) => s.trim().toLowerCase().startsWith('magnet:');
 
 // Display name from the magnet's dn= param, if present
-function magnetName(magnet: string): string | null {
+export function magnetName(magnet: string): string | null {
   const m = magnet.match(/[?&]dn=([^&]+)/i);
   if (!m) return null;
   try { return decodeURIComponent(m[1].replace(/\+/g, ' ')); } catch { return m[1]; }
