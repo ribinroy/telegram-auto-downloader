@@ -293,6 +293,7 @@ Live filesystem access - every call reads the disk, nothing is indexed or cached
 - `POST /api/files/mkdir` / `rename` / `delete` (`{paths, permanent?}`) / `transfer` (`{paths, dest, move}`) / `upload` (multipart)
 - `POST /api/files/search` (recursive, capped by results **and** a wall-clock deadline), `POST /api/files/size` (on-demand `du`), `POST /api/files/text` (preview head)
 - `POST /api/files/thumb/warm` - `{paths}`; queue a page of previews on the generation pool and return at once
+- `POST /api/files/thumb/status` - `{paths}` -> `{states}` (`ready`/`quick`/`pending`/`waiting`/`none`); the open grid's poll, and the "folder is still open" signal for the idle sheet upgrade
 - `GET /api/files/stream|download|thumb?path=` - `@media_token_required`, range-streamed; `thumb` is a cached JPEG (Pillow for images, a 2x2 ffmpeg contact sheet for video)
 
 ### Video Streaming
@@ -515,6 +516,31 @@ a pulled USB drive disappears from the sidebar.
     nearly free and decode is the wall. No duration (a stream, a broken
     container) falls back to a single frame repeated across the sheet, so a
     video preview is always the same shape and the client needs no negotiation.
+  - **Two passes for video: one frame first, the sheet when idle.** An 8K
+    10-bit HEVC keyframe costs ~2s of CPU on this box however many threads it
+    gets, so the first preview is a single keyframe (at 40%) tiled into the
+    sheet's shape (sidecar `stage: 'quick'`) and a folder fills in ~4x sooner.
+    A `thumb-upgrade` daemon thread replaces quick entries in place with the
+    four-frame sheet, one at a time, only when the pool has nothing in flight,
+    the CPU was >50% idle over the last 3s tick (iowait counts as busy), and the
+    folder was polled via `/thumb/status` in the last 30s - the grid polls every
+    5s while the tab is visible, so leaving the folder stops its upgrades. The
+    grid bumps a per-path revision when a state turns `ready`, reloading that
+    cell. A sheet that fails leaves the quick frame and marks it final.
+  - **Every grab decodes exactly one keyframe on one thread**
+    (`-threads 1 -skip_frame nokey -noaccurate_seek`). Accurate seeking used
+    to decode from the previous keyframe to the mark - on VR files with 10s
+    GOPs, up to 600 8K frames per point - and never finished inside the 60s
+    timeout. Sheet frames are grabbed by four ffmpegs in parallel and tiled
+    with Pillow (7.4s vs 14.7s for one four-input process). ffmpeg runs at
+    `nice 19` and `ionice -c2 -n7` (not the idle class, which made a cold
+    frame 6.8s instead of 3.0s).
+  - **A thumb request never holds a connection for long.** `thumbnail(wait=4)`
+    returns `PENDING` and the route answers 503 + `Retry-After`; the `<img>`
+    retries with backoff. Holding the browser's ~6 per-origin slots on minutes
+    of ffmpeg starved every other request in the tab - video playback and
+    `/api/files/list` sat pending. Failures are remembered for 10 minutes, and
+    files modified in the last 60s (still downloading) are skipped, not failed.
   - **Generated on a bounded pool** (`THUMB_WORKERS`, default cores-1) with an
     in-flight map keyed by cache name, so two viewers opening one folder do the
     work once instead of running two ffmpegs onto the same output path. Output
