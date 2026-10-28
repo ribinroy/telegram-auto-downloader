@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import { notify, dismissNotification, subscribeNotifications } from '../lib/notify';
 import { CheckCircle, XCircle, AlertCircle, X, Download } from 'lucide-react';
 
 export type ToastType = 'success' | 'error' | 'warning' | 'info';
@@ -105,10 +104,3 @@ export function ToastContainer({ toasts, onDismiss }: ToastContainerProps) {
   );
 }
 
-// The app-wide stack (lib/notify). Anything can call notify() directly;
-// this hook is what Layout renders the container from.
-export function useToast() {
-  const [toasts, setToasts] = useState<ToastData[]>([]);
-  useEffect(() => subscribeNotifications(setToasts), []);
-  return { toasts, addToast: notify, dismissToast: dismissNotification };
-}

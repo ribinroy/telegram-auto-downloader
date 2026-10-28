@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
-  FolderOpen, Loader2, AlertTriangle, X, Download, Copy, Scissors, ClipboardPaste,
+  FolderOpen, Loader2, X, Download, Copy, Scissors, ClipboardPaste,
   Pencil, Trash2, Info, Eye, Link as LinkIcon, CheckSquare, HardDrive, Search, Menu,
 } from 'lucide-react';
 import { notify } from '../lib/notify';

@@ -579,7 +579,9 @@ a pulled USB drive disappears from the sidebar.
   result comes back `partial` with the count left and the blocking folders named
   (parents' ENOTEMPTY is a consequence and isn't reported). While the request runs
   the floating selection bar shows "Deleting…" / "Moving to the trash…" in place of
-  its buttons, and the delete actions are disabled. The trash path is reported by `/api/files/list` (only once it
+  its buttons, and the delete actions are disabled. The bar carries both deletes -
+  Trash and a solid red Delete (permanent; "Delete on VPS" for a VPS selection,
+  which has no trash). The trash path is reported by `/api/files/list` (only once it
   exists) and linked in the sidebar.
 - **Bounded work**: recursive search and folder sizes both stop on a wall-clock
   deadline as well as a result cap, because "search from the root of a 20 TB array"
@@ -787,8 +789,18 @@ calls `logsafe.install(LOG_FILE)`.
     let it show a snapshot of its last content while fading out, so it doesn't
     go blank mid-fade. Clear the state that drives it in the same render as
     whatever ends it, or it flashes its previous content for a frame.
+  - **Notifications float too.** The result of an action ("Moved 3 items to
+    the trash", "Stop all failed: ...") is a toast, not a banner row: call
+    `notify({type, title, message?})` from `lib/notify.ts` - a module-level
+    store, so a page, a mutation callback or a modal in a portal can raise one
+    without a callback threaded down to it. Layout renders the single
+    `ToastContainer`, top-centre under the header (the bottom-right belongs to
+    the floating buttons and the explorer's selection bar) and above modals
+    (`z-[130]`), so a modal's own action can report back.
   - Persistent page chrome (search, toolbars, column headers) stays put; only
-    what is transient floats.
+    what is transient floats. A message that belongs to one form field (a
+    validation error, a "Test connection" result next to its button) stays next
+    to that field - it isn't a notification.
 
 ## Tests
 

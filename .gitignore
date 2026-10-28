@@ -10,8 +10,10 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+# Root-anchored: a bare `lib/` also matched frontend/src/lib, so that
+# folder (queryClient, pwa, notify) was never committed.
+/lib/
+/lib64/
 parts/
 sdist/
 var/
