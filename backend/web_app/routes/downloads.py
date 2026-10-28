@@ -9,6 +9,7 @@ from flask import jsonify, request, send_from_directory, Response
 from backend.config import JWT_SECRET
 from backend.database import get_db
 from backend import metrics
+from backend import download_queue
 from backend.web_app.base import (
     token_required, get_socketio, get_web_app,
     JWT_EXPIRY_DAYS, PASSWORD_CHANGE_ALLOWED_PATHS, FRONTEND_DIST,
@@ -76,7 +77,14 @@ class DownloadRoutesMixin:
                 return jsonify({"error": "Download not found"}), 404
             if download["status"] not in ("failed", "stopped"):
                 return jsonify({"error": f"Cannot retry a {download['status']} download"}), 400
+            # A retry takes a slot like any other download: with all of them
+            # busy it joins the back of the queue instead of running anyway.
+            previous = download["status"]
+            if download_queue.admit_existing(download) == 'queued':
+                return jsonify({"status": "waiting"})
             if not resume_download(download):
+                get_db().update_download_by_message_id(download["message_id"], status=previous)
+                self.emit_status(download["message_id"], previous)
                 return jsonify({"error": "Failed to restart the download"}), 500
             return jsonify({"status": "ok"})
 
@@ -117,9 +125,10 @@ class DownloadRoutesMixin:
                         self.telegram_downloader.loop
                     )
 
-            # Update database status to stopped
+            # Update database status to stopped (a waiting one leaves the queue)
             db.update_download_by_message_id(message_id, status='stopped', speed=0)
             self.emit_status(message_id, 'stopped')
+            download_queue.kick()
             return jsonify({"status": "stopped"})
 
         @self.app.route("/api/pause", methods=["POST"])
@@ -144,6 +153,7 @@ class DownloadRoutesMixin:
 
             db.update_download_by_message_id(message_id, status='paused', speed=0, pending_time=None)
             self.emit_status(message_id, 'paused')
+            download_queue.kick()
             return jsonify({"status": "paused"})
 
         @self.app.route("/api/resume", methods=["POST"])
@@ -158,6 +168,10 @@ class DownloadRoutesMixin:
                 return jsonify({"error": "Resume not supported for this download type"}), 400
 
             telegram_id = int(message_id) if message_id else None
+            # Un-pausing takes a slot; with none free it waits its turn
+            download = db.get_download_by_message_id(message_id)
+            if download and download_queue.admit_existing(download) == 'queued':
+                return jsonify({"status": "waiting"})
             if self.telegram_downloader and telegram_id:
                 future = asyncio.run_coroutine_threadsafe(
                     self.telegram_downloader.restart_download(telegram_id),
@@ -165,10 +179,14 @@ class DownloadRoutesMixin:
                 )
                 try:
                     success = future.result(timeout=30)
-                    if not success:
-                        return jsonify({"error": "Failed to restart download from Telegram"}), 500
+                    error = None if success else "Failed to restart download from Telegram"
                 except Exception as e:
-                    return jsonify({"error": f"Failed to restart download: {str(e)}"}), 500
+                    error = f"Failed to restart download: {str(e)}"
+                if error:
+                    # Give back the slot admit_existing() took for it
+                    db.update_download_by_message_id(message_id, status='paused', speed=0)
+                    self.emit_status(message_id, 'paused')
+                    return jsonify({"error": error}), 500
 
             db.update_download_by_message_id(message_id, status='downloading', speed=0)
             self.emit_status(message_id, 'downloading')
@@ -239,5 +257,47 @@ class DownloadRoutesMixin:
             # Soft delete from database
             db.delete_download_by_message_id(message_id)
             self.emit_deleted(message_id)
+            download_queue.kick()
             return jsonify({"status": "deleted"})
+
+        # --- download queue ----------------------------------------------
+
+        @self.app.route("/api/queue", methods=["GET"])
+        @token_required
+        def api_queue():
+            """Limits, how many are running (total and per source), and the
+            waiting downloads in start order."""
+            return jsonify(download_queue.snapshot())
+
+        @self.app.route("/api/queue/limits", methods=["PUT"])
+        @token_required
+        def api_queue_limits():
+            """Body: any of {global, telegram, ytdlp, vps}; a per-source null
+            removes that cap. Raising a limit starts waiting downloads now."""
+            try:
+                download_queue.set_limits(request.json or {})
+            except ValueError as e:
+                return jsonify({"error": str(e)}), 400
+            return jsonify(download_queue.snapshot())
+
+        @self.app.route("/api/queue/reorder", methods=["POST"])
+        @token_required
+        def api_queue_reorder():
+            """Body: {message_ids: [...]} - the waiting downloads, first to start first."""
+            ids = (request.json or {}).get("message_ids")
+            if not isinstance(ids, list):
+                return jsonify({"error": "message_ids (list) is required"}), 400
+            return jsonify(download_queue.reorder(ids))
+
+        @self.app.route("/api/queue/start-now", methods=["POST"])
+        @token_required
+        def api_queue_start_now():
+            """Body: {message_id} - start a waiting download now, past the limits."""
+            message_id = (request.json or {}).get("message_id")
+            if not message_id:
+                return jsonify({"error": "message_id is required"}), 400
+            ok, error = download_queue.start_now(str(message_id))
+            if not ok:
+                return jsonify({"error": error}), 400
+            return jsonify(download_queue.snapshot())
 

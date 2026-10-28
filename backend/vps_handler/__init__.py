@@ -115,9 +115,11 @@ class VpsDownloader:
         from backend.rename import rename_for_download
         filename = rename_for_download(filename, 'vps')
 
-        new_download = db.add_download(
+        # Running, or waiting its turn in the download queue
+        from backend.download_queue import admit
+        new_download, started = admit('vps', lambda status, position: db.add_download(
             file=filename,
-            status='downloading',
+            status=status,
             progress=0,
             speed=0,
             error=None,
@@ -130,12 +132,15 @@ class VpsDownloader:
             author=None,
             # Remembered so a resume lands in the same folder as the partial
             # file: `dest` (a torrent client's local folder) can't be derived
-            # from the 'vps' spec later on.
+            # from the 'vps' spec later on. A queued pull is started through
+            # resume too, so it depends on this as well.
             dest_base=dest,
-        )
-        metrics.record_download_started('vps')
+            queue_position=position,
+        ))
         self.emit_new_download(new_download)
-        self._spawn(remote_path, message_id, dest)
+        if started:
+            metrics.record_download_started('vps')
+            self._spawn(remote_path, message_id, dest)
         return new_download
 
     def resume_download(self, message_id: str) -> bool:

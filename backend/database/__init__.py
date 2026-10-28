@@ -56,6 +56,12 @@ class Download(Base):
     # 'vps' destination and start over in the wrong place, next to an orphaned
     # partial file.
     dest_base = Column(String(500), nullable=True)
+    # Place in the download queue while status is 'waiting' (lower starts
+    # first); NULL otherwise. See backend/download_queue.py.
+    queue_position = Column(Integer, nullable=True)
+    # yt-dlp format the user picked, so a queued or resumed download fetches
+    # the same quality instead of falling back to the default.
+    format_id = Column(String(200), nullable=True)
 
     def to_dict(self):
         """Convert model to dictionary"""
@@ -82,6 +88,8 @@ class Download(Base):
             'status_msg_id': self.status_msg_id,
             'chat_id': str(self.chat_id) if self.chat_id is not None else None,
             'dest_base': self.dest_base,
+            'queue_position': self.queue_position,
+            'format_id': self.format_id,
         }
 
 
@@ -356,6 +364,17 @@ class VpsWatchFolder(Base):
         }
 
 
+def _apply_download_update(download, changes):
+    """Set fields on a Download row. A row that leaves 'waiting' also leaves
+    the queue, whichever code path moved it - stop, delete, retry, a handler
+    picking it up - so a stale position can never hold a place in line."""
+    for key, value in changes.items():
+        if hasattr(download, key):
+            setattr(download, key, value)
+    if 'status' in changes and changes['status'] != 'waiting':
+        download.queue_position = None
+
+
 class DatabaseManager:
     """Database manager for handling all database operations"""
 
@@ -406,6 +425,14 @@ class DatabaseManager:
             # Add dest_base column if it doesn't exist (resume to the right folder)
             if 'dest_base' not in columns:
                 conn.execute(text('ALTER TABLE downloads ADD COLUMN dest_base VARCHAR(500)'))
+                conn.commit()
+            # Download queue: position while waiting, and the yt-dlp format
+            # a queued download has to be started with
+            if 'queue_position' not in columns:
+                conn.execute(text('ALTER TABLE downloads ADD COLUMN queue_position INTEGER'))
+                conn.commit()
+            if 'format_id' not in columns:
+                conn.execute(text('ALTER TABLE downloads ADD COLUMN format_id VARCHAR(200)'))
                 conn.commit()
 
             # Users: roles + Telegram identity (bot interaction tracking)
@@ -603,7 +630,7 @@ class DatabaseManager:
     def add_download(self, file, status='downloading', progress=0, speed=0,
                      error=None, downloaded_bytes=0, total_bytes=0, pending_time=None,
                      message_id=None, downloaded_from='telegram', url=None, author=None,
-                     chat_id=None, dest_base=None):
+                     chat_id=None, dest_base=None, queue_position=None, format_id=None):
         """Add a new download entry"""
         session = self.get_session()
         try:
@@ -627,6 +654,8 @@ class DatabaseManager:
                 author=author,
                 chat_id=chat_id,
                 dest_base=dest_base,
+                queue_position=queue_position if status == 'waiting' else None,
+                format_id=format_id,
             )
             session.add(download)
             session.commit()
@@ -640,9 +669,7 @@ class DatabaseManager:
         try:
             download = session.query(Download).filter_by(file=file).first()
             if download:
-                for key, value in kwargs.items():
-                    if hasattr(download, key):
-                        setattr(download, key, value)
+                _apply_download_update(download, kwargs)
                 session.commit()
                 return download.to_dict()
             return None
@@ -655,9 +682,7 @@ class DatabaseManager:
         try:
             download = session.query(Download).filter_by(id=download_id).first()
             if download:
-                for key, value in kwargs.items():
-                    if hasattr(download, key):
-                        setattr(download, key, value)
+                _apply_download_update(download, kwargs)
                 session.commit()
                 return download.to_dict()
             return None
@@ -677,9 +702,7 @@ class DatabaseManager:
                 query = query.filter_by(chat_id=chat_id)
             download = query.order_by(Download.id.desc()).first()
             if download:
-                for key, value in kwargs.items():
-                    if hasattr(download, key):
-                        setattr(download, key, value)
+                _apply_download_update(download, kwargs)
                 session.commit()
                 return download.to_dict()
             return None
@@ -759,6 +782,46 @@ class DatabaseManager:
                 session.commit()
                 return True
             return False
+        finally:
+            self.close_session()
+
+    def get_waiting_downloads(self):
+        """The download queue: waiting, non-deleted downloads in start order."""
+        session = self.get_session()
+        try:
+            rows = session.query(Download).filter_by(status='waiting', deleted_at=None) \
+                .order_by(Download.queue_position.asc().nulls_last(), Download.id).all()
+            return [d.to_dict() for d in rows]
+        finally:
+            self.close_session()
+
+    def set_queue_positions(self, ordered_message_ids):
+        """Renumber the waiting downloads 0..n in the given order. Waiting
+        downloads missing from the list keep their relative order after it, so
+        a reorder racing a new arrival can't drop the newcomer out of line."""
+        session = self.get_session()
+        try:
+            rows = session.query(Download).filter_by(status='waiting', deleted_at=None) \
+                .order_by(Download.queue_position.asc().nulls_last(), Download.id).all()
+            by_id = {r.message_id: r for r in rows}
+            ordered = [by_id[m] for m in dict.fromkeys(map(str, ordered_message_ids)) if m in by_id]
+            seen = {r.id for r in ordered}
+            ordered += [r for r in rows if r.id not in seen]
+            for index, row in enumerate(ordered):
+                row.queue_position = index
+            session.commit()
+            return [r.to_dict() for r in ordered]
+        finally:
+            self.close_session()
+
+    def next_queue_position(self):
+        """One past the last place in the queue."""
+        session = self.get_session()
+        try:
+            from sqlalchemy import func
+            highest = session.query(func.max(Download.queue_position)) \
+                .filter(Download.status == 'waiting', Download.deleted_at.is_(None)).scalar()
+            return 0 if highest is None else highest + 1
         finally:
             self.close_session()
 

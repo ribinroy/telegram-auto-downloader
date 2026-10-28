@@ -119,6 +119,11 @@ def main(argv=None):
     JobScheduler().start()
     print("⏰ Job scheduler started")
 
+    # Start waiting downloads as slots free (global + per-source limits)
+    from backend.download_queue import QueueRunner
+    QueueRunner().start()
+    print("🚦 Download queue started")
+
     # Watch the uplink and resume downloads it interrupted
     from backend.config import NET_WATCHDOG
     if NET_WATCHDOG:

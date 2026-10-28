@@ -1,0 +1,310 @@
+"""Download queue: how many local downloads run at once, and who goes next.
+
+A home line split twenty ways finishes nothing quickly, so local downloads
+(Telegram, yt-dlp and VPS->home SFTP pulls - not torrents, which run on the
+VPS) are capped. A download that arrives while every slot is taken is created
+with status ``waiting`` and a ``queue_position``; when a slot frees, the first
+waiting download that fits starts.
+
+There is no queue table. The queue *is* the waiting rows of ``downloads``,
+ordered by ``queue_position``, so it cannot drift from the downloads it
+describes: anything that moves a row out of ``waiting`` (start, stop, delete)
+also clears its position (``_apply_download_update`` in the database layer).
+
+- **Limits** are one global cap plus an optional cap per source
+  (``download_limits`` setting). A slot is free when both have room, so a
+  per-source cap that is full skips that source's waiting items rather than
+  blocking the ones behind them.
+- **Starting a waiting download is a resume.** ``backend/resume.py`` already
+  knows how to start each handler's download from its record (Telegram
+  re-fetches the message), so a queued download goes through the same code
+  path as the retry button and the network watchdog.
+- **Admission happens under one lock** together with creating the record, so
+  two downloads arriving at once can't both see the last free slot.
+- The ``QueueRunner`` thread starts waiting downloads as slots free. It ticks
+  every few seconds (a download can finish in any of a dozen places in three
+  handlers, and polling the database is simpler than hooking all of them), and
+  ``kick()`` wakes it at once after anything that obviously frees a slot.
+- Lowering a limit never stops a running download; it only holds back the
+  next ones.
+"""
+import json
+import logging
+import threading
+
+from backend.database import get_db
+
+logger = logging.getLogger(__name__)
+
+SETTINGS_KEY = 'download_limits'
+SOURCES = ('telegram', 'ytdlp', 'vps')
+DEFAULT_LIMITS = {'global': 3, 'telegram': None, 'ytdlp': None, 'vps': None}
+MAX_LIMIT = 20
+TICK_SECONDS = 3
+
+_lock = threading.RLock()
+_wake = threading.Event()
+
+
+# --- limits ------------------------------------------------------------------
+
+def get_limits():
+    """{global: int, telegram/ytdlp/vps: int or None (no cap of its own)}."""
+    limits = dict(DEFAULT_LIMITS)
+    try:
+        stored = json.loads(get_db().get_setting(SETTINGS_KEY) or '{}')
+    except (TypeError, ValueError):
+        stored = {}
+    for key in limits:
+        if key in stored:
+            limits[key] = stored[key]
+    return limits
+
+
+def _clean_limit(value, allow_none):
+    if value in (None, '') and allow_none:
+        return None
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        raise ValueError('Limits must be whole numbers')
+    if not 1 <= value <= MAX_LIMIT:
+        raise ValueError(f'Limits must be between 1 and {MAX_LIMIT}')
+    return value
+
+
+def set_limits(changes):
+    """Update some limits (a per-source None removes that cap). Raises
+    ValueError on a bad value; returns the full limits."""
+    limits = get_limits()
+    for key, value in (changes or {}).items():
+        if key not in limits:
+            raise ValueError(f'Unknown limit: {key}')
+        limits[key] = _clean_limit(value, allow_none=key != 'global')
+    get_db().set_setting(SETTINGS_KEY, json.dumps(limits))
+    kick()  # a raised limit frees slots right now
+    _notify()
+    return limits
+
+
+# --- state -------------------------------------------------------------------
+
+def source_of(download):
+    from backend.resume import source_of as _source_of
+    return _source_of(download)
+
+
+def active_counts():
+    """{total, telegram, ytdlp, vps}: downloads currently holding a slot."""
+    counts = {s: 0 for s in SOURCES}
+    for d in get_db().get_downloads_by_status('downloading'):
+        counts[source_of(d)] += 1
+    counts['total'] = sum(counts[s] for s in SOURCES)
+    return counts
+
+
+def _has_room(source, counts, limits):
+    if counts['total'] >= limits['global']:
+        return False
+    cap = limits.get(source)
+    return cap is None or counts[source] < cap
+
+
+def _source_ready(source):
+    """Whether that handler can start a download right now. A waiting
+    Telegram download can't start before Telethon is connected; trying would
+    only fail it, so the queue waits instead."""
+    from backend.web_app import get_web_app
+    web = get_web_app()
+    if not web:
+        return False
+    if source == 'vps':
+        return bool(web.vps_downloader)
+    if source == 'ytdlp':
+        return bool(web.ytdlp_downloader and web.event_loop)
+    tg = web.telegram_downloader
+    try:
+        return bool(tg and tg.loop and tg.client and tg.client.is_connected())
+    except Exception:  # noqa: BLE001 - a half-built client is just "not ready"
+        return False
+
+
+def snapshot():
+    """The queue as the UI shows it: limits, what is running, who waits."""
+    return {
+        'limits': get_limits(),
+        'max_limit': MAX_LIMIT,
+        'active': active_counts(),
+        'waiting': get_db().get_waiting_downloads(),
+    }
+
+
+# --- admission ---------------------------------------------------------------
+
+def admit(source, create):
+    """Create a new download either running or queued.
+
+    `create(status, queue_position)` makes the record and returns it; it runs
+    under the queue lock, so the slot it was given can't be handed out twice.
+    Returns (download, started): when `started` is False the caller must not
+    start the transfer - the runner will, through resume, when it's this
+    download's turn."""
+    with _lock:
+        limits = get_limits()
+        counts = active_counts()
+        # A newcomer doesn't jump a waiting download that could take this slot
+        waiting_fits = any(
+            _has_room(source_of(w), counts, limits) and _source_ready(source_of(w))
+            for w in get_db().get_waiting_downloads())
+        if _has_room(source, counts, limits) and not waiting_fits:
+            return create('downloading', None), True
+        download = create('waiting', get_db().next_queue_position())
+    _notify()
+    return download, False
+
+
+def admit_existing(download):
+    """For a retry/resume of an existing record: 'start' if it may run now
+    (its row is already marked downloading, so the slot is held), otherwise
+    'queued' (the row is now waiting at the back of the line)."""
+    db = get_db()
+    message_id = download.get('message_id')
+    with _lock:
+        source = source_of(download)
+        if _has_room(source, active_counts(), get_limits()):
+            db.update_download_by_message_id(message_id, status='downloading', speed=0, error=None)
+            return 'start'
+        db.update_download_by_message_id(
+            message_id, status='waiting', speed=0, error=None,
+            queue_position=db.next_queue_position())
+    _emit_status(message_id, 'waiting')
+    _notify()
+    return 'queued'
+
+
+def reorder(ordered_message_ids):
+    """Set the queue order (first starts first)."""
+    get_db().set_queue_positions(ordered_message_ids)
+    _notify()
+    return snapshot()
+
+
+def start_now(message_id):
+    """Start one waiting download immediately, past the limits. Returns
+    (ok, error)."""
+    db = get_db()
+    with _lock:
+        download = db.get_download_by_message_id(message_id)
+        if not download or download.get('deleted_at'):
+            return False, 'Download not found'
+        if download.get('status') != 'waiting':
+            return False, f"It is {download.get('status')}, not waiting"
+        if not _source_ready(source_of(download)):
+            return False, 'That downloader is not ready yet'
+        _claim(download)
+    _start(download)
+    return True, None
+
+
+# --- running -----------------------------------------------------------------
+
+def _claim(download):
+    """Mark a waiting download as running (holding a slot) before its
+    transfer starts, so the next admission already counts it."""
+    get_db().update_download_by_message_id(
+        download['message_id'], status='downloading', speed=0, error=None)
+    _emit_status(download['message_id'], 'downloading')
+
+
+def _start(download):
+    """Start a claimed download on a worker thread (a Telegram start waits on
+    a message fetch). If the handler refuses, fail it honestly rather than
+    leaving a 'downloading' row with nothing behind it."""
+    def run():
+        from backend.resume import resume_download
+        try:
+            ok = resume_download(download, count_retry=False)
+        except Exception as e:  # noqa: BLE001 - logged and recorded below
+            logger.warning("queued download %s failed to start: %s", download.get('message_id'), e)
+            ok = False
+        if not ok:
+            get_db().update_download_by_message_id(
+                download['message_id'], status='failed', speed=0,
+                error="Couldn't start this download from the queue")
+            _emit_status(download['message_id'], 'failed')
+        _notify()
+
+    _run_in_background(run)
+
+
+def _run_in_background(fn):
+    threading.Thread(target=fn, daemon=True, name='queue-start').start()
+
+
+def pump():
+    """Start waiting downloads, in order, while slots are free. Returns how
+    many were started."""
+    started = []
+    with _lock:
+        limits = get_limits()
+        counts = active_counts()
+        for download in get_db().get_waiting_downloads():
+            if counts['total'] >= limits['global']:
+                break
+            source = source_of(download)
+            if not _has_room(source, counts, limits) or not _source_ready(source):
+                continue  # skip it; something behind it may fit
+            _claim(download)
+            counts[source] += 1
+            counts['total'] += 1
+            started.append(download)
+    for download in started:
+        _start(download)
+    if started:
+        _notify()
+    return len(started)
+
+
+def kick():
+    """Wake the runner now instead of on its next tick."""
+    _wake.set()
+
+
+class QueueRunner(threading.Thread):
+    """Starts waiting downloads as slots free up."""
+
+    def __init__(self, interval: int = TICK_SECONDS):
+        super().__init__(daemon=True, name='download-queue')
+        self.interval = interval
+
+    def run(self):
+        while True:
+            try:
+                pump()
+            except Exception as e:  # a runner that dies silently strands the queue
+                logger.error("download queue tick failed: %s", e)
+            _wake.wait(self.interval)
+            _wake.clear()
+
+
+# --- notifications -----------------------------------------------------------
+
+def _emit_status(message_id, status):
+    from backend.web_app import get_web_app
+    web = get_web_app()
+    if web:
+        try:
+            web.emit_status(message_id, status)
+        except Exception:  # noqa: BLE001 - a dropped event is resynced on reconnect
+            pass
+
+
+def _notify():
+    """Tell open pages the queue changed; they refetch /api/queue."""
+    from backend.web_app import get_socketio
+    try:
+        sio = get_socketio()
+        if sio:
+            sio.emit('queue:changed', {})
+    except Exception:  # noqa: BLE001
+        pass
