@@ -789,14 +789,16 @@ calls `logsafe.install(LOG_FILE)`.
     let it show a snapshot of its last content while fading out, so it doesn't
     go blank mid-fade. Clear the state that drives it in the same render as
     whatever ends it, or it flashes its previous content for a frame.
-  - **Notifications float too.** The result of an action ("Moved 3 items to
-    the trash", "Stop all failed: ...") is a toast, not a banner row: call
-    `notify({type, title, message?})` from `lib/notify.ts` - a module-level
-    store, so a page, a mutation callback or a modal in a portal can raise one
-    without a callback threaded down to it. Layout renders the single
-    `ToastContainer`, top-centre under the header (the bottom-right belongs to
-    the floating buttons and the explorer's selection bar) and above modals
-    (`z-[130]`), so a modal's own action can report back.
+  - **Notifications float too, and there is one kind.** The result of an
+    action is the same toast as "Download Complete" (`components/Toast.tsx`,
+    bottom-right), never a banner row and never a new notification component:
+    call `notify({type, title, message?})` from `lib/notify.ts` - a
+    module-level store, so a page, a mutation callback or a modal in a portal
+    can raise one without a callback threaded down to it. Follow the toast's
+    shape: a short title ("Moved to trash", "Delete failed") and the detail as
+    `message` (the count, the filename, the error), not one long sentence as
+    the title. Layout renders the single `ToastContainer`, stacked above modals
+    (`z-[130]`) so a modal's own action can report back.
   - Persistent page chrome (search, toolbars, column headers) stays put; only
     what is transient floats. A message that belongs to one form field (a
     validation error, a "Test connection" result next to its button) stays next

@@ -63,10 +63,8 @@ export function ExplorerPage() {
   const [confirmDelete, setConfirmDelete] = useState<{ entries: FileEntry[]; permanent: boolean } | null>(null);
   const [filter, setFilter] = useState('');
   const [searchQuery, setSearchQuery] = useState<string | null>(null);
-  // Results of actions float (lib/notify) rather than taking a row above the list
-  const setNotice = (n: { kind: 'error' | 'info'; text: string } | null) => {
-    if (n) notify({ type: n.kind === 'error' ? 'error' : 'success', title: n.text, duration: n.kind === 'error' ? 7000 : 4000 });
-  };
+  // Results of actions use the app's toasts (lib/notify), like download
+  // complete/failed, rather than a row above the list.
   const [dragging, setDragging] = useState(false);
   // Below lg the places list is a drawer: on a phone it was eating the top of
   // every folder before you could see a single file.
@@ -245,7 +243,7 @@ export function ExplorerPage() {
     // Previewing a remote image/video would stream it off the VPS; only text
     // is cheap enough to fetch on a click.
     if (entry.remote && entry.kind !== 'text') {
-      setNotice({ kind: 'info', text: 'Copy it to a local folder to open it — VPS files are not streamed.' });
+      notify({ type: 'info', title: "VPS files aren't streamed", message: 'Copy it to a local folder to open it.' });
       return;
     }
     setPreview(entry);
@@ -257,10 +255,13 @@ export function ExplorerPage() {
     if (res.errors?.length) {
       const [first, ...rest] = res.errors;
       // A partial delete's message already says what happened to it
-      const text = first.partial
-        ? `${first.path.split('/').pop()}: ${first.error}${rest.length ? ` (${rest.length} more item(s) had errors)` : ''}`
-        : `${verb} failed for ${res.errors.length} item(s): ${first.error}`;
-      setNotice({ kind: 'error', text });
+      notify(first.partial
+        ? {
+            type: 'warning',
+            title: `Partly deleted: ${first.path.split('/').pop()}`,
+            message: `${first.error}${rest.length ? ` (${rest.length} more item(s) had errors)` : ''}`,
+          }
+        : { type: 'error', title: `${verb} failed for ${res.errors.length} item(s)`, message: first.error, duration: 7000 });
     }
     return !res.errors?.length;
   };
@@ -271,7 +272,7 @@ export function ExplorerPage() {
     try {
       await renameMut.mutateAsync({ path: entry.path, name });
     } catch (e) {
-      setNotice({ kind: 'error', text: (e as Error).message });
+      notify({ type: 'error', title: 'Rename failed', message: (e as Error).message, duration: 7000 });
     }
   };
 
@@ -279,23 +280,19 @@ export function ExplorerPage() {
     if (!confirmDelete || deleting) return;
     const { entries, permanent } = confirmDelete;
     setConfirmDelete(null);
-    setNotice(null);
     setDeletingLabel(permanent
       ? `Deleting ${entries.length} item(s)…`
       : `Moving ${entries.length} item(s) to the trash…`);
     try {
       const res = await deleteMut.mutateAsync({ paths: entries.map(e => e.path), permanent });
       if (reportErrors(res, 'Delete')) {
-        setNotice({
-          kind: 'info',
-          text: !permanent && !res.permanent
-            ? `Moved ${entries.length} item(s) to the trash folder on this disk.`
-            : `Deleted ${entries.length} item(s).`,
-        });
+        notify(!permanent && !res.permanent
+          ? { type: 'success', title: 'Moved to trash', message: `${entries.length} item(s), in the trash folder on this disk` }
+          : { type: 'success', title: 'Deleted', message: `${entries.length} item(s)` });
       }
       setSelected(new Set());
     } catch (e) {
-      setNotice({ kind: 'error', text: (e as Error).message });
+      notify({ type: 'error', title: 'Delete failed', message: (e as Error).message, duration: 7000 });
     } finally {
       setDeletingLabel(null);
     }
@@ -309,14 +306,15 @@ export function ExplorerPage() {
       // Pasting from the VPS hands off to the SFTP downloader: nothing has
       // arrived yet, so say so instead of letting the empty folder look broken.
       if (ok && res.download) {
-        setNotice({
-          kind: 'info',
-          text: `Downloading ${res.results.length} item(s) from the VPS — follow the progress on the downloads page.`,
+        notify({
+          type: 'info',
+          title: 'Download Started',
+          message: `${res.results.length} item(s) from the VPS - progress is on the downloads page`,
         });
       }
       if (clipboard.move) setClipboard(null);
     } catch (e) {
-      setNotice({ kind: 'error', text: (e as Error).message });
+      notify({ type: 'error', title: clipboard.move ? 'Move failed' : 'Copy failed', message: (e as Error).message, duration: 7000 });
     }
   };
 
@@ -332,7 +330,7 @@ export function ExplorerPage() {
         return;
       } catch (e) {
         if (!(e as Error).message.includes('already exists')) {
-          setNotice({ kind: 'error', text: (e as Error).message });
+          notify({ type: 'error', title: "Couldn't create the folder", message: (e as Error).message, duration: 7000 });
           return;
         }
       }
@@ -344,12 +342,12 @@ export function ExplorerPage() {
     try {
       const res = await uploadMut.mutateAsync({ dest: currentPath, files });
       if (res.errors?.length) {
-        setNotice({ kind: 'error', text: `${res.errors.length} upload(s) failed: ${res.errors[0].error}` });
+        notify({ type: 'error', title: `${res.errors.length} upload(s) failed`, message: res.errors[0].error, duration: 7000 });
       } else {
-        setNotice({ kind: 'info', text: `Uploaded ${files.length} file(s).` });
+        notify({ type: 'success', title: 'Uploaded', message: `${files.length} file(s)` });
       }
     } catch (e) {
-      setNotice({ kind: 'error', text: (e as Error).message });
+      notify({ type: 'error', title: 'Upload failed', message: (e as Error).message, duration: 7000 });
     }
   };
 

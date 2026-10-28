@@ -59,9 +59,9 @@ function Toast({ toast, onDismiss }: ToastProps) {
     <div
       role="alert"
       aria-live="polite"
-      className={`flex items-start gap-3 p-4 rounded-xl border-2 shadow-xl backdrop-blur-md transition-all duration-300 motion-reduce:transition-none ${
+      className={`flex items-start gap-3 p-4 rounded-xl border-2 shadow-xl transition-all duration-300 ${
         bgColors[toast.type]
-      } ${isExiting ? 'opacity-0 -translate-y-2' : 'opacity-100 translate-y-0 animate-toast-in'}`}
+      } ${isExiting ? 'opacity-0 translate-x-full' : 'opacity-100 translate-x-0'}`}
     >
       {icons[toast.type]}
       <div className="flex-1 min-w-0">
@@ -86,17 +86,13 @@ interface ToastContainerProps {
   onDismiss: (id: string) => void;
 }
 
-/**
- * The notification stack: floating, top-centre under the header. Not the
- * bottom-right corner, where the floating action buttons and the explorer's
- * selection bar live; and above modals, so a modal's own action can report
- * its result.
- */
+// Stacked above modals (z-[130]), so a modal's own action can report its
+// result - the queue modal's stop/resume all, for one.
 export function ToastContainer({ toasts, onDismiss }: ToastContainerProps) {
   return (
-    <div className="fixed top-16 sm:top-20 inset-x-0 z-[130] flex flex-col items-center gap-2 px-4 pointer-events-none">
+    <div className="fixed bottom-6 right-6 z-[130] flex flex-col gap-2 max-w-sm w-full pointer-events-none">
       {toasts.map((toast) => (
-        <div key={toast.id} className="pointer-events-auto w-full max-w-sm">
+        <div key={toast.id} className="pointer-events-auto">
           <Toast toast={toast} onDismiss={onDismiss} />
         </div>
       ))}
