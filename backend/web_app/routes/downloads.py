@@ -23,15 +23,26 @@ from backend.web_app.helpers import candidate_file_paths
 
 
 class DownloadRoutesMixin:
-    def stop_one_download(self, message_id):
+    def stop_one_download(self, message_id, requeue=False):
         """Stop one download, running or waiting, and mark it stopped (a waiting
         one leaves the queue). Shared by /api/stop and stop-all, so stopping
         everything is the same work as pressing stop on each row. Returns an
-        error string, or None once it has stopped."""
+        error string, or None once it has stopped.
+
+        `requeue` sends it back to the download queue instead (a reorder put a
+        waiting download ahead of it). That has to wait for the handler to
+        finish exiting: yt-dlp and VPS write 'stopped' on their way out, which
+        would land after 'waiting' and drop the download out of line."""
+        import time
         db = get_db()
         message_id = str(message_id) if message_id is not None else None
         if not message_id:
             return "message_id is required"
+
+        # The rank a reorder gave it - the handler's own 'stopped' write on
+        # the way out clears it, so it is put back with 'waiting'
+        current = db.get_download_by_message_id(message_id) if requeue else None
+        rank = current.get('queue_position') if current else None
 
         # Check if it's a yt-dlp download (UUID format) or Telegram (numeric string)
         is_uuid = '-' in message_id
@@ -50,21 +61,37 @@ class DownloadRoutesMixin:
             task = self.download_tasks.get(message_id)
             if task and hasattr(task, 'cancel'):
                 task.cancel()
+            if requeue and task is not None:
+                # The coroutine deregisters itself last, after its 'stopped'
+                deadline = time.time() + 20
+                while self.download_tasks.get(message_id) is task and time.time() < deadline:
+                    time.sleep(0.2)
+                if self.download_tasks.get(message_id) is task:
+                    return "Download did not stop in time"
         else:
             # Telegram download - convert to int for task lookup
             telegram_id = int(message_id)
             task = self.download_tasks.get(telegram_id)
             if task and not task.done():
                 task.cancel()
+                if requeue:
+                    deadline = time.time() + 20
+                    while not task.done() and time.time() < deadline:
+                        time.sleep(0.2)
+                    if not task.done():
+                        return "Download did not stop in time"
             # Update Telegram status message
             if self.telegram_downloader and self.telegram_downloader.loop:
                 asyncio.run_coroutine_threadsafe(
-                    self.telegram_downloader.update_status_message(telegram_id, "Stopped"),
+                    self.telegram_downloader.update_status_message(
+                        telegram_id, "Waiting" if requeue else "Stopped"),
                     self.telegram_downloader.loop
                 )
 
-        db.update_download_by_message_id(message_id, status='stopped', speed=0)
-        self.emit_status(message_id, 'stopped')
+        status = 'waiting' if requeue else 'stopped'
+        extra = {'queue_position': rank} if requeue else {}
+        db.update_download_by_message_id(message_id, status=status, speed=0, **extra)
+        self.emit_status(message_id, status)
         return None
 
     def register_download_routes(self):
@@ -294,11 +321,14 @@ class DownloadRoutesMixin:
         @self.app.route("/api/queue/reorder", methods=["POST"])
         @token_required
         def api_queue_reorder():
-            """Body: {message_ids: [...]} - the waiting downloads, first to start first."""
+            """Body: {message_ids: [...]} - running and waiting downloads, first
+            to run first. A waiting one moved above a running one takes its
+            slot; the running one goes back to waiting with its bytes kept."""
             ids = (request.json or {}).get("message_ids")
             if not isinstance(ids, list):
                 return jsonify({"error": "message_ids (list) is required"}), 400
-            return jsonify(download_queue.reorder(ids))
+            return jsonify(download_queue.reorder(
+                ids, requeue_one=lambda m: self.stop_one_download(m, requeue=True)))
 
         @self.app.route("/api/queue/start-now", methods=["POST"])
         @token_required

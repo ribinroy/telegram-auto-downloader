@@ -50,7 +50,9 @@ def test_downloads_past_the_limit_wait_in_arrival_order(db, started):
     results = [new(db, n) for n in ('a', 'b', 'c', 'd')]
     assert [s for _d, s in results] == [True, True, False, False]
     assert [d['file'] for d in db.get_waiting_downloads()] == ['c', 'd']
-    assert [d['queue_position'] for d in db.get_waiting_downloads()] == [0, 1]
+    # Running downloads hold ranks too; the waiting ones come after them
+    positions = [d['queue_position'] for d in db.get_queue_order()]
+    assert positions == sorted(positions) and len(set(positions)) == 4
 
 
 def test_a_freed_slot_goes_to_the_first_waiting_download(db, started):
@@ -61,7 +63,9 @@ def test_a_freed_slot_goes_to_the_first_waiting_download(db, started):
     assert dq.pump() == 1
     assert started == ['id-b']
     assert statuses(db)['b'] == 'downloading'
-    # Leaving the queue clears its place in it
+    # It keeps its rank while running; finishing clears it
+    assert db.get_download_by_message_id('id-b')['queue_position'] is not None
+    finish(db, 'b')
     assert db.get_download_by_message_id('id-b')['queue_position'] is None
     assert [d['file'] for d in db.get_waiting_downloads()] == ['c']
 
@@ -140,8 +144,8 @@ def test_admission_holds_the_last_slot_against_a_race(db, started):
     for t in threads:
         t.join()
     assert list(statuses(db).values()).count('downloading') == 2
-    positions = [d['queue_position'] for d in db.get_waiting_downloads()]
-    assert positions == list(range(6))
+    positions = [d['queue_position'] for d in db.get_queue_order()]
+    assert len(set(positions)) == 8          # no two arrivals share a place
 
 
 def test_limits_are_validated():
@@ -248,3 +252,62 @@ def test_the_snapshot_lists_running_downloads(client, db, auth, started):
     assert [d['file'] for d in body['running']] == ['a']
     assert [d['file'] for d in body['waiting']] == ['b']
     assert body['resumable'] == 0
+
+
+# --- reordering across the running/waiting line -----------------------------
+
+def test_dragging_a_waiting_download_above_a_running_one_swaps_them(client, db, auth, started):
+    dq.set_limits({'global': 2})
+    for n in ('a', 'b', 'c', 'd'):
+        new(db, n, 'ytdlp')
+    body = client.post('/api/queue/reorder', headers=auth,
+                       json={'message_ids': ['id-c', 'id-a', 'id-b', 'id-d']}).get_json()
+    assert body['requeued'] == 1 and body['errors'] == []
+    # c took b's slot; b went back to waiting, ahead of d
+    assert started == ['id-c']
+    assert [d['file'] for d in body['running']] == ['c', 'a']
+    assert [d['file'] for d in body['waiting']] == ['b', 'd']
+
+
+def test_dragging_a_running_download_below_the_line_sends_it_back(client, db, auth, started):
+    dq.set_limits({'global': 2})
+    for n in ('a', 'b', 'c'):
+        new(db, n, 'ytdlp')
+    body = client.post('/api/queue/reorder', headers=auth,
+                       json={'message_ids': ['id-b', 'id-c', 'id-a']}).get_json()
+    assert started == ['id-c']
+    assert [d['file'] for d in body['waiting']] == ['a']
+
+
+def test_a_reorder_within_the_waiting_line_bumps_nobody(client, db, auth, started):
+    dq.set_limits({'global': 1})
+    for n in ('a', 'b', 'c'):
+        new(db, n, 'ytdlp')
+    client.post('/api/queue/start-now', headers=auth, json={'message_id': 'id-b'})  # 2 run, limit 1
+    started.clear()
+    body = client.post('/api/queue/reorder', headers=auth,
+                       json={'message_ids': ['id-a', 'id-b', 'id-c']}).get_json()
+    # Nothing waiting moved up, so the over-limit "start now" one keeps running
+    assert body['requeued'] == 0 and started == []
+    assert {d['file'] for d in body['running']} == {'a', 'b'}
+
+
+def test_requeue_waits_for_the_handlers_late_stopped_write(app, db, started):
+    """yt-dlp writes 'stopped' on its way out, after stop returns. Requeueing
+    must land after that write, or the download silently leaves the queue."""
+    db.add_download(file='x', status='downloading', message_id='id-x',
+                    downloaded_from='example.com', url='https://x/x', queue_position=0)
+
+    class SlowTask:
+        def cancel(self):
+            def exit_later():
+                import time
+                time.sleep(0.3)
+                db.update_download_by_message_id('id-x', status='stopped')
+                app.download_tasks.pop('id-x', None)
+            threading.Thread(target=exit_later).start()
+
+    app.download_tasks['id-x'] = SlowTask()
+    assert app.stop_one_download('id-x', requeue=True) is None
+    row = db.get_download_by_message_id('id-x')
+    assert row['status'] == 'waiting' and row['queue_position'] == 0

@@ -305,9 +305,12 @@ export const fetchQueue = () => queueRequest('');
 export const setQueueLimits = (limits: Partial<QueueState['limits']>) =>
   queueRequest('/limits', jsonInit('PUT', limits));
 
-/** The waiting downloads' message ids, first to start first. */
+/** Running and waiting downloads' message ids, first to run first. A waiting
+ *  one moved above a running one takes its slot; `requeued` counts the
+ *  running ones sent back to wait. */
 export const reorderQueue = (messageIds: string[]) =>
-  queueRequest('/reorder', jsonInit('POST', { message_ids: messageIds }));
+  queueRequest('/reorder', jsonInit('POST', { message_ids: messageIds })) as
+    Promise<QueueState & Pick<StopAllResult, 'errors'> & { requeued: number }>;
 
 /** Start one waiting download now, past the limits. */
 export const startQueuedNow = (messageId: string) =>

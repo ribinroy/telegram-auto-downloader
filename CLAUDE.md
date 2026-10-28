@@ -141,7 +141,7 @@ Main Thread
 - `thumb_count`, `status_msg_id`
 - `dest_base` (destination folder a VPS transfer was started with, when it isn't derivable from the source spec - e.g. a torrent client's `local_dir`; a resume reads it back so it can't restart into the wrong folder)
 - `deleted_at` (soft delete), `file_deleted` (physical file removed)
-- `queue_position` (place in the download queue while `status = 'waiting'`; cleared by any status change away from waiting), `format_id` (the yt-dlp format picked, so a queued or resumed download fetches that quality)
+- `queue_position` (rank in the download queue while `waiting` *or* `downloading` - running ones keep a rank so a reorder can put a waiting one ahead of them; cleared when it leaves both), `format_id` (the yt-dlp format picked, so a queued or resumed download fetches that quality)
 - `created_at`, `updated_at`
 
 **`settings`** - Key-value store (VPS connection, torrent client config, etc.; secrets Fernet-encrypted)
@@ -207,7 +207,7 @@ Access/refresh token pair. Access tokens are short (`ACCESS_TOKEN_MINUTES`, defa
 ### Download Queue
 - `GET /api/queue` - `{limits, max_limit, active: {total, telegram, ytdlp, vps}, running, waiting, resumable}` (rows carry `hidden`; `resumable` = stopped + paused)
 - `PUT /api/queue/limits` - any of `{global, telegram, ytdlp, vps}`; a per-source `null` removes that cap
-- `POST /api/queue/reorder` - `{message_ids}`, first to start first
+- `POST /api/queue/reorder` - `{message_ids}` over running + waiting, first to run first -> `{requeued, errors, ...queue}`
 - `POST /api/queue/start-now` - `{message_id}`, past the limits
 - `POST /api/queue/stop-all` - stop every running and waiting download -> `{stopped, errors, ...queue}`
 - `POST /api/queue/resume-all` - queue every stopped/paused one again (not failed) -> `{queued, ...queue}`
@@ -420,11 +420,22 @@ the VPS) are capped: a **global limit** (default 3) plus an optional **cap per
 source**, kept in the `download_limits` setting. `backend/download_queue.py`
 owns all of it.
 
-- **There is no queue table.** The queue is the `waiting` rows of `downloads`
-  ordered by `queue_position`. `_apply_download_update()` in the database layer
-  clears the position whenever a row's status moves away from `waiting`, so
-  stop, delete, retry and a handler starting it can never leave a stale place
-  in line holding a slot.
+- **There is no queue table.** The queue is the `downloading` + `waiting` rows
+  of `downloads` ordered by `queue_position` (`QUEUED_STATUSES`).
+  `_apply_download_update()` in the database layer clears the position whenever
+  a row leaves both, so stop, delete and finishing can never leave a stale place
+  in line.
+- **One line, running included.** A reorder ranks running and waiting
+  downloads together; walking the new order, the ones that fit the limits are
+  the ones that should run (`_run_set`). A waiting download dragged above a
+  running one takes its slot: the running one is sent back to waiting with its
+  bytes kept (`stop_one_download(requeue=True)`), lowest-ranked first, and only
+  as many as were promoted - so a download started past the limit with "start
+  now" isn't knocked out by an unrelated reorder. A requeue **waits for the
+  handler to exit** and then restores the rank: yt-dlp and VPS write `stopped`
+  on their way out, which would otherwise land after `waiting` (dropping it out
+  of line) and clear its position. Running rows left out of a reorder request
+  stay ahead of it, never silently bumped.
 - **Admission is atomic with record creation.** Each handler's start path calls
   `admit(source, create)`, which decides running-or-waiting and creates the row
   under one lock - otherwise two arrivals at once both take the last slot. A
@@ -458,10 +469,10 @@ owns all of it.
   stop-all. It opens a modal (bottom sheet on a phone): Stop all (with an
   inline confirm) / Resume all, an "At once" stepper, per-source caps behind
   the sliders button, the running downloads with live bars (`useRealtime`
-  patches the queue cache's `running` on every progress event), and the
-  waiting line - drag the grip to reorder (@dnd-kit, pointer + keyboard; only
-  the grip drags, so a phone can still scroll), ⚡ to start now, ✕ to leave the
-  queue. Secured sources' rows are counted, not named, unless secured items are
+  patches the queue cache's `running` on every progress event) and the
+  waiting line as **one sortable list** with a dashed line between them - drag
+  the grip across it to swap (@dnd-kit, pointer + keyboard; only the grip
+  drags, so a phone can still scroll), ⚡ to start now, ✕ to leave the queue. Secured sources' rows are counted, not named, unless secured items are
   shown. List rows show "Waiting · #n", read live from the queue query
   (`useQueuePlace`).
 

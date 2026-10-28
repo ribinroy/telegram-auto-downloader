@@ -364,14 +364,20 @@ class VpsWatchFolder(Base):
         }
 
 
+# Statuses that hold a place in the download queue's order: waiting for a
+# slot, or running in one (a running download keeps its rank so a reorder
+# can push it back behind a waiting one).
+QUEUED_STATUSES = ('waiting', 'downloading')
+
+
 def _apply_download_update(download, changes):
-    """Set fields on a Download row. A row that leaves 'waiting' also leaves
-    the queue, whichever code path moved it - stop, delete, retry, a handler
-    picking it up - so a stale position can never hold a place in line."""
+    """Set fields on a Download row. A row that leaves the queue (done,
+    failed, stopped, paused) also loses its position, whichever code path
+    moved it, so a stale position can never hold a place in line."""
     for key, value in changes.items():
         if hasattr(download, key):
             setattr(download, key, value)
-    if 'status' in changes and changes['status'] != 'waiting':
+    if 'status' in changes and changes['status'] not in QUEUED_STATUSES:
         download.queue_position = None
 
 
@@ -654,7 +660,7 @@ class DatabaseManager:
                 author=author,
                 chat_id=chat_id,
                 dest_base=dest_base,
-                queue_position=queue_position if status == 'waiting' else None,
+                queue_position=queue_position if status in QUEUED_STATUSES else None,
                 format_id=format_id,
             )
             session.add(download)
@@ -795,18 +801,39 @@ class DatabaseManager:
         finally:
             self.close_session()
 
-    def set_queue_positions(self, ordered_message_ids):
-        """Renumber the waiting downloads 0..n in the given order. Waiting
-        downloads missing from the list keep their relative order after it, so
-        a reorder racing a new arrival can't drop the newcomer out of line."""
+    def get_queue_order(self):
+        """Running then waiting downloads, each in queue order - the one list
+        a reorder rearranges."""
         session = self.get_session()
         try:
-            rows = session.query(Download).filter_by(status='waiting', deleted_at=None) \
-                .order_by(Download.queue_position.asc().nulls_last(), Download.id).all()
+            rows = session.query(Download) \
+                .filter(Download.status.in_(QUEUED_STATUSES), Download.deleted_at.is_(None)) \
+                .order_by(Download.status != 'downloading',
+                          Download.queue_position.asc().nulls_last(), Download.id).all()
+            return [d.to_dict() for d in rows]
+        finally:
+            self.close_session()
+
+    def set_queue_positions(self, ordered_message_ids):
+        """Renumber running and waiting downloads 0..n in the given order.
+        Ones missing from the list keep their relative order (running ahead
+        of the list, waiting behind it), so a reorder racing a new arrival
+        can't drop the newcomer out of line.
+        Returns every queued row in its new order."""
+        session = self.get_session()
+        try:
+            rows = session.query(Download) \
+                .filter(Download.status.in_(QUEUED_STATUSES), Download.deleted_at.is_(None)) \
+                .order_by(Download.status != 'downloading',
+                          Download.queue_position.asc().nulls_last(), Download.id).all()
             by_id = {r.message_id: r for r in rows}
-            ordered = [by_id[m] for m in dict.fromkeys(map(str, ordered_message_ids)) if m in by_id]
-            seen = {r.id for r in ordered}
-            ordered += [r for r in rows if r.id not in seen]
+            listed = [by_id[m] for m in dict.fromkeys(map(str, ordered_message_ids)) if m in by_id]
+            seen = {r.id for r in listed}
+            # Unlisted running downloads stay ahead (leaving one out of the
+            # list must not quietly bump it); unlisted waiting ones go behind.
+            ordered = ([r for r in rows if r.id not in seen and r.status == 'downloading']
+                       + listed
+                       + [r for r in rows if r.id not in seen and r.status != 'downloading'])
             for index, row in enumerate(ordered):
                 row.queue_position = index
             session.commit()
@@ -820,7 +847,7 @@ class DatabaseManager:
         try:
             from sqlalchemy import func
             highest = session.query(func.max(Download.queue_position)) \
-                .filter(Download.status == 'waiting', Download.deleted_at.is_(None)).scalar()
+                .filter(Download.status.in_(QUEUED_STATUSES), Download.deleted_at.is_(None)).scalar()
             return 0 if highest is None else highest + 1
         finally:
             self.close_session()

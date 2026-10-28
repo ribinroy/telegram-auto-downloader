@@ -82,83 +82,97 @@ function HiddenNote({ count, verb }: { count: number; verb: string }) {
   );
 }
 
-function RunningRow({ download }: { download: Download }) {
-  const percent = Math.min(100, Math.max(0, download.progress || 0));
-  return (
-    <li className="px-4 py-2">
-      <div className="flex items-center gap-2">
-        <span className="flex-1 min-w-0 truncate text-sm text-slate-200" title={download.file}>{download.file}</span>
-        <SourceChip download={download} />
-        <span className="shrink-0 w-12 text-right text-xs tabular-nums text-cyan-400">{percent.toFixed(0)}%</span>
-      </div>
-      <div className="mt-1.5 flex items-center gap-2">
-        <div className="flex-1 h-1.5 rounded-full bg-slate-700 overflow-hidden">
-          <div className="h-full progress-shimmer transition-[width] duration-300" style={{ width: `${percent}%` }} />
-        </div>
-        <span className="shrink-0 w-20 text-right text-[11px] tabular-nums text-slate-500">
-          {download.speed ? formatSpeed(download.speed) : '—'}
-        </span>
-      </div>
-    </li>
-  );
-}
-
-function WaitingRow({ download, place, onStop }: {
-  download: Download; place: number; onStop: (messageId: string) => void;
+/**
+ * One row of the queue - running and waiting downloads share one sortable
+ * list, so a row can be dragged across the line: a waiting one moved above a
+ * running one takes its slot. `running` is the zone the row sits in, which
+ * after an optimistic reorder can be ahead of the row's own status.
+ */
+function QueueRow({ download, running, place, firstWaiting, onStop }: {
+  download: Download;
+  running: boolean;
+  /** 1-based place in the waiting line (waiting rows only). */
+  place: number | null;
+  /** Draws the line between the downloading and waiting zones. */
+  firstWaiting: boolean;
+  onStop: (messageId: string) => void;
 }) {
   const id = download.message_id as string;
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } =
     useSortable({ id });
   const startNow = useStartQueuedNow();
+  const percent = Math.min(100, Math.max(0, download.progress || 0));
+  const starting = running && download.status !== 'downloading';
 
   return (
     <li
       ref={setNodeRef}
       style={{ transform: CSS.Transform.toString(transform), transition }}
-      className={`flex items-center gap-2 px-3 py-2 ${
+      className={`px-3 py-2 ${
         isDragging
           ? 'relative z-10 rounded-lg bg-slate-700 shadow-xl shadow-black/40 ring-1 ring-cyan-500/40'
           : 'bg-transparent'
-      }`}
+      } ${firstWaiting && !isDragging ? 'border-t-2 border-dashed border-slate-600/70' : ''}`}
     >
-      {/* Only the grip starts a drag, so the row's buttons and scrolling the
-          list on a phone still work normally. */}
-      <button
-        ref={setActivatorNodeRef}
-        {...attributes}
-        {...listeners}
-        aria-label={`Reorder ${download.file}`}
-        className="touch-none cursor-grab active:cursor-grabbing p-1 rounded text-slate-500 hover:text-slate-300 hover:bg-slate-700/50"
-      >
-        <GripVertical className="w-4 h-4" />
-      </button>
-      <span className="w-7 shrink-0 text-xs tabular-nums text-slate-500">#{place}</span>
-      <span className="flex-1 min-w-0 truncate text-sm text-slate-200" title={download.file}>
-        {download.file}
-      </span>
-      <SourceChip download={download} />
-      {download.total_bytes > 0 && (
-        <span className="hidden md:inline shrink-0 w-20 whitespace-nowrap text-right text-xs tabular-nums text-slate-500">
-          {formatBytes(download.total_bytes)}
+      <div className="flex items-center gap-2">
+        {/* Only the grip starts a drag, so the row's buttons and scrolling the
+            list on a phone still work normally. */}
+        <button
+          ref={setActivatorNodeRef}
+          {...attributes}
+          {...listeners}
+          aria-label={`Reorder ${download.file}`}
+          className="touch-none cursor-grab active:cursor-grabbing p-1 rounded text-slate-500 hover:text-slate-300 hover:bg-slate-700/50"
+        >
+          <GripVertical className="w-4 h-4" />
+        </button>
+        {running ? (
+          <span className="w-9 shrink-0 text-xs tabular-nums text-cyan-400">
+            {starting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : `${percent.toFixed(0)}%`}
+          </span>
+        ) : (
+          <span className="w-9 shrink-0 text-xs tabular-nums text-slate-500">#{place}</span>
+        )}
+        <span className={`flex-1 min-w-0 truncate text-sm ${running ? 'text-white' : 'text-slate-300'}`} title={download.file}>
+          {download.file}
         </span>
+        <SourceChip download={download} />
+        {running ? (
+          <span className="hidden sm:inline shrink-0 w-20 whitespace-nowrap text-right text-[11px] tabular-nums text-slate-500">
+            {starting ? 'starting' : download.speed ? formatSpeed(download.speed) : '—'}
+          </span>
+        ) : (
+          <>
+            {download.total_bytes > 0 && (
+              <span className="hidden md:inline shrink-0 w-20 whitespace-nowrap text-right text-xs tabular-nums text-slate-500">
+                {formatBytes(download.total_bytes)}
+              </span>
+            )}
+            <button
+              onClick={() => startNow.mutate(id)}
+              disabled={startNow.isPending}
+              title="Start now (past the limit)"
+              aria-label={`Start ${download.file} now`}
+              className="p-1.5 rounded-lg text-sky-300 hover:bg-sky-500/20 disabled:opacity-50 transition-colors"
+            >
+              {startNow.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+            </button>
+            <button
+              onClick={() => onStop(id)}
+              title="Leave the queue"
+              aria-label={`Remove ${download.file} from the queue`}
+              className="p-1.5 rounded-lg text-slate-500 hover:text-white hover:bg-slate-700/60 transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </>
+        )}
+      </div>
+      {running && (
+        <div className="mt-1.5 ml-9 h-1.5 rounded-full bg-slate-700 overflow-hidden">
+          <div className="h-full progress-shimmer transition-[width] duration-300" style={{ width: `${percent}%` }} />
+        </div>
       )}
-      <button
-        onClick={() => startNow.mutate(id)}
-        disabled={startNow.isPending}
-        title="Start now (past the limit)"
-        aria-label={`Start ${download.file} now`}
-        className="p-1.5 rounded-lg text-sky-300 hover:bg-sky-500/20 disabled:opacity-50 transition-colors"
-      >
-        {startNow.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
-      </button>
-      <button
-        onClick={() => onStop(id)}
-        title="Leave the queue"
-        aria-label={`Remove ${download.file} from the queue`}
-        className="p-1.5 rounded-lg text-slate-500 hover:text-white hover:bg-slate-700/60 transition-colors"
-      >
-        <X className="w-4 h-4" />
-      </button>
     </li>
   );
 }
@@ -199,20 +213,30 @@ function QueueModal({ data, showSecured, onStop, onClose }: {
   const { limits, active, running, waiting, resumable, max_limit: maxLimit } = data;
   const total = active.total + waiting.length;
 
-  // A secured source's names stay out of view like everywhere else; they
-  // still hold their places, so the numbering stays the real order.
-  const visibleRunning = running.filter(d => showSecured || !d.hidden);
-  const visibleWaiting = waiting
-    .map((d, i) => ({ d, place: i + 1 }))
-    .filter(({ d }) => showSecured || !d.hidden);
+  // One line, running first: the top of it runs, the rest waits. A secured
+  // source's names stay out of view like everywhere else; they still hold
+  // their places, so the numbering stays the real order.
+  const line = [
+    ...running.map(d => ({ d, running: true, place: null as number | null })),
+    ...waiting.map((d, i) => ({ d, running: false, place: i + 1 as number | null })),
+  ];
+  const visibleLine = line.filter(({ d }) => showSecured || !d.hidden);
+  const firstWaitingId = visibleLine.find(r => !r.running)?.d.message_id;
+  const hiddenCount = line.length - visibleLine.length;
 
   const onDragEnd = ({ active: dragged, over }: DragEndEvent) => {
     if (!over || dragged.id === over.id) return;
-    const ids = waiting.map(d => d.message_id as string);
+    const ids = line.map(({ d }) => d.message_id as string);
     const from = ids.indexOf(String(dragged.id));
     const to = ids.indexOf(String(over.id));
     if (from < 0 || to < 0) return;
-    reorder.mutate(arrayMove(ids, from, to));
+    setNotice(null);
+    reorder.mutate(arrayMove(ids, from, to), {
+      onSuccess: (res) => {
+        if (res.errors.length) setNotice(`Couldn't send ${res.errors[0].file} back to wait: ${res.errors[0].error}`);
+      },
+      onError: (e) => setNotice((e as Error).message),
+    });
   };
 
   const setCap = (source: QueueSource, value: string) =>
@@ -352,29 +376,28 @@ function QueueModal({ data, showSecured, onStop, onClose }: {
             </div>
           )}
 
-          {active.total > 0 && (
+          {total > 0 && (
             <section>
-              <SectionTitle>Downloading</SectionTitle>
-              <ul className="divide-y divide-slate-700/40">
-                {visibleRunning.map(d => <RunningRow key={d.message_id} download={d} />)}
-              </ul>
-              <HiddenNote count={running.length - visibleRunning.length} verb="downloading" />
-            </section>
-          )}
-
-          {waiting.length > 0 && (
-            <section>
-              <SectionTitle>Waiting · drag to reorder</SectionTitle>
+              <SectionTitle>
+                Downloading{waiting.length > 0 && ' · then waiting'} · drag across the line to swap
+              </SectionTitle>
               <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
-                <SortableContext items={visibleWaiting.map(({ d }) => d.message_id as string)} strategy={verticalListSortingStrategy}>
-                  <ol className="divide-y divide-slate-700/40 px-1">
-                    {visibleWaiting.map(({ d, place }) => (
-                      <WaitingRow key={d.message_id} download={d} place={place} onStop={onStop} />
+                <SortableContext items={visibleLine.map(({ d }) => d.message_id as string)} strategy={verticalListSortingStrategy}>
+                  <ol className="px-1">
+                    {visibleLine.map(({ d, running: isRunning, place }) => (
+                      <QueueRow
+                        key={d.message_id}
+                        download={d}
+                        running={isRunning}
+                        place={place}
+                        firstWaiting={d.message_id === firstWaitingId}
+                        onStop={onStop}
+                      />
                     ))}
                   </ol>
                 </SortableContext>
               </DndContext>
-              <HiddenNote count={waiting.length - visibleWaiting.length} verb="waiting" />
+              <HiddenNote count={hiddenCount} verb="in the queue" />
             </section>
           )}
         </div>

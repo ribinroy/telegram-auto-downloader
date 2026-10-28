@@ -137,8 +137,9 @@ def snapshot():
     queue panel unless secured items are being shown."""
     from backend.web_app import get_web_app
     db = get_db()
-    waiting = db.get_waiting_downloads()
-    running = sorted(db.get_downloads_by_status('downloading'), key=lambda d: d.get('created_at') or '')
+    order = db.get_queue_order()
+    running = [d for d in order if d['status'] == 'downloading']
+    waiting = [d for d in order if d['status'] == 'waiting']
     web = get_web_app()
     if web:
         waiting = web._annotate_downloads(waiting) if waiting else waiting
@@ -172,7 +173,9 @@ def admit(source, create):
             _has_room(source_of(w), counts, limits) and _source_ready(source_of(w))
             for w in get_db().get_waiting_downloads())
         if _has_room(source, counts, limits) and not waiting_fits:
-            return create('downloading', None), True
+            # Running downloads hold a rank too, so a later reorder can put
+            # a waiting one ahead of this one
+            return create('downloading', get_db().next_queue_position()), True
         download = create('waiting', get_db().next_queue_position())
     _notify()
     return download, False
@@ -187,7 +190,9 @@ def admit_existing(download):
     with _lock:
         source = source_of(download)
         if _has_room(source, active_counts(), get_limits()):
-            db.update_download_by_message_id(message_id, status='downloading', speed=0, error=None)
+            db.update_download_by_message_id(
+                message_id, status='downloading', speed=0, error=None,
+                queue_position=db.next_queue_position())
             return 'start'
         db.update_download_by_message_id(
             message_id, status='waiting', speed=0, error=None,
@@ -197,11 +202,50 @@ def admit_existing(download):
     return 'queued'
 
 
-def reorder(ordered_message_ids):
-    """Set the queue order (first starts first)."""
-    get_db().set_queue_positions(ordered_message_ids)
+def _run_set(rows, limits):
+    """Which of `rows` (in queue order) the limits let run: walk the order and
+    take each one that still fits, as pump() does. Running downloads count as
+    ready; a waiting one only if its handler can start it."""
+    counts = {s: 0 for s in SOURCES}
+    counts['total'] = 0
+    chosen = set()
+    for row in rows:
+        source = source_of(row)
+        ready = row['status'] == 'downloading' or _source_ready(source)
+        if ready and _has_room(source, counts, limits):
+            chosen.add(row['message_id'])
+            counts[source] += 1
+            counts['total'] += 1
+    return chosen
+
+
+def reorder(ordered_message_ids, requeue_one=None):
+    """Set the order of the whole line - running downloads included - first
+    to run first.
+
+    Dragging a waiting download above a running one means "this one before
+    that one": the running one goes back to waiting (bytes kept - every
+    handler resumes) and the waiting one takes its slot. Only as many are
+    bumped as waiting ones were promoted, lowest-ranked first, so a download
+    started past the limit with "start now" isn't knocked out by an unrelated
+    reorder. `requeue_one(message_id)` is the route's stop-and-requeue
+    (returns an error or None)."""
+    from concurrent.futures import ThreadPoolExecutor
+    db = get_db()
+    with _lock:
+        rows = db.set_queue_positions(ordered_message_ids)
+        run = _run_set(rows, get_limits())
+        promoted = [r for r in rows if r['status'] == 'waiting' and r['message_id'] in run]
+        outranked = [r for r in rows if r['status'] == 'downloading' and r['message_id'] not in run]
+        bump = list(reversed(outranked))[:len(promoted)] if requeue_one else []
+    errors = []
+    if bump:
+        with ThreadPoolExecutor(max_workers=min(8, len(bump))) as pool:
+            results = list(pool.map(lambda r: (r, requeue_one(r['message_id'])), bump))
+        errors = [{'message_id': r['message_id'], 'file': r['file'], 'error': e} for r, e in results if e]
+    pump()  # fills the freed slots, in the new order
     _notify()
-    return snapshot()
+    return {**snapshot(), 'requeued': len(bump) - len(errors), 'errors': errors}
 
 
 def start_now(message_id):

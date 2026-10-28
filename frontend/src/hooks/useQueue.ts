@@ -50,13 +50,17 @@ export function useReorderQueue() {
   return useMutation({
     mutationFn: (messageIds: string[]) => reorderQueue(messageIds),
     // Apply the new order at once - waiting for the round trip makes a
-    // dropped row snap back to where it was for a moment.
+    // dropped row snap back to where it was for a moment. The ids cover
+    // running and waiting downloads; the top as many as are running now are
+    // shown running (the server's answer then says which really are).
     onMutate: (messageIds) => {
       qc.setQueryData<QueueState>(qk.queue(), old => {
         if (!old) return old;
-        const byId = new Map(old.waiting.map(d => [d.message_id, d]));
+        const all = [...old.running, ...old.waiting];
+        const byId = new Map(all.map(d => [d.message_id, d]));
         const ordered = messageIds.map(id => byId.get(id)).filter(d => d !== undefined);
-        return { ...old, waiting: ordered };
+        const slots = old.running.length;
+        return { ...old, running: ordered.slice(0, slots), waiting: ordered.slice(slots) };
       });
     },
     onSuccess: (state) => qc.setQueryData(qk.queue(), state),
