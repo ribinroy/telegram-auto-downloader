@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Magnet, ArrowDown, ArrowUp, Play, Pause, Trash2, Loader2, Search, X, Check, Sprout, Users, RotateCw,
   Zap,
@@ -15,6 +15,7 @@ import { useDownloadVpsFile } from '../hooks/useVps';
 import { useLayoutContext } from './Layout';
 import type { Download } from '../types';
 import { useErrorToast } from '../lib/notify';
+import { TorrentDetailsModal } from './TorrentDetailsModal';
 
 // Reserved filter values: not statuses the clients report, so they can't collide.
 const FORCED_FILTER = '@forced';
@@ -88,6 +89,9 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
   // Hashes with an action in flight (buttons disabled), and the torrent pending removal.
   const [busy, setBusy] = useState<Set<string>>(new Set());
   const [removeTarget, setRemoveTarget] = useState<TorrentStatus | null>(null);
+  // The torrent whose files/details modal is open
+  const [detailsFor, setDetailsFor] = useState<TorrentStatus | null>(null);
+  const closeDetails = useCallback(() => setDetailsFor(null), []);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [sortBy, setSortBy] = useState<'created' | 'name' | 'status'>('created');
@@ -382,7 +386,13 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
         return (
           <div
             key={t.hash}
-            className={`rounded-xl border bg-slate-800/30 p-3 sm:p-4 transition-colors ${
+            // A click anywhere on the row opens its files and details - except
+            // on the row's own controls, which keep doing what they say
+            onClick={e => {
+              if ((e.target as HTMLElement).closest('button, a, input, select')) return;
+              setDetailsFor(t);
+            }}
+            className={`rounded-xl border bg-slate-800/30 p-3 sm:p-4 transition-colors cursor-pointer hover:border-slate-500/70 ${
               selected.has(t.hash) ? 'border-purple-500/60 bg-purple-500/5' : 'border-slate-700/50'
             }`}
           >
@@ -398,7 +408,13 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
                   {selected.has(t.hash) && <Check className="w-3 h-3 text-white" />}
                 </span>
               </button>
-              <span className="text-sm sm:text-base text-white font-medium truncate min-w-0 flex-1" title={t.name}>{t.name}</span>
+              <button
+                onClick={() => setDetailsFor(t)}
+                title={`${t.name} - show files and details`}
+                className="text-left text-sm sm:text-base text-white font-medium truncate min-w-0 flex-1 hover:text-purple-200 transition-colors"
+              >
+                {t.name}
+              </button>
               <div className="flex items-center gap-2 shrink-0">
                 <span className={`text-xs border rounded-full px-2 py-0.5 ${style.cls}`}>{style.label}</span>
                 {/* DownLee transfer: already pulled, in flight, retryable, or offered. */}
@@ -526,6 +542,10 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
         );
       })}
       </div>
+      )}
+
+      {detailsFor && (
+        <TorrentDetailsModal client={client} hash={detailsFor.hash} name={detailsFor.name} onClose={closeDetails} />
       )}
 
       <ConfirmDialog

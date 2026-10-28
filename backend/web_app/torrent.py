@@ -8,6 +8,7 @@ client and route to the right backend; everything keys torrents by hash so one
 code path drives both."""
 import json
 import posixpath
+import urllib.parse
 from backend.database import get_db
 
 CLIENTS = ("transmission", "qbittorrent")
@@ -276,6 +277,79 @@ def transmission_get(cfg, torrent_hash):
     return _transmission_normalize(torrents[0]) if torrents else None
 
 
+def tracker_host(url):
+    """'udp://tracker.example.org:1337/announce' -> 'tracker.example.org'."""
+    try:
+        return urllib.parse.urlparse(url or '').hostname or url
+    except ValueError:
+        return url
+
+
+def _positive(value):
+    """Clients mark "unknown" with -1 (counts, ratio, dates); report None."""
+    return value if isinstance(value, (int, float)) and value >= 0 else None
+
+
+# Transmission file priority: -1 low, 0 normal, 1 high. An unwanted file is
+# reported as 'skip', which is what qBittorrent's priority 0 means as well.
+_TRANSMISSION_PRIORITY = {-1: 'low', 0: 'normal', 1: 'high'}
+
+
+def transmission_details(cfg, torrent_hash):
+    """One torrent in depth - files, transfer totals, trackers - in the
+    shared shape (see torrent_details), or None if the client doesn't know it."""
+    fields = [
+        "id", "name", "hashString", "status", "percentDone",
+        "rateDownload", "rateUpload", "totalSize", "eta",
+        "downloadDir", "errorString", "addedDate",
+        "peersConnected", "peersSendingToUs", "peersGettingFromUs", "trackerStats",
+        "files", "fileStats", "uploadedEver", "downloadedEver", "uploadRatio",
+        "doneDate", "comment", "isPrivate", "pieceSize", "pieceCount",
+    ]
+    res = transmission_rpc("torrent-get", {"ids": [torrent_hash], "fields": fields}, config=cfg)
+    torrents = res.get("torrents", [])
+    if not torrents:
+        return None
+    t = torrents[0]
+    stats = t.get("fileStats") or []
+    files = []
+    for index, f in enumerate(t.get("files") or []):
+        st = stats[index] if index < len(stats) else {}
+        size = f.get("length") or 0
+        done = f.get("bytesCompleted") or 0
+        wanted = st.get("wanted", True)
+        files.append({
+            "index": index,
+            "path": f.get("name"),
+            "size": size,
+            "downloaded": done,
+            "percent_done": round(done / size * 100, 1) if size else 100.0,
+            "wanted": bool(wanted),
+            "priority": _TRANSMISSION_PRIORITY.get(st.get("priority"), "normal") if wanted else "skip",
+        })
+    return {
+        "torrent": _transmission_normalize(t),
+        "files": files,
+        "info": {
+            "ratio": _positive(t.get("uploadRatio")),
+            "uploaded": t.get("uploadedEver") or 0,
+            "downloaded": t.get("downloadedEver") or 0,
+            "added_date": t.get("addedDate") or None,
+            "done_date": t.get("doneDate") or None,
+            "comment": t.get("comment") or None,
+            "private": bool(t.get("isPrivate")),
+            "piece_size": t.get("pieceSize") or None,
+            "piece_count": t.get("pieceCount") or None,
+            "trackers": [{
+                "host": tracker_host(s.get("announce")),
+                "seeds": _positive(s.get("seederCount")),
+                "leeches": _positive(s.get("leecherCount")),
+                "message": s.get("lastAnnounceResult") or None,
+            } for s in (t.get("trackerStats") or [])],
+        },
+    }
+
+
 def transmission_control(cfg, action, hashes, delete_data=False):
     if action == "verify":
         # Recheck local data, then start — recovers a torrent whose files
@@ -368,6 +442,25 @@ def torrent_get(client, torrent_hash, config=None):
         from backend.web_app.qbittorrent import qbit_get
         return qbit_get(cfg, torrent_hash)
     return transmission_get(cfg, torrent_hash)
+
+
+def torrent_details(client, torrent_hash, config=None):
+    """{torrent, files, info} for one torrent, or None if the client doesn't
+    have it. The same shape from both clients:
+
+    - torrent: the normalized status row (as torrent_list)
+    - files: [{index, path, size, downloaded, percent_done, wanted,
+      priority: skip|low|normal|high|max}] - `path` includes the torrent's
+      own top folder, as both clients report it
+    - info: {ratio, uploaded, downloaded, added_date, done_date (unix s or
+      None), comment, private, piece_size, piece_count,
+      trackers: [{host, seeds, leeches, message}]}
+    """
+    cfg = _resolve(client, config)
+    if client == "qbittorrent":
+        from backend.web_app.qbittorrent import qbit_details
+        return qbit_details(cfg, torrent_hash)
+    return transmission_details(cfg, torrent_hash)
 
 
 def torrent_stats(client, config=None):

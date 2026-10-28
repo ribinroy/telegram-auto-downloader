@@ -17,6 +17,7 @@ from backend.web_app.torrent import (
     CLIENTS, read_torrent_settings, write_torrent_settings, load_torrent_config,
     apply_torrent_session, normalize_transmission_url,
     torrent_test, torrent_add_magnet, torrent_add_file, torrent_list, torrent_control,
+    torrent_details,
     stop_on_complete_enabled,
 )
 from backend.web_app.vps import load_vps_credentials, annotate_vps_folders, open_vps_sftp
@@ -287,6 +288,25 @@ class TorrentRoutesMixin:
             except ValueError as e:
                 return jsonify({"configured": True, "error": str(e)}), 502
             return jsonify({"configured": True, "torrents": _annotate_downlee_transfers(torrents)})
+
+        @self.app.route("/api/torrent/details", methods=["GET"])
+        @token_required
+        def torrent_details_route():
+            """One torrent's files, transfer totals and trackers
+            (?client=...&hash=...). See torrent_details() for the shape."""
+            client = (request.args.get("client") or "transmission").strip()
+            torrent_hash = (request.args.get("hash") or "").strip().lower()
+            if client not in CLIENTS:
+                return jsonify({"error": "Unknown torrent client"}), 400
+            if not torrent_hash:
+                return jsonify({"error": "hash is required"}), 400
+            try:
+                details = torrent_details(client, torrent_hash)
+            except ValueError as e:
+                return jsonify({"error": str(e)}), 502
+            if details is None:
+                return jsonify({"error": "That torrent is no longer in the client"}), 404
+            return jsonify(details)
 
         @self.app.route("/api/torrent/action", methods=["POST"])
         @token_required

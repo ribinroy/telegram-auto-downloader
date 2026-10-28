@@ -199,6 +199,64 @@ def qbit_get(cfg, torrent_hash):
     return _normalize(data[0]) if data else None
 
 
+# qBittorrent file priority: 0 = do not download, 1 normal, 6 high, 7 maximal
+_QBIT_PRIORITY = {0: "skip", 1: "normal", 6: "high", 7: "max"}
+
+
+def qbit_details(cfg, torrent_hash):
+    """One torrent in depth in the shared shape (see torrent_details in
+    web_app/torrent.py), or None if qBittorrent doesn't know it. Four calls on
+    one login: the status row, its properties, its files and its trackers."""
+    from backend.web_app.torrent import tracker_host, _positive
+    opener, base = qbit_login(cfg)
+
+    def get(path):
+        return _qbit_request(cfg, path, expect_json=True, opener=opener, base=base, allow_404=True)
+
+    rows = get(f"/api/v2/torrents/info?hashes={torrent_hash}") or []
+    if not rows:
+        return None
+    props = get(f"/api/v2/torrents/properties?hash={torrent_hash}") or {}
+    files = []
+    for position, f in enumerate(get(f"/api/v2/torrents/files?hash={torrent_hash}") or []):
+        size = f.get("size") or 0
+        progress = f.get("progress") or 0
+        priority = _QBIT_PRIORITY.get(f.get("priority"), "normal")
+        files.append({
+            "index": f.get("index", position),
+            "path": f.get("name"),
+            "size": size,
+            "downloaded": round(size * progress),
+            "percent_done": round(progress * 100, 1),
+            "wanted": priority != "skip",
+            "priority": priority,
+        })
+    trackers = [{
+        "host": tracker_host(tr.get("url")),
+        "seeds": _positive(tr.get("num_seeds")),
+        "leeches": _positive(tr.get("num_leeches")),
+        "message": tr.get("msg") or None,
+    } for tr in (get(f"/api/v2/torrents/trackers?hash={torrent_hash}") or [])
+        # "** [DHT] **", "** [PeX] **", "** [LSD] **" are peer sources, not trackers
+        if not (tr.get("url") or "").startswith("** [")]
+    return {
+        "torrent": _normalize(rows[0]),
+        "files": files,
+        "info": {
+            "ratio": _positive(props.get("share_ratio")),
+            "uploaded": props.get("total_uploaded") or 0,
+            "downloaded": props.get("total_downloaded") or 0,
+            "added_date": _positive(props.get("addition_date")) or None,
+            "done_date": _positive(props.get("completion_date")) or None,
+            "comment": props.get("comment") or None,
+            "private": bool(props.get("is_private")),
+            "piece_size": props.get("piece_size") or None,
+            "piece_count": props.get("pieces_num") or None,
+            "trackers": trackers,
+        },
+    }
+
+
 def qbit_stats(cfg):
     """Global transfer counters in the shared stats shape.
 

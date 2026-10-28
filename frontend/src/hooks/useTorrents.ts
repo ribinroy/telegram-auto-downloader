@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  fetchTorrentConfig, fetchTorrentList, saveTorrentConfig, deleteTorrentConfig,
+  fetchTorrentConfig, fetchTorrentList, fetchTorrentDetails, saveTorrentConfig, deleteTorrentConfig,
   testTorrentConnection, setTelegramDefault, torrentAction, addTorrent, addTorrentFile,
   setStopOnComplete,
   type TorrentClient, type TorrentActionName,
@@ -18,6 +18,18 @@ export function useTorrentList(client: TorrentClient, enabled = true) {
     queryFn: () => fetchTorrentList(client),
     enabled,
     refetchInterval: 20_000,
+  });
+}
+
+/** One torrent's files and details, while its modal is open. Refreshes every
+ *  5s until it is complete - after that nothing on it moves. */
+export function useTorrentDetails(client: TorrentClient, hash: string | null) {
+  return useQuery({
+    queryKey: qk.torrentDetails(client, hash ?? ''),
+    queryFn: () => fetchTorrentDetails(client, hash as string),
+    enabled: !!hash,
+    staleTime: 0,
+    refetchInterval: (query) => (query.state.data && query.state.data.torrent.percent_done >= 100 ? false : 5_000),
   });
 }
 

@@ -954,6 +954,42 @@ export interface TorrentStatus {
   downlee: { id: number; message_id: string | null; status: string | null; progress: number } | null;
 }
 
+export interface TorrentFile {
+  index: number;
+  /** As the client reports it - includes the torrent's own top folder. */
+  path: string;
+  size: number;
+  downloaded: number;
+  percent_done: number;
+  wanted: boolean;
+  priority: 'skip' | 'low' | 'normal' | 'high' | 'max';
+}
+
+export interface TorrentDetails {
+  torrent: TorrentStatus;
+  files: TorrentFile[];
+  info: {
+    ratio: number | null;
+    uploaded: number;
+    downloaded: number;
+    /** Unix seconds, or null when the client doesn't know. */
+    added_date: number | null;
+    done_date: number | null;
+    comment: string | null;
+    private: boolean;
+    piece_size: number | null;
+    piece_count: number | null;
+    trackers: { host: string; seeds: number | null; leeches: number | null; message: string | null }[];
+  };
+}
+
+export async function fetchTorrentDetails(client: TorrentClient, hash: string): Promise<TorrentDetails> {
+  const response = await authFetch(`/api/torrent/details?client=${client}&hash=${encodeURIComponent(hash)}`);
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.error || 'Failed to load the torrent');
+  return body as TorrentDetails;
+}
+
 export async function fetchTorrentList(client: TorrentClient): Promise<{ configured: boolean; torrents?: TorrentStatus[]; error?: string }> {
   const response = await authFetch(`/api/torrent/list?client=${client}`);
   if (response.status === 401) { clearToken(); window.location.reload(); }

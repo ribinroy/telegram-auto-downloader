@@ -190,3 +190,69 @@ def test_stop_on_complete_defaults_to_on():
 ])
 def test_transmission_urls_normalize_to_the_rpc_endpoint(given, expected):
     assert tor.normalize_transmission_url(given) == expected
+
+
+# --- torrent details (files, totals, trackers) -------------------------------
+
+def test_transmission_details_reports_files_priorities_and_trackers(monkeypatch):
+    def fake_rpc(method, arguments=None, config=None, timeout=20):
+        assert method == 'torrent-get' and arguments['ids'] == ['abc']
+        return {'torrents': [{
+            'hashString': 'abc', 'name': 'Show S01', 'status': 4, 'percentDone': 0.5,
+            'totalSize': 300, 'uploadRatio': -1, 'uploadedEver': 10, 'downloadedEver': 150,
+            'addedDate': 1700000000, 'doneDate': 0, 'isPrivate': True,
+            'pieceSize': 16384, 'pieceCount': 20,
+            'files': [{'name': 'Show S01/e01.mkv', 'length': 200, 'bytesCompleted': 150},
+                      {'name': 'Show S01/sample.mkv', 'length': 100, 'bytesCompleted': 0},
+                      {'name': 'Show S01/empty.nfo', 'length': 0, 'bytesCompleted': 0}],
+            'fileStats': [{'wanted': True, 'priority': 1},
+                          {'wanted': False, 'priority': 0},
+                          {'wanted': True, 'priority': -1}],
+            'trackerStats': [{'announce': 'udp://tracker.example.org:1337/announce',
+                              'seederCount': 12, 'leecherCount': -1, 'lastAnnounceResult': 'Success'}],
+        }]}
+    monkeypatch.setattr(tor, 'transmission_rpc', fake_rpc)
+    d = tor.torrent_details('transmission', 'abc', config={'url': 'x'})
+    assert d['torrent']['name'] == 'Show S01'
+    assert [(f['path'], f['percent_done'], f['priority']) for f in d['files']] == [
+        ('Show S01/e01.mkv', 75.0, 'high'),
+        ('Show S01/sample.mkv', 0.0, 'skip'),     # unwanted reads as skip
+        ('Show S01/empty.nfo', 100.0, 'low'),     # a zero-byte file is complete
+    ]
+    info = d['info']
+    assert info['ratio'] is None and info['done_date'] is None   # -1 / 0 mean "unknown"
+    assert info['private'] is True
+    assert info['trackers'] == [{'host': 'tracker.example.org', 'seeds': 12, 'leeches': None, 'message': 'Success'}]
+
+
+def test_transmission_details_of_an_unknown_hash_is_none(monkeypatch):
+    monkeypatch.setattr(tor, 'transmission_rpc', lambda *a, **k: {'torrents': []})
+    assert tor.torrent_details('transmission', 'nope', config={'url': 'x'}) is None
+
+
+def test_qbit_details_skips_peer_sources_and_maps_priorities(monkeypatch):
+    from backend.web_app import qbittorrent as qb
+    monkeypatch.setattr(qb, 'qbit_login', lambda cfg, timeout=20: (None, 'http://q'))
+    replies = {
+        'info': [{'hash': 'abc', 'name': 'Movie', 'state': 'downloading', 'progress': 0.25, 'size': 400}],
+        'properties': {'share_ratio': 0.5, 'total_uploaded': 50, 'total_downloaded': 100,
+                       'addition_date': 1700000000, 'completion_date': -1, 'pieces_num': 8,
+                       'piece_size': 65536, 'comment': 'hi'},
+        'files': [{'index': 0, 'name': 'Movie/movie.mkv', 'size': 400, 'progress': 0.25, 'priority': 7},
+                  {'index': 1, 'name': 'Movie/extras.mkv', 'size': 100, 'progress': 0, 'priority': 0}],
+        'trackers': [{'url': '** [DHT] **', 'num_seeds': 0},
+                     {'url': 'https://t.example.net/announce', 'num_seeds': 3, 'num_leeches': 4, 'msg': ''}],
+    }
+    monkeypatch.setattr(qb, '_qbit_request', lambda cfg, path, **k: replies[path.split('/')[-1].split('?')[0]])
+    d = tor.torrent_details('qbittorrent', 'abc', config={'url': 'x'})
+    assert [(f['priority'], f['wanted'], f['downloaded']) for f in d['files']] == [('max', True, 100), ('skip', False, 0)]
+    assert d['info']['done_date'] is None and d['info']['ratio'] == 0.5
+    assert d['info']['trackers'] == [{'host': 't.example.net', 'seeds': 3, 'leeches': 4, 'message': None}]
+
+
+def test_details_route_validates_and_404s(client, auth, monkeypatch):
+    from backend.web_app.routes import torrent as route
+    assert client.get('/api/torrent/details?client=nope&hash=a', headers=auth).status_code == 400
+    assert client.get('/api/torrent/details?client=transmission', headers=auth).status_code == 400
+    monkeypatch.setattr(route, 'torrent_details', lambda client, h: None)
+    assert client.get('/api/torrent/details?client=transmission&hash=ABC', headers=auth).status_code == 404
