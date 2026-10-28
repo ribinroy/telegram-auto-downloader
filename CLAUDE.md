@@ -20,6 +20,7 @@ Main Thread
   |- Event loop thread (daemon) ..... asyncio loop for yt-dlp subprocesses
   |- VPS threads (daemon) ........... one thread per SFTP transfer + hourly autoSync loop
   |- Job scheduler (daemon) ......... fires due maintenance jobs (backend/jobs.py)
+  |- Download queue (daemon) ........ starts waiting downloads as slots free (backend/download_queue.py)
   |- Network watchdog (daemon) ...... resumes downloads the uplink interrupted
   |- Torrent watcher (daemon) ....... stops completed torrents from seeding
   '- Telegram thread (blocking) ..... Telethon client.start() - blocks main thread
@@ -85,6 +86,7 @@ Main Thread
 |  |- netwatch.py                   # Connectivity probe + stall sweep -> resumes interrupted downloads
 |  |- torrent_watch.py              # Polls the torrent clients; stops finished torrents from seeding
 |  |- resume.py                     # Single resume path shared by /api/retry and the watchdog
+|  |- download_queue.py             # Concurrency limits + the waiting line (QueueRunner thread)
 |  |- file_meta.py                  # Video metadata extraction (ffprobe)
 |  |- browser_downloader.py         # Playwright fallback for yt-dlp
 |  '- metrics/__init__.py           # Prometheus counters
@@ -139,6 +141,7 @@ Main Thread
 - `thumb_count`, `status_msg_id`
 - `dest_base` (destination folder a VPS transfer was started with, when it isn't derivable from the source spec - e.g. a torrent client's `local_dir`; a resume reads it back so it can't restart into the wrong folder)
 - `deleted_at` (soft delete), `file_deleted` (physical file removed)
+- `queue_position` (place in the download queue while `status = 'waiting'`; cleared by any status change away from waiting), `format_id` (the yt-dlp format picked, so a queued or resumed download fetches that quality)
 - `created_at`, `updated_at`
 
 **`settings`** - Key-value store (VPS connection, torrent client config, etc.; secrets Fernet-encrypted)
@@ -200,6 +203,12 @@ Access/refresh token pair. Access tokens are short (`ACCESS_TOKEN_MINUTES`, defa
 - `POST /api/stop` - Stop active download
 - `POST /api/pause` / `POST /api/resume` - Telegram only
 - `POST /api/delete` - Soft delete
+
+### Download Queue
+- `GET /api/queue` - `{limits, max_limit, active: {total, telegram, ytdlp, vps}, waiting: [download...]}` (waiting carries `hidden`)
+- `PUT /api/queue/limits` - any of `{global, telegram, ytdlp, vps}`; a per-source `null` removes that cap
+- `POST /api/queue/reorder` - `{message_ids}`, first to start first
+- `POST /api/queue/start-now` - `{message_id}`, past the limits
 
 ### Rename Rules
 - `GET/POST /api/settings/rename-rules`, `PUT/DELETE /api/settings/rename-rules/<id>`, `POST .../reorder`
@@ -329,6 +338,7 @@ Live filesystem access - every call reads the disk, nothing is indexed or cached
   - `{message_id, status, error?}`
 - `download:deleted` - Soft delete notification
 - `stats` - Updated aggregate stats
+- `queue:changed` - Limits, order or the waiting line changed (no payload; the page refetches `/api/queue`)
 
 ## Configuration
 
@@ -400,6 +410,45 @@ the transfer sits at 47% forever. That is what "the downloads look paused" is.
   transport sets a 30s keepalive, yt-dlp runs with `--socket-timeout 30` plus
   explicit retries, and the Telegram per-attempt backoff grew from a flat 5s to
   5/10/20/40/60s so `MAX_RETRIES` isn't burnt inside half a minute.
+
+## Download Queue
+
+Local downloads (Telegram, yt-dlp, VPS->home SFTP - not torrents, which run on
+the VPS) are capped: a **global limit** (default 3) plus an optional **cap per
+source**, kept in the `download_limits` setting. `backend/download_queue.py`
+owns all of it.
+
+- **There is no queue table.** The queue is the `waiting` rows of `downloads`
+  ordered by `queue_position`. `_apply_download_update()` in the database layer
+  clears the position whenever a row's status moves away from `waiting`, so
+  stop, delete, retry and a handler starting it can never leave a stale place
+  in line holding a slot.
+- **Admission is atomic with record creation.** Each handler's start path calls
+  `admit(source, create)`, which decides running-or-waiting and creates the row
+  under one lock - otherwise two arrivals at once both take the last slot. A
+  newcomer also doesn't jump a waiting download that could take the slot.
+- **Starting a waiting download is a resume** (`resume_download(...,
+  count_retry=False)`), the same path as the retry button and the watchdog -
+  Telegram re-fetches the message, yt-dlp uses the stored `format_id`, VPS the
+  stored `dest_base`. A queued Telegram download replies "⏳ Waiting (#n in
+  queue)" in the chat; that becomes the status message the restart edits.
+- **A full source cap skips, it doesn't block**: the runner walks the line in
+  order and starts the first download that fits, so a VPS cap of 1 doesn't
+  hold a Telegram download behind a waiting VPS pull. A handler that isn't
+  ready (Telethon still connecting) is skipped the same way rather than failing
+  its downloads; one that refuses a start fails it with a reason.
+- `QueueRunner` ticks every 3s (a download ends in a dozen places across three
+  handlers; polling beats hooking them all) and `kick()` wakes it at once after
+  stop/pause/delete/limit changes. Lowering a limit never stops a running
+  download. `/api/retry` and Telegram `/api/resume` go through
+  `admit_existing()`, so with no free slot they join the back of the line.
+- UI: `components/DownloadQueue.tsx` above the downloads list, shown while
+  anything runs or waits: an "At once" stepper, per-source caps behind the
+  sliders button, and the waiting line - drag the grip to reorder (@dnd-kit,
+  pointer + keyboard; only the grip drags, so a phone can still scroll), ⚡ to
+  start now, ✕ to leave the queue. Secured sources' waiting items are counted,
+  not named, unless secured items are shown. List rows show "Waiting · #n",
+  read live from the queue query (`useQueuePlace`).
 
 ## Download Flow
 

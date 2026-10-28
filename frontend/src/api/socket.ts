@@ -36,6 +36,8 @@ export interface SocketHandlers {
   onDeleted: (data: DeletedUpdate) => void;
   onMeta: (data: MetaUpdate) => void;
   onStats: (data: Stats) => void;
+  /** The download queue changed (limits, order, or who is waiting). */
+  onQueueChanged?: () => void;
   onConnect: () => void;
   onDisconnect: () => void;
 }
@@ -69,6 +71,7 @@ export function connectSocket(handlers: SocketHandlers): Socket {
   socket.on('download:deleted', handlers.onDeleted);
   socket.on('download:meta', handlers.onMeta);
   socket.on('stats', handlers.onStats);
+  if (handlers.onQueueChanged) socket.on('queue:changed', handlers.onQueueChanged);
 
   socket.on('connect_error', (error) => {
     console.error('WebSocket connection error:', error);

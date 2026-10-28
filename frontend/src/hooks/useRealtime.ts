@@ -44,12 +44,19 @@ export function useRealtime(cb: RealtimeCallbacks = {}) {
     const mergeById = (messageId: string, patch: Partial<Download>) =>
       patchDownloads(list => list.map(d => (d.message_id === messageId ? { ...d, ...patch } : d)));
 
+    // Any download starting, finishing or arriving can move the queue
+    const refreshQueue = () => qc.invalidateQueries({ queryKey: qk.queue() });
+
     connectSocket({
       onNew: (download) => {
+        refreshQueue();
         patchDownloads(list => (list.some(d => d.message_id === download.message_id) ? list : [download, ...list]));
         onNewDownload?.(download);
       },
-      onDeleted: ({ message_id }) => patchDownloads(list => list.filter(d => d.message_id !== message_id)),
+      onDeleted: ({ message_id }) => {
+        patchDownloads(list => list.filter(d => d.message_id !== message_id));
+        refreshQueue();
+      },
       onProgress: (p) => mergeById(p.message_id, {
         progress: p.progress,
         downloaded_bytes: p.downloaded_bytes,
@@ -60,14 +67,17 @@ export function useRealtime(cb: RealtimeCallbacks = {}) {
       onStatus: (s) => {
         const dl = findDownload(s.message_id);
         mergeById(s.message_id, { status: s.status, error: s.error || null, speed: 0 });
+        refreshQueue();
         onStatusChange?.(s, dl);
       },
       onMeta: (m) => mergeById(m.message_id, { file_meta: m.file_meta }),
       onStats: (stats) => qc.setQueryData(qk.stats(), stats),
+      onQueueChanged: refreshQueue,
       onConnect: () => {
         onConnectedChange?.(true);
         qc.invalidateQueries({ queryKey: ['downloads'] });
         qc.invalidateQueries({ queryKey: qk.stats() });
+        refreshQueue();
       },
       onDisconnect: () => onConnectedChange?.(false),
     });

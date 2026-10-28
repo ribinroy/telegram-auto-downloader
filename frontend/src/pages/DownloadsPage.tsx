@@ -5,6 +5,7 @@ import { useLayoutContext } from '../components/Layout';
 import { ROUTES } from '../routes';
 import { DownloadItem } from '../components/DownloadItem';
 import { AddUrlModal } from '../components/AddUrlModal';
+import { DownloadQueue } from '../components/DownloadQueue';
 import type { SortBy, SortOrder } from '../api';
 
 export const isTorrentFile = (f: File) =>
@@ -18,7 +19,7 @@ export function DownloadsPage() {
     authors, selectedAuthor, setSelectedAuthor,
     loadMore, onRetry, onStop, onPause, onResume, onDelete,
     addUrlOpen, setAddUrlOpen, pastedUrl, setPastedUrl,
-    vpsReady,
+    vpsReady, showSecured,
   } = useLayoutContext();
 
   const navigate = useNavigate();
@@ -235,6 +236,9 @@ export function DownloadsPage() {
             </select>
           </div>
         </div>
+
+        {/* Download queue - limits and the waiting line, while anything runs */}
+        <DownloadQueue showSecured={showSecured} onStop={onStop} />
 
         {/* Error */}
         {error && (

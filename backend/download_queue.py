@@ -130,12 +130,21 @@ def _source_ready(source):
 
 
 def snapshot():
-    """The queue as the UI shows it: limits, what is running, who waits."""
+    """The queue as the UI shows it: limits, what is running, who waits.
+
+    Waiting downloads carry the computed `hidden` flag like the downloads
+    list does, so the page can keep a secured source's filenames out of the
+    queue panel unless secured items are being shown."""
+    from backend.web_app import get_web_app
+    waiting = get_db().get_waiting_downloads()
+    web = get_web_app()
+    if web and waiting:
+        waiting = web._annotate_downloads(waiting)
     return {
         'limits': get_limits(),
         'max_limit': MAX_LIMIT,
         'active': active_counts(),
-        'waiting': get_db().get_waiting_downloads(),
+        'waiting': waiting,
     }
 
 

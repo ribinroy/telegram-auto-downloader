@@ -16,10 +16,14 @@ import {
   User,
   Image,
   EyeOff,
-  FolderOpen
+  FolderOpen,
+  Clock,
+  Zap,
+  X
 } from 'lucide-react';
 import ReactTimeAgo from 'react-time-ago';
 import { useNavigate } from 'react-router-dom';
+import { useQueuePlace, useStartQueuedNow } from '../hooks/useQueue';
 import type { Download } from '../types';
 import { ROUTES } from '../routes';
 import { formatBytes, formatTime, formatSpeed } from '../utils/format';
@@ -185,6 +189,8 @@ function getStatusIcon(status: Download['status']) {
       return <StopCircle className="w-4 h-4 text-yellow-400" />;
     case 'paused':
       return <Pause className="w-4 h-4 text-amber-400" />;
+    case 'waiting':
+      return <Clock className="w-4 h-4 text-sky-300" />;
   }
 }
 
@@ -200,7 +206,15 @@ function getStatusColor(status: Download['status']) {
       return 'text-yellow-400';
     case 'paused':
       return 'text-amber-400';
+    case 'waiting':
+      return 'text-sky-300';
   }
+}
+
+/** "Waiting · #2" for a queued download, else the status itself. */
+function statusLabel(status: Download['status'], queuePlace: number | null) {
+  if (status === 'waiting') return queuePlace ? `Waiting · #${queuePlace}` : 'Waiting';
+  return status;
 }
 
 function parseAuthor(author: string | null): { displayName: string; tooltip: string } {
@@ -233,6 +247,8 @@ export function DownloadItem({ download, onRetry, onStop, onPause, onResume, onD
 
   const isTelegram = download.downloaded_from === 'telegram';
   const navigate = useNavigate();
+  const queuePlace = useQueuePlace(download.status === 'waiting' ? download.message_id : null);
+  const startNowMut = useStartQueuedNow();
 
   // Icon/tooltip only - what the button actually does is decided by the server's
   // check, since the record doesn't say whether the item is a file or a folder.
@@ -523,7 +539,7 @@ export function DownloadItem({ download, onRetry, onStop, onPause, onResume, onD
                 <div className="flex items-center gap-1 px-1.5 py-0.5 bg-slate-700/30 rounded">
                   {getStatusIcon(download.status)}
                   <span className={`text-xs capitalize ${getStatusColor(download.status)}`}>
-                    {download.status}
+                    {statusLabel(download.status, queuePlace)}
                   </span>
                 </div>
               )}
@@ -617,7 +633,7 @@ export function DownloadItem({ download, onRetry, onStop, onPause, onResume, onD
               <div className="flex items-center gap-1.5 px-2 py-1 bg-slate-700/30 rounded-lg">
                 {getStatusIcon(download.status)}
                 <span className={`text-sm capitalize ${getStatusColor(download.status)}`}>
-                  {download.status}
+                  {statusLabel(download.status, queuePlace)}
                 </span>
               </div>
             )}
@@ -650,6 +666,34 @@ export function DownloadItem({ download, onRetry, onStop, onPause, onResume, onD
 
             {/* Action buttons */}
             <div className="flex gap-2">
+              {/* Waiting in the download queue: jump it, or take it out */}
+              {download.status === 'waiting' && (
+                <>
+                  <div className="group relative">
+                    <button
+                      onClick={() => download.message_id && startNowMut.mutate(download.message_id)}
+                      disabled={startNowMut.isPending}
+                      className="p-2 bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 rounded-lg transition-colors disabled:opacity-50"
+                    >
+                      {startNowMut.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+                    </button>
+                    <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
+                      Start now
+                    </div>
+                  </div>
+                  <div className="group relative">
+                    <button
+                      onClick={() => download.message_id && onStop(download.message_id)}
+                      className="p-2 bg-slate-600/30 hover:bg-slate-600/50 text-slate-300 rounded-lg transition-colors"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                    <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
+                      Leave queue
+                    </div>
+                  </div>
+                </>
+              )}
               {/* For non-telegram: show play button when stopped/failed to resume */}
               {!isTelegram && (download.status === 'failed' || download.status === 'stopped') && (
                 <div className="group relative">
@@ -883,6 +927,25 @@ export function DownloadItem({ download, onRetry, onStop, onPause, onResume, onD
                   <FolderOpen className="w-4 h-4" />
                 )}
               </button>
+            )}
+            {download.status === 'waiting' && (
+              <>
+                <button
+                  onClick={() => download.message_id && startNowMut.mutate(download.message_id)}
+                  disabled={startNowMut.isPending}
+                  aria-label="Start now"
+                  className="p-1.5 bg-sky-500/20 text-sky-300 rounded-lg disabled:opacity-50"
+                >
+                  {startNowMut.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+                </button>
+                <button
+                  onClick={() => download.message_id && onStop(download.message_id)}
+                  aria-label="Leave queue"
+                  className="p-1.5 bg-slate-600/30 text-slate-300 rounded-lg"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </>
             )}
             {/* Resume/Retry button */}
             {!isTelegram && (download.status === 'failed' || download.status === 'stopped') && (
