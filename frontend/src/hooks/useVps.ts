@@ -65,8 +65,13 @@ export function useAddVpsFolders() {
 export function useDeleteVpsFolder() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: number) => deleteVpsFolder(id),
-    onSuccess: (folders) => { qc.setQueryData(qk.vpsFolders(), folders); qc.invalidateQueries({ queryKey: ['vps', 'files'] }); },
+    mutationFn: (vars: { id: number; confirmUnhide?: boolean }) => deleteVpsFolder(vars.id, vars.confirmUnhide),
+    onSuccess: (folders) => {
+      qc.setQueryData(qk.vpsFolders(), folders);
+      qc.invalidateQueries({ queryKey: ['vps', 'files'] });
+      // Removing a secured folder can unhide downloads in the main list
+      qc.invalidateQueries({ queryKey: ['downloads'] });
+    },
   });
 }
 

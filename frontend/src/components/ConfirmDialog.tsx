@@ -80,7 +80,7 @@ export function ConfirmDialog({
             </div>
             <div className="flex-1 min-w-0">
               <h3 className="text-base sm:text-lg font-semibold text-white mb-1">{title}</h3>
-              <p className="text-slate-400 text-sm break-words">{message}</p>
+              <p className="text-slate-400 text-sm break-words whitespace-pre-line">{message}</p>
             </div>
           </div>
         </div>

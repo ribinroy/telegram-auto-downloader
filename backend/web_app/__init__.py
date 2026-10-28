@@ -123,16 +123,20 @@ class WebApp(
         def handle_disconnect():
             print("Client disconnected")
 
-    def _annotate_downloads(self, downloads):
+    def _annotate_downloads(self, downloads, vps_folders=None):
         """Stamp each download with computed `hidden` and `dest_folder` from
         the per-source mappings and per-VPS-watchfolder specs. Computed at
-        query time so spec changes apply to existing downloads too."""
+        query time so spec changes apply to existing downloads too.
+
+        `vps_folders` overrides the watched folders consulted - used to ask
+        "what would be hidden without this folder" before removing one."""
         db = get_db()
         maps = {m['downloaded_from']: m for m in db.get_all_download_type_maps()}
-        vps_folders = (
-            db.get_vps_watch_folders()
-            if any(d.get('downloaded_from') == 'vps' for d in downloads) else []
-        )
+        if vps_folders is None:
+            vps_folders = (
+                db.get_vps_watch_folders()
+                if any(d.get('downloaded_from') == 'vps' for d in downloads) else []
+            )
         for d in downloads:
             source = d.get('downloaded_from') or 'telegram'
             mapping = maps.get(source, {})

@@ -324,6 +324,8 @@ class VpsWatchFolder(Base):
     folder = Column(String(255), nullable=True)
     is_secured = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
+    # Soft delete: a removed folder is kept (with its specs) rather than erased
+    deleted_at = Column(DateTime, nullable=True)
 
     def to_dict(self):
         return {
@@ -465,6 +467,9 @@ class DatabaseManager:
                     conn.commit()
                 if 'is_secured' not in vps_columns:
                     conn.execute(text('ALTER TABLE vps_watch_folders ADD COLUMN is_secured BOOLEAN DEFAULT FALSE'))
+                    conn.commit()
+                if 'deleted_at' not in vps_columns:
+                    conn.execute(text('ALTER TABLE vps_watch_folders ADD COLUMN deleted_at TIMESTAMP'))
                     conn.commit()
 
         # One-time reverse migration: fold the retired labels system back into
@@ -1317,10 +1322,11 @@ class DatabaseManager:
 
     # --- VPS watch folders ---
     def get_vps_watch_folders(self):
-        """Return all watched VPS folders, ordered by path."""
+        """Return all (non-deleted) watched VPS folders, ordered by path."""
         session = self.get_session()
         try:
-            folders = session.query(VpsWatchFolder).order_by(VpsWatchFolder.path).all()
+            folders = session.query(VpsWatchFolder).filter_by(deleted_at=None) \
+                .order_by(VpsWatchFolder.path).all()
             return [f.to_dict() for f in folders]
         finally:
             self.close_session()
@@ -1331,7 +1337,7 @@ class DatabaseManager:
         session = self.get_session()
         try:
             existing = session.query(VpsWatchFolder).filter_by(
-                path=path, host=host, username=username
+                path=path, host=host, username=username, deleted_at=None
             ).first()
             if existing:
                 return existing.to_dict()
@@ -1343,13 +1349,14 @@ class DatabaseManager:
             self.close_session()
 
     def delete_vps_watch_folder(self, folder_id: int):
-        """Delete a watched folder by id. Returns True if deleted."""
+        """Soft-delete a watched folder by id (stamps deleted_at; the row and
+        its specs are kept). Returns True if deleted."""
         session = self.get_session()
         try:
-            folder = session.query(VpsWatchFolder).filter_by(id=folder_id).first()
+            folder = session.query(VpsWatchFolder).filter_by(id=folder_id, deleted_at=None).first()
             if not folder:
                 return False
-            session.delete(folder)
+            folder.deleted_at = datetime.utcnow()
             session.commit()
             return True
         finally:
@@ -1359,7 +1366,7 @@ class DatabaseManager:
         """Backfill the VPS connection on a watched folder (for legacy rows)."""
         session = self.get_session()
         try:
-            folder = session.query(VpsWatchFolder).filter_by(id=folder_id).first()
+            folder = session.query(VpsWatchFolder).filter_by(id=folder_id, deleted_at=None).first()
             if not folder:
                 return None
             folder.host = host
@@ -1375,7 +1382,7 @@ class DatabaseManager:
         Returns its dict, or None if missing."""
         session = self.get_session()
         try:
-            folder = session.query(VpsWatchFolder).filter_by(id=folder_id).first()
+            folder = session.query(VpsWatchFolder).filter_by(id=folder_id, deleted_at=None).first()
             if not folder:
                 return None
             if 'auto_sync' in kwargs:
@@ -1396,7 +1403,7 @@ class DatabaseManager:
         session = self.get_session()
         try:
             best, best_len = None, -1
-            for f in session.query(VpsWatchFolder).all():
+            for f in session.query(VpsWatchFolder).filter_by(deleted_at=None).all():
                 base = (f.path or '').rstrip('/')
                 if not base:
                     continue

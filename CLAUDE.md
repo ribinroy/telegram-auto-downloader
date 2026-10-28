@@ -150,6 +150,7 @@ Main Thread
 **`vps_watch_folders`** - Watched VPS folders
 - `id` (PK), `path` (remote), `host`/`port`/`username` (owning connection)
 - `auto_sync` (hourly auto-download of new files), `folder` (local destination), `is_secured`
+- `deleted_at` (soft delete: removal stamps it, every query filters it out; re-adding a path creates a fresh row)
 
 **`rename_rules`** - Filename rewrite rules
 - `id` (PK), `name`, `pattern` (regex), `replacement`, `enabled`, `position` (lower runs first)
@@ -211,6 +212,7 @@ Access/refresh token pair. Access tokens are short (`ACCESS_TOKEN_MINUTES`, defa
 - `POST /api/settings/vps/test` - Test SSH connection
 - `POST /api/settings/vps/browse` / `POST /api/settings/local/browse` - Remote/local folder listing
 - `GET/POST /api/settings/vps/folders`, `PATCH/DELETE /api/settings/vps/folders/<id>` - Watched folders (PATCH: `auto_sync`, `folder`, `is_secured`)
+- `GET /api/settings/vps/folders/<id>/delete-impact` - `{count, sample}` of downloads hidden only by this folder. `DELETE` refuses with 409 + `unhide` while that count is non-zero unless `?confirm_unhide=1`; the Settings dialog shows the impact and sends the flag once the user confirms
 - `GET /api/vps/files` - Live listing of watched folders
 - `GET /api/vps/usage` - Seedbox usage, cached 60s (`?refresh=1` bypasses). Two different things, which the UI must not blur: **the account** (`disk` - the per-user `quota -w` figure a seedbox actually bills against, falling back to `df` when no quota is set; `traffic`/`clients` - the torrent clients' own cumulative counters) and **the shared machine** (`server.volume`/`load`/`net`, every tenant combined). Per-account traffic is not exposed on a seedhost box at all (no vnstat, no accounting file), so the client counters are the closest honest substitute and are labelled as such. One SSH session runs every probe (`vps_usage_snapshot()` in `web_app/vps.py`, marker-split output). `net` counters are since boot, so `rx_rate`/`tx_rate` come from the delta against the previous poll - absent on the first call, and skipped if the counters went backwards (reboot) or the window is under 5s. UI: `components/VpsUsageBar.tsx`, a strip above the VPS page tabs - quota bar + up/down totals, with the per-client split and the muted server-health row behind a chevron.
 - `POST /api/vps/download` - Download a file/directory to the home server

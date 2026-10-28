@@ -1039,8 +1039,27 @@ export async function addVpsFolders(paths: string[]): Promise<VpsWatchFolder[]> 
   return data.folders || [];
 }
 
-export async function deleteVpsFolder(id: number): Promise<VpsWatchFolder[]> {
-  const response = await authFetch(`/api/settings/vps/folders/${id}`, {
+/** Downloads that are hidden now and would show in the default listing once
+ *  this watched folder is removed. */
+export interface VpsFolderUnhideImpact {
+  count: number;
+  sample: string[];
+}
+
+export async function fetchVpsFolderDeleteImpact(id: number): Promise<VpsFolderUnhideImpact> {
+  const response = await authFetch(`/api/settings/vps/folders/${id}/delete-impact`);
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || 'Failed to check folder');
+  return data;
+}
+
+export async function deleteVpsFolder(id: number, confirmUnhide = false): Promise<VpsWatchFolder[]> {
+  const qs = confirmUnhide ? '?confirm_unhide=1' : '';
+  const response = await authFetch(`/api/settings/vps/folders/${id}${qs}`, {
     method: 'DELETE',
   });
   if (response.status === 401) {
@@ -1048,6 +1067,7 @@ export async function deleteVpsFolder(id: number): Promise<VpsWatchFolder[]> {
     window.location.reload();
   }
   const data = await response.json();
+  if (!response.ok) throw new Error(data.error || 'Failed to remove folder');
   return data.folders || [];
 }
 

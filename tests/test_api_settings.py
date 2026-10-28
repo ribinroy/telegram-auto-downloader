@@ -196,6 +196,62 @@ def test_watched_folders_crud(client, db, auth, monkeypatch):
                          headers=auth).status_code == 200
 
 
+def test_removing_a_secured_folder_asks_before_unhiding_its_downloads(client, db, auth, monkeypatch):
+    monkeypatch.setattr(vroute, 'close_pooled_session', lambda: None)
+    client.post('/api/settings/vps', headers=auth,
+                json={'host': 'box.example', 'port': 22, 'username': 'u', 'password': 'p'})
+    rows = client.post('/api/settings/vps/folders', headers=auth,
+                       json={'paths': ['/home/u/private']}).get_json()['folders']
+    fid = rows[0]['id']
+    client.patch(f'/api/settings/vps/folders/{fid}', headers=auth, json={'is_secured': True})
+    db.add_download('clip.mp4', status='done', downloaded_from='vps', url='/home/u/private/clip.mp4')
+    db.add_download('other.mp4', status='done', downloaded_from='vps', url='/home/u/public/other.mp4')
+
+    listed = client.get('/api/downloads', headers=auth).get_json()
+    assert 'clip.mp4' not in [d['file'] for d in listed['downloads']]
+
+    impact = client.get(f'/api/settings/vps/folders/{fid}/delete-impact', headers=auth).get_json()
+    assert impact == {'count': 1, 'sample': ['clip.mp4']}
+
+    # Not confirmed: refused, nothing changes
+    res = client.delete(f'/api/settings/vps/folders/{fid}', headers=auth)
+    assert res.status_code == 409
+    assert res.get_json()['unhide']['count'] == 1
+    assert [f['id'] for f in db.get_vps_watch_folders()] == [fid]
+
+    assert client.delete(f'/api/settings/vps/folders/{fid}?confirm_unhide=1',
+                         headers=auth).status_code == 200
+    listed = client.get('/api/downloads', headers=auth).get_json()
+    assert 'clip.mp4' in [d['file'] for d in listed['downloads']]
+
+
+def test_removing_a_watched_folder_is_a_soft_delete(client, db, auth, monkeypatch):
+    from backend.database import VpsWatchFolder
+    monkeypatch.setattr(vroute, 'close_pooled_session', lambda: None)
+    client.post('/api/settings/vps', headers=auth,
+                json={'host': 'box.example', 'port': 22, 'username': 'u', 'password': 'p'})
+    fid = client.post('/api/settings/vps/folders', headers=auth,
+                      json={'paths': ['/home/u/watch']}).get_json()['folders'][0]['id']
+
+    assert client.delete(f'/api/settings/vps/folders/{fid}', headers=auth).status_code == 200
+    assert db.get_vps_watch_folders() == []
+    assert db.get_vps_watch_folder_for_path('/home/u/watch/a.mkv') is None
+    # A second delete is a 404, not a double stamp
+    assert client.delete(f'/api/settings/vps/folders/{fid}', headers=auth).status_code == 404
+
+    session = db.get_session()
+    try:
+        row = session.query(VpsWatchFolder).filter_by(id=fid).one()
+        assert row.deleted_at is not None
+    finally:
+        db.close_session()
+
+    # Re-adding the path makes a fresh row rather than resurrecting the old one
+    again = client.post('/api/settings/vps/folders', headers=auth,
+                        json={'paths': ['/home/u/watch']}).get_json()['folders']
+    assert len(again) == 1 and again[0]['id'] != fid
+
+
 # --- usage ----------------------------------------------------------------
 
 def test_usage_reports_a_clean_error_when_nothing_is_configured(client, db, auth):

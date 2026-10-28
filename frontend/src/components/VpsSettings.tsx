@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
 import { Loader2, AlertCircle, CheckCircle, Check, Plug, FolderPlus, Folder, FolderOpen, Eye, EyeOff, Trash2, Unplug, Server, Magnet, Send, Upload } from 'lucide-react';
 import {
-  browseLocal,
-  type VpsWatchFolder, type TorrentClient, type TorrentClientConfig,
+  browseLocal, fetchVpsFolderDeleteImpact,
+  type VpsWatchFolder, type VpsFolderUnhideImpact, type TorrentClient, type TorrentClientConfig,
 } from '../api';
 import {
   useVpsConfig, useVpsFolders, useSaveVpsConfig, useTestVpsConnection, useDeleteVpsConfig,
@@ -43,6 +43,8 @@ export function VpsSettings({ onChange }: { onChange?: () => void }) {
   const [confirmRemove, setConfirmRemove] = useState(false);
   // The watched folder pending removal (null = no dialog open).
   const [folderToDelete, setFolderToDelete] = useState<VpsWatchFolder | null>(null);
+  // What removing it would unhide: undefined while checking, null if the check failed.
+  const [deleteImpact, setDeleteImpact] = useState<VpsFolderUnhideImpact | null | undefined>(undefined);
 
   // Watched folders
   const [foldersError, setFoldersError] = useState<string | null>(null);
@@ -137,20 +139,51 @@ export function VpsSettings({ onChange }: { onChange?: () => void }) {
     }
   };
 
-  const handleDeleteFolder = async (id: number) => {
+  // Ask the server what the removal would unhide as soon as the dialog opens
+  useEffect(() => {
+    if (!folderToDelete) return;
+    let cancelled = false;
+    fetchVpsFolderDeleteImpact(folderToDelete.id)
+      .then((impact) => { if (!cancelled) setDeleteImpact(impact); })
+      .catch(() => { if (!cancelled) setDeleteImpact(null); });
+    return () => { cancelled = true; };
+  }, [folderToDelete]);
+
+  const openDeleteFolder = (folder: VpsWatchFolder) => {
+    setDeleteImpact(undefined);
+    setFolderToDelete(folder);
+  };
+
+  const handleDeleteFolder = async (id: number, confirmUnhide: boolean) => {
     setFoldersError(null);
     try {
-      await deleteFolderMut.mutateAsync(id);
-    } catch {
-      setFoldersError('Failed to remove folder');
+      await deleteFolderMut.mutateAsync({ id, confirmUnhide });
+    } catch (e) {
+      setFoldersError(e instanceof Error ? e.message : 'Failed to remove folder');
     }
   };
 
   const confirmDeleteFolder = () => {
     const folder = folderToDelete;
+    if (!folder || deleteImpact === undefined) return; // still checking
     setFolderToDelete(null);
-    if (folder) handleDeleteFolder(folder.id);
+    // The user has seen the unhide warning, so let the server go ahead
+    handleDeleteFolder(folder.id, !!deleteImpact?.count);
   };
+
+  const unhideCount = deleteImpact?.count ?? 0;
+  const deleteFolderMessage = folderToDelete
+    ? `"${folderToDelete.path}" is removed from the watched list${
+        folderToDelete.auto_sync ? ', and its hourly autoSync stops' : ''
+      }. Nothing is deleted - the files stay on the VPS, and anything already downloaded stays on this server.` +
+      (deleteImpact === undefined
+        ? '\n\nChecking for hidden downloads…'
+        : unhideCount > 0
+          ? `\n\n${unhideCount} download${unhideCount === 1 ? ' is' : 's are'} hidden only because of this folder and will show in the default downloads listing:\n` +
+            deleteImpact!.sample.map((f) => `• ${f}`).join('\n') +
+            (unhideCount > deleteImpact!.sample.length ? `\n…and ${unhideCount - deleteImpact!.sample.length} more` : '')
+          : '')
+    : '';
 
   const handleToggleAutoSync = async (folder: VpsWatchFolder) => {
     setFoldersError(null);
@@ -492,7 +525,7 @@ export function VpsSettings({ onChange }: { onChange?: () => void }) {
                       otherwise a folder on a server you no longer have is
                       stuck in the list forever. */}
                   <button
-                    onClick={() => setFolderToDelete(f)}
+                    onClick={() => openDeleteFolder(f)}
                     className="p-1.5 bg-slate-600/50 hover:bg-red-500/20 text-slate-400 hover:text-red-400 rounded-lg transition-colors shrink-0"
                     title={inactive ? 'Remove folder (no connection needed)' : 'Remove folder'}
                   >
@@ -528,12 +561,10 @@ export function VpsSettings({ onChange }: { onChange?: () => void }) {
 
       <ConfirmDialog
         isOpen={folderToDelete !== null}
-        title="Stop watching this folder?"
-        message={`"${folderToDelete?.path}" is removed from the watched list${
-          folderToDelete?.auto_sync ? ', and its hourly autoSync stops' : ''
-        }. Nothing is deleted - the files stay on the VPS, and anything already downloaded stays on this server.`}
-        confirmText="Remove"
-        variant="danger"
+        title={unhideCount > 0 ? 'Hidden downloads will become visible' : 'Stop watching this folder?'}
+        message={deleteFolderMessage}
+        confirmText={deleteImpact === undefined ? 'Checking…' : unhideCount > 0 ? 'Remove and show them' : 'Remove'}
+        variant={unhideCount > 0 ? 'warning' : 'danger'}
         onConfirm={confirmDeleteFolder}
         onCancel={() => setFolderToDelete(null)}
       />
