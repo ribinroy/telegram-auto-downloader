@@ -145,7 +145,8 @@ Main Thread
 - `id` (PK), `key` (unique), `value` (text), `updated_at`
 
 **`download_type_maps`** - Per-source download specs
-- `id` (PK), `downloaded_from` (unique), `is_secured` (hide from default view), `folder`, `quality`
+- `id` (PK), `downloaded_from` (unique among live rows), `is_secured` (hide from default view), `folder`, `quality`
+- `deleted_at` (soft delete)
 
 **`vps_watch_folders`** - Watched VPS folders
 - `id` (PK), `path` (remote), `host`/`port`/`username` (owning connection)
@@ -155,6 +156,7 @@ Main Thread
 **`rename_rules`** - Filename rewrite rules
 - `id` (PK), `name`, `pattern` (regex), `replacement`, `enabled`, `position` (lower runs first)
 - `source` (limit to one `downloaded_from`; NULL = all), `stop_on_match`
+- `deleted_at` (soft delete; a delete also stamps `updated_at` so the compiled-rule cache token moves)
 
 **`users`** - Authentication
 - `id` (PK), `username` (unique), `password_hash` (bcrypt; legacy SHA-256 auto-upgraded on login)
@@ -166,6 +168,11 @@ Main Thread
 - `user_agent`, `ip`, `created_at`, `last_used_at`
 
 Note: legacy `labels`/`source_labels` tables and `downloads.label_id` may still exist in older DBs but are unused (the labels feature was reverted; see `_migrate_labels_to_specs()`).
+
+**`bot_queries`** - Bot chat commands
+- `id` (PK), `key` (unique among live rows), `command`, `deleted_at` (soft delete; renaming onto a live key soft-deletes the one replaced)
+
+**Soft deletes.** `downloads`, `vps_watch_folders`, `download_type_maps`, `rename_rules` and `bot_queries` are never hard-deleted: a delete stamps `deleted_at` and every read filters on `deleted_at IS NULL`. Where a column has to be unique (`downloaded_from`, `key`) it is a **partial unique index over live rows** (`uq_*_live`), not a plain constraint - otherwise a deleted row would block re-adding the same source or key forever. Settings kept as JSON blobs (VPS connection, torrent client config, Telegram channels) are still replaced outright.
 
 ### Migrations
 - Handled in `DatabaseManager._run_migrations()` using ALTER TABLE statements

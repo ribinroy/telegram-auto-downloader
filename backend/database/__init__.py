@@ -8,7 +8,7 @@ import secrets
 import uuid
 from datetime import datetime
 import bcrypt
-from sqlalchemy import create_engine, Column, Integer, BigInteger, String, Float, DateTime, Text, Boolean
+from sqlalchemy import create_engine, Column, Integer, BigInteger, String, Float, DateTime, Text, Boolean, Index, text as sql_text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, scoped_session
 
@@ -106,14 +106,21 @@ class Settings(Base):
 class DownloadTypeMap(Base):
     """Download type mapping for folder organization and security"""
     __tablename__ = 'download_type_maps'
+    # Unique among live rows only, so a deleted source can be mapped again
+    __table_args__ = (
+        Index('uq_download_type_maps_live', 'downloaded_from', unique=True,
+              postgresql_where=sql_text('deleted_at IS NULL'),
+              sqlite_where=sql_text('deleted_at IS NULL')),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    downloaded_from = Column(String(100), unique=True, nullable=False)
+    downloaded_from = Column(String(100), nullable=False)
     is_secured = Column(Boolean, default=False)
     folder = Column(String(255), nullable=True)
     quality = Column(String(20), nullable=True)  # Default quality e.g., "720p", "1080p"
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow)
+    deleted_at = Column(DateTime, nullable=True)  # soft delete
 
     def to_dict(self):
         """Convert model to dictionary"""
@@ -240,6 +247,7 @@ class RenameRule(Base):
     stop_on_match = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow)
+    deleted_at = Column(DateTime, nullable=True)  # soft delete
 
     def to_dict(self):
         return {
@@ -292,12 +300,19 @@ class BotQuery(Base):
     """A bot chat command: tagging the bot with `key` runs `command` (shell)
     and replies with its output. Admin-only."""
     __tablename__ = 'bot_queries'
+    # Unique among live rows only, so a deleted key can be reused
+    __table_args__ = (
+        Index('uq_bot_queries_live', 'key', unique=True,
+              postgresql_where=sql_text('deleted_at IS NULL'),
+              sqlite_where=sql_text('deleted_at IS NULL')),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    key = Column(String(64), unique=True, nullable=False)
+    key = Column(String(64), nullable=False)
     command = Column(Text, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow)
+    deleted_at = Column(DateTime, nullable=True)  # soft delete
 
     def to_dict(self):
         return {
@@ -472,6 +487,32 @@ class DatabaseManager:
                     conn.execute(text('ALTER TABLE vps_watch_folders ADD COLUMN deleted_at TIMESTAMP'))
                     conn.commit()
 
+            # Soft delete for mappings, rename rules and bot queries. The two
+            # tables with a unique key trade the plain constraint for a unique
+            # index over live rows, or a soft-deleted row would block re-adding
+            # the same source/key forever.
+            for table, unique_col, index_name in (
+                ('download_type_maps', 'downloaded_from', 'uq_download_type_maps_live'),
+                ('rename_rules', None, None),
+                ('bot_queries', 'key', 'uq_bot_queries_live'),
+            ):
+                if not inspector.has_table(table):
+                    continue
+                if 'deleted_at' not in [c['name'] for c in inspector.get_columns(table)]:
+                    conn.execute(text(f'ALTER TABLE {table} ADD COLUMN deleted_at TIMESTAMP'))
+                    conn.commit()
+                if not unique_col:
+                    continue
+                if self.engine.dialect.name == 'postgresql':
+                    for uc in inspector.get_unique_constraints(table):
+                        if uc['column_names'] == [unique_col]:
+                            conn.execute(text(f'ALTER TABLE {table} DROP CONSTRAINT "{uc["name"]}"'))
+                            conn.commit()
+                conn.execute(text(
+                    f'CREATE UNIQUE INDEX IF NOT EXISTS {index_name} '
+                    f'ON {table} ({unique_col}) WHERE deleted_at IS NULL'))
+                conn.commit()
+
         # One-time reverse migration: fold the retired labels system back into
         # per-source mappings and per-watchfolder specs.
         self._migrate_labels_to_specs()
@@ -492,7 +533,7 @@ class DatabaseManager:
                 queries = json.loads(setting.value or '[]')
             except Exception:
                 queries = []
-            existing = {q.key for q in session.query(BotQuery).all()}
+            existing = {q.key for q in session.query(BotQuery).filter_by(deleted_at=None).all()}
             for q in queries:
                 key = (q.get('key') or '').strip().lower()
                 if key and key not in existing:
@@ -526,7 +567,7 @@ class DatabaseManager:
                 "SELECT sl.source, l.folder, l.quality, l.is_hidden FROM source_labels sl "
                 "JOIN labels l ON l.id = sl.label_id WHERE sl.path IS NULL")).fetchall()
             for source, folder, quality, is_hidden in rows:
-                mapping = session.query(DownloadTypeMap).filter_by(downloaded_from=source).first()
+                mapping = session.query(DownloadTypeMap).filter_by(downloaded_from=source, deleted_at=None).first()
                 if mapping:
                     mapping.folder = folder
                     mapping.quality = quality
@@ -1104,7 +1145,7 @@ class DatabaseManager:
         """All rename rules in application order."""
         session = self.get_session()
         try:
-            q = session.query(RenameRule)
+            q = session.query(RenameRule).filter_by(deleted_at=None)
             if enabled_only:
                 q = q.filter(RenameRule.enabled.is_(True))
             rows = q.order_by(RenameRule.position, RenameRule.id).all()
@@ -1118,8 +1159,11 @@ class DatabaseManager:
         session = self.get_session()
         try:
             from sqlalchemy import func
+            # A delete stamps updated_at as well as deleted_at, so removing
+            # a rule moves the token even when it was the newest one.
             count, newest = session.query(
-                func.count(RenameRule.id), func.max(RenameRule.updated_at)).one()
+                func.count(RenameRule.id), func.max(RenameRule.updated_at)
+            ).filter(RenameRule.deleted_at.is_(None)).one()
             return f"{count}:{newest.isoformat() if newest else '-'}"
         finally:
             self.close_session()
@@ -1131,7 +1175,8 @@ class DatabaseManager:
         try:
             if position is None:
                 from sqlalchemy import func
-                highest = session.query(func.max(RenameRule.position)).scalar()
+                highest = session.query(func.max(RenameRule.position)) \
+                    .filter(RenameRule.deleted_at.is_(None)).scalar()
                 position = (highest or 0) + 1
             rule = RenameRule(
                 pattern=pattern, replacement=replacement or '', name=name,
@@ -1146,7 +1191,7 @@ class DatabaseManager:
     def update_rename_rule(self, rule_id: int, **kwargs):
         session = self.get_session()
         try:
-            rule = session.query(RenameRule).filter_by(id=rule_id).first()
+            rule = session.query(RenameRule).filter_by(id=rule_id, deleted_at=None).first()
             if not rule:
                 return None
             for key in ('name', 'pattern', 'replacement', 'enabled',
@@ -1162,10 +1207,10 @@ class DatabaseManager:
     def delete_rename_rule(self, rule_id: int):
         session = self.get_session()
         try:
-            rule = session.query(RenameRule).filter_by(id=rule_id).first()
+            rule = session.query(RenameRule).filter_by(id=rule_id, deleted_at=None).first()
             if not rule:
                 return False
-            session.delete(rule)
+            rule.deleted_at = rule.updated_at = datetime.utcnow()
             session.commit()
             return True
         finally:
@@ -1175,7 +1220,7 @@ class DatabaseManager:
         """Persist a new application order (list of rule ids, first runs first)."""
         session = self.get_session()
         try:
-            rules = {r.id: r for r in session.query(RenameRule).all()}
+            rules = {r.id: r for r in session.query(RenameRule).filter_by(deleted_at=None).all()}
             for index, rule_id in enumerate(ordered_ids):
                 rule = rules.get(rule_id)
                 if rule:
@@ -1191,7 +1236,8 @@ class DatabaseManager:
         """All bot queries ordered by key."""
         session = self.get_session()
         try:
-            return [q.to_dict() for q in session.query(BotQuery).order_by(BotQuery.key).all()]
+            return [q.to_dict() for q in session.query(BotQuery).filter_by(deleted_at=None)
+                    .order_by(BotQuery.key).all()]
         finally:
             self.close_session()
 
@@ -1202,15 +1248,20 @@ class DatabaseManager:
             key = key.strip().lower()
             query = None
             if original_key:
-                query = session.query(BotQuery).filter_by(key=original_key.strip().lower()).first()
+                query = session.query(BotQuery).filter_by(
+                    key=original_key.strip().lower(), deleted_at=None).first()
             if query is None:
-                query = session.query(BotQuery).filter_by(key=key).first()
+                query = session.query(BotQuery).filter_by(key=key, deleted_at=None).first()
             if query:
-                # Renaming onto an existing other key would violate uniqueness
+                # Renaming onto another live key would violate uniqueness: the
+                # one being replaced is soft-deleted (and flushed first, so the
+                # unique index never sees two live rows with this key).
                 clash = session.query(BotQuery).filter(
-                    BotQuery.key == key, BotQuery.id != query.id).first()
+                    BotQuery.key == key, BotQuery.id != query.id,
+                    BotQuery.deleted_at.is_(None)).first()
                 if clash:
-                    session.delete(clash)
+                    clash.deleted_at = clash.updated_at = datetime.utcnow()
+                    session.flush()
                 query.key = key
                 query.command = command
                 query.updated_at = datetime.utcnow()
@@ -1223,13 +1274,13 @@ class DatabaseManager:
             self.close_session()
 
     def delete_bot_query(self, key: str):
-        """Delete a query by key. Returns True if a row was removed."""
+        """Soft-delete a query by key. Returns True if a live row was found."""
         session = self.get_session()
         try:
-            query = session.query(BotQuery).filter_by(key=key.strip().lower()).first()
+            query = session.query(BotQuery).filter_by(key=key.strip().lower(), deleted_at=None).first()
             if not query:
                 return False
-            session.delete(query)
+            query.deleted_at = query.updated_at = datetime.utcnow()
             session.commit()
             return True
         finally:
@@ -1237,10 +1288,11 @@ class DatabaseManager:
 
     # Download type map methods
     def get_all_download_type_maps(self):
-        """Get all download type mappings"""
+        """Get all (non-deleted) download type mappings"""
         session = self.get_session()
         try:
-            maps = session.query(DownloadTypeMap).order_by(DownloadTypeMap.downloaded_from).all()
+            maps = session.query(DownloadTypeMap).filter_by(deleted_at=None) \
+                .order_by(DownloadTypeMap.downloaded_from).all()
             return [m.to_dict() for m in maps]
         finally:
             self.close_session()
@@ -1249,7 +1301,8 @@ class DatabaseManager:
         """Get a download type mapping by downloaded_from value"""
         session = self.get_session()
         try:
-            mapping = session.query(DownloadTypeMap).filter_by(downloaded_from=downloaded_from).first()
+            mapping = session.query(DownloadTypeMap).filter_by(
+                downloaded_from=downloaded_from, deleted_at=None).first()
             return mapping.to_dict() if mapping else None
         finally:
             self.close_session()
@@ -1258,7 +1311,7 @@ class DatabaseManager:
         """Get list of downloaded_from values that are secured"""
         session = self.get_session()
         try:
-            maps = session.query(DownloadTypeMap).filter_by(is_secured=True).all()
+            maps = session.query(DownloadTypeMap).filter_by(is_secured=True, deleted_at=None).all()
             return [m.downloaded_from for m in maps]
         finally:
             self.close_session()
@@ -1267,7 +1320,7 @@ class DatabaseManager:
         """Get list of mapping IDs that are secured"""
         session = self.get_session()
         try:
-            maps = session.query(DownloadTypeMap).filter_by(is_secured=True).all()
+            maps = session.query(DownloadTypeMap).filter_by(is_secured=True, deleted_at=None).all()
             return [m.id for m in maps]
         finally:
             self.close_session()
@@ -1276,7 +1329,8 @@ class DatabaseManager:
         """Add a new download type mapping"""
         session = self.get_session()
         try:
-            existing = session.query(DownloadTypeMap).filter_by(downloaded_from=downloaded_from).first()
+            existing = session.query(DownloadTypeMap).filter_by(
+                downloaded_from=downloaded_from, deleted_at=None).first()
             if existing:
                 return {'error': 'Mapping already exists for this source'}
             mapping = DownloadTypeMap(
@@ -1295,11 +1349,11 @@ class DatabaseManager:
         """Update a download type mapping"""
         session = self.get_session()
         try:
-            mapping = session.query(DownloadTypeMap).filter_by(id=map_id).first()
+            mapping = session.query(DownloadTypeMap).filter_by(id=map_id, deleted_at=None).first()
             if not mapping:
                 return {'error': 'Mapping not found'}
             for key, value in kwargs.items():
-                if hasattr(mapping, key) and key != 'id':
+                if hasattr(mapping, key) and key not in ('id', 'deleted_at'):
                     setattr(mapping, key, value)
             mapping.updated_at = datetime.utcnow()
             session.commit()
@@ -1308,13 +1362,13 @@ class DatabaseManager:
             self.close_session()
 
     def delete_download_type_map(self, map_id: int):
-        """Delete a download type mapping"""
+        """Soft-delete a download type mapping (stamps deleted_at)"""
         session = self.get_session()
         try:
-            mapping = session.query(DownloadTypeMap).filter_by(id=map_id).first()
+            mapping = session.query(DownloadTypeMap).filter_by(id=map_id, deleted_at=None).first()
             if not mapping:
                 return False
-            session.delete(mapping)
+            mapping.deleted_at = mapping.updated_at = datetime.utcnow()
             session.commit()
             return True
         finally:

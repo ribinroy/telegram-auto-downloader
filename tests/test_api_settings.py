@@ -259,3 +259,64 @@ def test_usage_reports_a_clean_error_when_nothing_is_configured(client, db, auth
     assert body['disk'] is None
     assert 'configured' in body['disk_error']
     assert body['clients'] == []
+
+
+# --- soft deletes ---------------------------------------------------------
+
+def _raw_rows(db, model):
+    """Every row of a table, soft-deleted ones included."""
+    session = db.get_session()
+    try:
+        return [(r.id, r.deleted_at) for r in session.query(model).all()]
+    finally:
+        db.close_session()
+
+
+def test_deleting_a_mapping_keeps_the_row_and_frees_the_source(client, db, auth):
+    from backend.database import DownloadTypeMap
+    row = client.post('/api/mappings', headers=auth,
+                      json={'downloaded_from': 'example.com', 'is_secured': True}).get_json()
+    assert client.delete(f"/api/mappings/{row['id']}", headers=auth).status_code == 200
+    assert db.get_download_type_map('example.com') is None
+    assert 'example.com' not in db.get_secured_sources()
+    assert [d for i, d in _raw_rows(db, DownloadTypeMap) if i == row['id']][0] is not None
+    # Gone means gone: a second delete is a 404, an edit doesn't resurrect it
+    assert client.delete(f"/api/mappings/{row['id']}", headers=auth).status_code == 404
+    assert client.put(f"/api/mappings/{row['id']}", headers=auth,
+                      json={'folder': '/x'}).status_code == 400
+    # The soft-deleted row doesn't block mapping the same source again
+    again = client.post('/api/mappings', headers=auth, json={'downloaded_from': 'example.com'})
+    assert again.status_code == 200 and again.get_json()['id'] != row['id']
+
+
+def test_deleting_a_rename_rule_keeps_the_row_and_drops_it_from_the_chain(client, db, auth):
+    from backend.database import RenameRule
+    make_rule(client, auth)
+    rid = rules_of(client, auth)[0]['id']
+    token = db.get_rename_rules_token()
+    assert client.delete(f'/api/settings/rename-rules/{rid}', headers=auth).status_code == 200
+    assert rules_of(client, auth) == []
+    assert db.get_rename_rules(enabled_only=True) == []
+    assert db.get_rename_rules_token() != token   # compiled-rule cache invalidates
+    assert _raw_rows(db, RenameRule)[0][1] is not None
+    assert client.delete(f'/api/settings/rename-rules/{rid}', headers=auth).status_code == 404
+
+
+def test_deleting_a_bot_query_keeps_the_row_and_frees_the_key(client, db, auth):
+    from backend.database import BotQuery
+    db.upsert_bot_query('uptime', 'uptime')
+    assert client.delete('/api/settings/queries/uptime', headers=auth).status_code == 200
+    assert [q['key'] for q in db.get_bot_queries()] == []
+    assert _raw_rows(db, BotQuery)[0][1] is not None
+    db.upsert_bot_query('uptime', 'uptime -p')
+    assert [(q['key'], q['command']) for q in db.get_bot_queries()] == [('uptime', 'uptime -p')]
+
+
+def test_renaming_a_bot_query_onto_another_soft_deletes_the_one_replaced(client, db, auth):
+    from backend.database import BotQuery
+    db.upsert_bot_query('disk', 'df -h')
+    db.upsert_bot_query('space', 'du -sh ~')
+    db.upsert_bot_query('space', 'df -h /', original_key='disk')
+    assert [(q['key'], q['command']) for q in db.get_bot_queries()] == [('space', 'df -h /')]
+    rows = _raw_rows(db, BotQuery)
+    assert len(rows) == 2 and sum(1 for _i, d in rows if d is not None) == 1
