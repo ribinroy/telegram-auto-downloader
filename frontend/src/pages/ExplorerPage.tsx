@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   FolderOpen, Loader2, AlertTriangle, X, Download, Copy, Scissors, ClipboardPaste,
@@ -143,6 +143,20 @@ export function ExplorerPage() {
 
   const selectedEntries = useMemo(
     () => visible.filter(e => selected.has(e.path)), [visible, selected]);
+
+  // The floating selection bar wraps to two lines on a phone, so the list's
+  // end padding follows its real height (as --bar-h) rather than a guess.
+  const barRef = useRef<HTMLDivElement>(null);
+  const [barHeight, setBarHeight] = useState(0);
+  const barShown = selectedEntries.length > 0 || !!clipboard;
+  useEffect(() => {
+    const el = barRef.current;
+    if (!barShown || !el) return;
+    const ro = new ResizeObserver(() => setBarHeight(el.offsetHeight));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [barShown]);
+
   const previewable = useMemo(
     () => visible.filter(e => !e.is_dir), [visible]);
   const writable = !!listing.data?.writable && !searchQuery;
@@ -539,72 +553,6 @@ export function ExplorerPage() {
             </div>
           )}
 
-          {/* Selection / clipboard bar */}
-          {(selectedEntries.length > 0 || clipboard) && (
-            <div className="flex items-center gap-2 flex-wrap rounded-xl border border-slate-700/60 bg-slate-800/50 px-3 py-2 mb-3">
-              {selectedEntries.length > 0 && (
-                <>
-                  <span className="text-sm text-slate-300">
-                    {selectedEntries.length} selected
-                    {selectedSize > 0 && <span className="text-slate-500"> · {formatBytes(selectedSize)}</span>}
-                  </span>
-                  <button
-                    onClick={() => setClipboard({ paths: selectedEntries.map(s => s.path), move: false })}
-                    className="flex items-center gap-1.5 text-xs px-2 py-1 rounded-lg bg-slate-700/60 text-slate-300 hover:text-white transition-colors"
-                  >
-                    <Copy className="w-3.5 h-3.5" /> Copy
-                  </button>
-                  {writable && (
-                    <>
-                      <button
-                        onClick={() => setClipboard({ paths: selectedEntries.map(s => s.path), move: true })}
-                        className="flex items-center gap-1.5 text-xs px-2 py-1 rounded-lg bg-slate-700/60 text-slate-300 hover:text-white transition-colors"
-                      >
-                        <Scissors className="w-3.5 h-3.5" /> Cut
-                      </button>
-                      <button
-                        onClick={() => setConfirmDelete({ entries: selectedEntries, permanent: false })}
-                        disabled={deleting}
-                        className="flex items-center gap-1.5 text-xs px-2 py-1 rounded-lg bg-red-500/15 text-red-400 hover:bg-red-500/25 disabled:opacity-50 disabled:hover:bg-red-500/15 transition-colors"
-                      >
-                        {deleting
-                          ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                          : <Trash2 className="w-3.5 h-3.5" />}
-                        Trash
-                      </button>
-                    </>
-                  )}
-                  <button
-                    onClick={() => setSelected(new Set())}
-                    className="text-xs text-slate-500 hover:text-white transition-colors"
-                  >
-                    Clear
-                  </button>
-                </>
-              )}
-              {clipboard && (
-                <div className="flex items-center gap-2 ml-auto">
-                  <span className="text-xs text-slate-500">
-                    {clipboard.paths.length} item(s) ready to {clipboard.move ? 'move' : 'copy'}
-                  </span>
-                  <button
-                    onClick={runPaste}
-                    disabled={!writable || transferMut.isPending}
-                    className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white disabled:bg-slate-700 disabled:text-slate-500 transition-colors"
-                  >
-                    {transferMut.isPending
-                      ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      : <ClipboardPaste className="w-3.5 h-3.5" />}
-                    Paste here
-                  </button>
-                  <button onClick={() => setClipboard(null)} className="text-slate-500 hover:text-white transition-colors">
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
-
           {searchQuery && (
             <p className="text-xs text-slate-500 mb-2">
               {search.data?.entries.length ?? 0} match(es) under {currentPath}
@@ -612,7 +560,11 @@ export function ExplorerPage() {
             </p>
           )}
 
-          <div className="flex-1 min-h-0">
+          <div
+            className="relative flex-1 min-h-0 group/list"
+            data-bar={barShown ? '' : undefined}
+            style={{ '--bar-h': `${barHeight}px` } as CSSProperties}
+          >
             {loading ? (
               <div className="h-full flex items-center justify-center text-slate-400">
                 <Loader2 className="w-8 h-8 animate-spin text-cyan-500" />
@@ -647,6 +599,75 @@ export function ExplorerPage() {
                 onRename={runRename}
                 onRenameCancel={() => setRenaming(null)}
               />
+            )}
+
+            {/* Selection / clipboard bar - floats over the bottom of the listing
+                instead of pushing it down; the list pads its end to clear it. */}
+            {barShown && (
+              <div className="absolute inset-x-0 bottom-3 z-20 flex justify-center px-2 pointer-events-none">
+                <div ref={barRef} className="pointer-events-auto flex items-center justify-center gap-2 flex-wrap max-w-full rounded-2xl border border-slate-600/60 bg-slate-900/90 backdrop-blur-md shadow-2xl shadow-black/50 px-3 py-2">
+                  {selectedEntries.length > 0 && (
+                    <>
+                      <span className="text-sm text-slate-300">
+                        {selectedEntries.length} selected
+                        {selectedSize > 0 && <span className="text-slate-500"> · {formatBytes(selectedSize)}</span>}
+                      </span>
+                      <button
+                        onClick={() => setClipboard({ paths: selectedEntries.map(s => s.path), move: false })}
+                        className="flex items-center gap-1.5 text-xs px-2 py-1 rounded-lg bg-slate-700/60 text-slate-300 hover:text-white transition-colors"
+                      >
+                        <Copy className="w-3.5 h-3.5" /> Copy
+                      </button>
+                      {writable && (
+                        <>
+                          <button
+                            onClick={() => setClipboard({ paths: selectedEntries.map(s => s.path), move: true })}
+                            className="flex items-center gap-1.5 text-xs px-2 py-1 rounded-lg bg-slate-700/60 text-slate-300 hover:text-white transition-colors"
+                          >
+                            <Scissors className="w-3.5 h-3.5" /> Cut
+                          </button>
+                          <button
+                            onClick={() => setConfirmDelete({ entries: selectedEntries, permanent: false })}
+                            disabled={deleting}
+                            className="flex items-center gap-1.5 text-xs px-2 py-1 rounded-lg bg-red-500/15 text-red-400 hover:bg-red-500/25 disabled:opacity-50 disabled:hover:bg-red-500/15 transition-colors"
+                          >
+                            {deleting
+                              ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              : <Trash2 className="w-3.5 h-3.5" />}
+                            Trash
+                          </button>
+                        </>
+                      )}
+                      <button
+                        onClick={() => setSelected(new Set())}
+                        className="text-xs text-slate-500 hover:text-white transition-colors"
+                      >
+                        Clear
+                      </button>
+                    </>
+                  )}
+                  {clipboard && (
+                    <div className={`flex items-center gap-2 ${selectedEntries.length > 0 ? 'border-slate-700 max-sm:basis-full max-sm:justify-center max-sm:pt-2 max-sm:border-t sm:pl-2 sm:border-l' : ''}`}>
+                      <span className="text-xs text-slate-500">
+                        {clipboard.paths.length} item(s) ready to {clipboard.move ? 'move' : 'copy'}
+                      </span>
+                      <button
+                        onClick={runPaste}
+                        disabled={!writable || transferMut.isPending}
+                        className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white disabled:bg-slate-700 disabled:text-slate-500 transition-colors"
+                      >
+                        {transferMut.isPending
+                          ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          : <ClipboardPaste className="w-3.5 h-3.5" />}
+                        Paste here
+                      </button>
+                      <button onClick={() => setClipboard(null)} className="text-slate-500 hover:text-white transition-colors">
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
             )}
           </div>
         </div>

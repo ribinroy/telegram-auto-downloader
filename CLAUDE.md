@@ -581,7 +581,10 @@ a pulled USB drive disappears from the sidebar.
   carries sorting - the list header can only sort by name at that width. The page is
   pinned to the viewport below the header (`h-[calc(100dvh-...)]`, flex column), so the
   document never scrolls: only the listing box does, with the list's column header
-  pinned above its rows, and the lg sidebar scrolls on its own if it overflows. The current directory lives in the URL
+  pinned above its rows, and the lg sidebar scrolls on its own if it overflows. The
+  selection/clipboard bar floats over the bottom of the listing rather than taking
+  a row; the list pads its end by the bar's measured height (`--bar-h`, a
+  ResizeObserver - it wraps to two lines on a phone) so the last row stays reachable. The current directory lives in the URL
   (`/files?path=...`), so browser back/forward is the explorer's history.
   **Click opens; press-and-hold selects** (`useRowPress` in `FileList.tsx`, 450 ms,
   cancelled by any real pointer movement, and it swallows the `click` that follows
