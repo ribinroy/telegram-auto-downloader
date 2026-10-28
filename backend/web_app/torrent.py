@@ -241,6 +241,10 @@ def _transmission_normalize(t):
         "total_size": t.get("totalSize") or 0,
         "eta": eta if isinstance(eta, int) and eta >= 0 else None,
         "download_dir": t.get("downloadDir"),
+        # In Transmission the name *is* the top-level path (renaming it renames
+        # the folder), so this is exact - unlike qBittorrent, which reports it.
+        "content_path": posixpath.join(t["downloadDir"].rstrip("/"), t["name"])
+        if t.get("downloadDir") and t.get("name") else None,
         "error": t.get("errorString") or None,
         "added_date": t.get("addedDate") or 0,
         "peers_connected": t.get("peersConnected") or 0,

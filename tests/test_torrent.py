@@ -347,3 +347,37 @@ def test_rename_route_validates(client, auth, monkeypatch):
     assert post({'client': 'transmission', 'hash': 'a', 'name': 'x', 'path': ''}).status_code == 400
     monkeypatch.setattr(route, 'torrent_rename', lambda *a, **k: (_ for _ in ()).throw(ValueError('Invalid name')))
     assert post({'client': 'transmission', 'hash': 'a', 'name': '../x'}).status_code == 400
+
+
+# --- where a torrent's files really are ------------------------------------------
+
+def test_qbit_content_path_is_the_folder_on_disk_not_the_name():
+    """The SAVR-859 case: the torrent is called one thing, its folder another.
+    Pulling <save_path>/<name> failed with 'No such file' every time."""
+    t = qbit._normalize({'name': '[8KVR] SAVR-859 harem', 'save_path': '/home/u/Done',
+                         'content_path': '/home/u/Done/savr-859', 'state': 'stoppedUP', 'progress': 1})
+    assert t['content_path'] == '/home/u/Done/savr-859'
+
+
+def test_qbit_without_content_path_falls_back_to_save_path_and_name():
+    t = qbit._normalize({'name': 'Movie', 'save_path': '/home/u/Done/', 'state': 'uploading'})
+    assert t['content_path'] == '/home/u/Done/Movie'
+
+
+def test_transmission_content_path_is_dir_plus_name():
+    # Transmission's name *is* the top-level path, so this is exact there
+    t = tor._transmission_normalize({'name': 'Show S01', 'downloadDir': '/home/u/Done/', 'status': 6})
+    assert t['content_path'] == '/home/u/Done/Show S01'
+
+
+def test_a_pulled_torrent_is_matched_by_its_folder_on_disk(client, db, auth, monkeypatch):
+    from backend.web_app.routes import torrent as route
+    db.add_download(file='savr-859', status='done', downloaded_from='vps',
+                    url='/home/u/Done/savr-859')
+    monkeypatch.setattr(route, 'load_torrent_config', lambda c: {'url': 'x'})
+    monkeypatch.setattr(route, 'torrent_list', lambda c: [{
+        'name': '[8KVR] SAVR-859 harem', 'hash': 'abc', 'download_dir': '/home/u/Done',
+        'content_path': '/home/u/Done/savr-859',
+    }])
+    body = client.get('/api/torrent/list?client=qbittorrent', headers=auth).get_json()
+    assert body['torrents'][0]['downlee']['status'] == 'done'

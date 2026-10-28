@@ -170,6 +170,11 @@ def _normalize(t):
         "total_size": t.get("size") or 0,
         "eta": eta,
         "download_dir": t.get("save_path"),
+        # Where the files really are. NOT <save_path>/<name>: the name is a
+        # label that can differ from the folder on disk (a renamed torrent,
+        # or one whose metadata name never matched its root folder).
+        "content_path": t.get("content_path") or (
+            f"{(t.get('save_path') or '').rstrip('/')}/{t.get('name')}" if t.get("save_path") and t.get("name") else None),
         "error": None,
         "added_date": t.get("added_on") or 0,
         "peers_connected": (t.get("num_seeds") or 0) + (t.get("num_leechs") or 0),

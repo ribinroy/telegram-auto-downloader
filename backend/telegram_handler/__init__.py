@@ -989,12 +989,19 @@ class TelegramDownloader:
                             torrent_set_location, client, [torrent_hash], download_dir))
                     except Exception as e:
                         logging.error(f"torrent-set-location failed for {name}: {e}")
-                # Candidate remote paths: final dir first, then the temp dir in
-                # case the move hasn't landed yet (resolved over SFTP on demand).
-                candidates = [posixpath.join(download_dir, name)] if download_dir else []
+                # Candidate remote paths: where the client says the files are,
+                # then the final dir, then the temp dir in case the move hasn't
+                # landed yet (resolved over SFTP on demand). Joined on the
+                # folder's name on disk, which in qBittorrent need not be the
+                # torrent's name.
+                content_path = t.get('content_path')
+                on_disk = posixpath.basename(content_path.rstrip('/')) if content_path else name
+                candidates = [content_path] if content_path else []
+                if download_dir:
+                    candidates.append(posixpath.join(download_dir, on_disk))
                 try:
                     tg_dl, tg_prog = await loop.run_in_executor(None, partial(torrent_telegram_dirs, client))
-                    candidates += [posixpath.join(tg_dl, name), posixpath.join(tg_prog, name)]
+                    candidates += [posixpath.join(tg_dl, on_disk), posixpath.join(tg_prog, on_disk)]
                 except Exception:
                     pass
                 seen = set()

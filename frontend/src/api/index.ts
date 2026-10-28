@@ -940,6 +940,10 @@ export interface TorrentStatus {
   total_size: number;
   eta: number | null;
   download_dir: string;
+  /** Where the files really are on the VPS. Pull from this, not
+   *  `${download_dir}/${name}`: in qBittorrent the name is a label that can
+   *  differ from the folder on disk. */
+  content_path: string | null;
   error: string | null;
   peers_connected: number;
   seeds_connected: number;

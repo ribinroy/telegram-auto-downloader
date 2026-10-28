@@ -147,7 +147,8 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
     setActionError(null);
     setDlBusy(prev => new Set(prev).add(t.hash));
     try {
-      const remotePath = `${(t.download_dir || '').replace(/\/+$/, '')}/${t.name}`;
+      // The client's content path, not <dir>/<name> - see TorrentStatus.content_path
+      const remotePath = t.content_path || `${(t.download_dir || '').replace(/\/+$/, '')}/${t.name}`;
       const res = await downloadFile.mutateAsync({ path: remotePath, client });
       if (res.error) setActionError(res.error);
       else setDlStarted(prev => new Set(prev).add(t.hash));

@@ -247,9 +247,11 @@ class TorrentRoutesMixin:
             """Tag each torrent with the VPS->DownLee transfer that already pulled it.
 
             The UI reads this to show "Downloaded" instead of offering the pull
-            again. Matching is by the remote path the download button would use
-            (<download_dir>/<name>), falling back to the basename of the
-            recorded path: a torrent finished through the Telegram flow is
+            again. Matching is by the remote path the download button uses (the
+            client's `content_path` - where the files really are, which for a
+            qBittorrent torrent need not be <download_dir>/<name>), falling back
+            to the basename of the recorded path: a torrent finished through the
+            Telegram flow is
             pulled from whichever directory it sat in at the time (temp or
             final), so the exact path can differ from the one it has now.
             Downloads are newest-first, so the fallback picks the latest attempt."""
@@ -262,8 +264,9 @@ class TorrentRoutesMixin:
                 by_name.setdefault(posixpath.basename(remote.rstrip("/")), d)
             for t in torrents:
                 name = t.get("name") or ""
-                path = posixpath.join((t.get("download_dir") or "").rstrip("/"), name)
-                dl = by_path.get(path) or by_name.get(name)
+                path = t.get("content_path") or posixpath.join((t.get("download_dir") or "").rstrip("/"), name)
+                on_disk = posixpath.basename(path.rstrip("/"))
+                dl = by_path.get(path) or by_name.get(on_disk) or by_name.get(name)
                 t["downlee"] = {
                     "id": dl["id"],
                     "message_id": dl.get("message_id"),
