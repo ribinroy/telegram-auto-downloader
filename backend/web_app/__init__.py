@@ -30,7 +30,7 @@ from backend.web_app.torrent import (
     normalize_transmission_url, load_torrent_config, apply_torrent_session,
     get_telegram_default, transmission_add_magnet, transmission_telegram_dirs,
     transmission_rpc, transmission_get_torrent,
-    torrent_add_magnet, torrent_list, torrent_control, torrent_get,
+    torrent_add_magnet, torrent_list, torrent_control, torrent_get, torrent_details,
     torrent_set_location, torrent_telegram_dirs, torrent_test,
     TELEGRAM_TORRENT_SUBDIR, TELEGRAM_PROGRESS_SUBDIR,
 )

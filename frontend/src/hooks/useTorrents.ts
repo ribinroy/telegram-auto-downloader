@@ -1,9 +1,9 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  fetchTorrentConfig, fetchTorrentList, saveTorrentConfig, deleteTorrentConfig,
+  fetchTorrentConfig, fetchTorrentList, fetchTorrentDetails, setTorrentFilePriority, renameTorrent, saveTorrentConfig, deleteTorrentConfig,
   testTorrentConnection, setTelegramDefault, torrentAction, addTorrent, addTorrentFile,
   setStopOnComplete,
-  type TorrentClient, type TorrentActionName,
+  type TorrentClient, type TorrentActionName, type TorrentDetails, type TorrentFilePriority,
 } from '../api';
 import { qk } from '../api/queryKeys';
 
@@ -18,6 +18,55 @@ export function useTorrentList(client: TorrentClient, enabled = true) {
     queryFn: () => fetchTorrentList(client),
     enabled,
     refetchInterval: 20_000,
+  });
+}
+
+/** One torrent's files and details, while its modal is open. Refreshes every
+ *  5s until it is complete - after that nothing on it moves. */
+export function useTorrentDetails(client: TorrentClient, hash: string | null) {
+  return useQuery({
+    queryKey: qk.torrentDetails(client, hash ?? ''),
+    queryFn: () => fetchTorrentDetails(client, hash as string),
+    enabled: !!hash,
+    staleTime: 0,
+    refetchInterval: (query) => (query.state.data && query.state.data.torrent.percent_done >= 100 ? false : 5_000),
+  });
+}
+
+/** Skip files / set their priority. Applied to the open modal at once (a
+ *  select that snaps back until the client answers reads as broken), then
+ *  refetched, so the client's own view wins. */
+export function useSetTorrentFilePriority(client: TorrentClient, hash: string) {
+  const qc = useQueryClient();
+  const key = qk.torrentDetails(client, hash);
+  return useMutation({
+    mutationFn: ({ indices, priority }: { indices: number[]; priority: TorrentFilePriority }) =>
+      setTorrentFilePriority(client, hash, indices, priority),
+    onMutate: async ({ indices, priority }) => {
+      await qc.cancelQueries({ queryKey: key });
+      const previous = qc.getQueryData<TorrentDetails>(key);
+      const set = new Set(indices);
+      qc.setQueryData<TorrentDetails>(key, old => old && {
+        ...old,
+        files: old.files.map(f => (set.has(f.index) ? { ...f, priority, wanted: priority !== 'skip' } : f)),
+      });
+      return { previous };
+    },
+    onError: (_e, _vars, ctx) => { if (ctx?.previous) qc.setQueryData(key, ctx.previous); },
+    onSettled: () => qc.invalidateQueries({ queryKey: key }),
+  });
+}
+
+/** Rename a file, or the torrent (no path). Refreshes the modal and the
+ *  client's list, since a torrent rename changes the list's row too. */
+export function useRenameTorrent(client: TorrentClient, hash: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ name, path }: { name: string; path?: string }) => renameTorrent(client, hash, name, path),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.torrentDetails(client, hash) });
+      qc.invalidateQueries({ queryKey: qk.torrentList(client) });
+    },
   });
 }
 

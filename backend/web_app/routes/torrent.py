@@ -17,6 +17,7 @@ from backend.web_app.torrent import (
     CLIENTS, read_torrent_settings, write_torrent_settings, load_torrent_config,
     apply_torrent_session, normalize_transmission_url,
     torrent_test, torrent_add_magnet, torrent_add_file, torrent_list, torrent_control,
+    torrent_details, torrent_set_file_priority, torrent_rename,
     stop_on_complete_enabled,
 )
 from backend.web_app.vps import load_vps_credentials, annotate_vps_folders, open_vps_sftp
@@ -246,9 +247,11 @@ class TorrentRoutesMixin:
             """Tag each torrent with the VPS->DownLee transfer that already pulled it.
 
             The UI reads this to show "Downloaded" instead of offering the pull
-            again. Matching is by the remote path the download button would use
-            (<download_dir>/<name>), falling back to the basename of the
-            recorded path: a torrent finished through the Telegram flow is
+            again. Matching is by the remote path the download button uses (the
+            client's `content_path` - where the files really are, which for a
+            qBittorrent torrent need not be <download_dir>/<name>), falling back
+            to the basename of the recorded path: a torrent finished through the
+            Telegram flow is
             pulled from whichever directory it sat in at the time (temp or
             final), so the exact path can differ from the one it has now.
             Downloads are newest-first, so the fallback picks the latest attempt."""
@@ -261,8 +264,9 @@ class TorrentRoutesMixin:
                 by_name.setdefault(posixpath.basename(remote.rstrip("/")), d)
             for t in torrents:
                 name = t.get("name") or ""
-                path = posixpath.join((t.get("download_dir") or "").rstrip("/"), name)
-                dl = by_path.get(path) or by_name.get(name)
+                path = t.get("content_path") or posixpath.join((t.get("download_dir") or "").rstrip("/"), name)
+                on_disk = posixpath.basename(path.rstrip("/"))
+                dl = by_path.get(path) or by_name.get(on_disk) or by_name.get(name)
                 t["downlee"] = {
                     "id": dl["id"],
                     "message_id": dl.get("message_id"),
@@ -287,6 +291,70 @@ class TorrentRoutesMixin:
             except ValueError as e:
                 return jsonify({"configured": True, "error": str(e)}), 502
             return jsonify({"configured": True, "torrents": _annotate_downlee_transfers(torrents)})
+
+        @self.app.route("/api/torrent/details", methods=["GET"])
+        @token_required
+        def torrent_details_route():
+            """One torrent's files, transfer totals and trackers
+            (?client=...&hash=...). See torrent_details() for the shape."""
+            client = (request.args.get("client") or "transmission").strip()
+            torrent_hash = (request.args.get("hash") or "").strip().lower()
+            if client not in CLIENTS:
+                return jsonify({"error": "Unknown torrent client"}), 400
+            if not torrent_hash:
+                return jsonify({"error": "hash is required"}), 400
+            try:
+                details = torrent_details(client, torrent_hash)
+            except ValueError as e:
+                return jsonify({"error": str(e)}), 502
+            if details is None:
+                return jsonify({"error": "That torrent is no longer in the client"}), 404
+            return jsonify(details)
+
+        @self.app.route("/api/torrent/rename", methods=["POST"])
+        @token_required
+        def torrent_rename_route():
+            """Rename a torrent's file, or the torrent itself.
+            Body: {client, hash, name, path?} - `path` is the file's full path
+            as details report it; without it the torrent is renamed."""
+            data = request.json or {}
+            client = (data.get("client") or "transmission").strip()
+            if client not in CLIENTS:
+                return jsonify({"error": "Unknown torrent client"}), 400
+            torrent_hash = (data.get("hash") or "").strip().lower()
+            if not torrent_hash:
+                return jsonify({"error": "hash is required"}), 400
+            path = data.get("path")
+            if path is not None and (not isinstance(path, str) or not path.strip()):
+                return jsonify({"error": "path must be a file path"}), 400
+            try:
+                torrent_rename(client, torrent_hash, data.get("name"), path=path)
+            except ValueError as e:
+                return jsonify({"error": str(e)}), 400 if str(e) == "Invalid name" else 502
+            return jsonify({"status": "ok"})
+
+        @self.app.route("/api/torrent/files/priority", methods=["POST"])
+        @token_required
+        def torrent_file_priority():
+            """Skip files or set their priority.
+            Body: {client, hash, indices: [int], priority} - priority is one of
+            the client's levels (details' `priorities`; 'skip' = don't download)."""
+            data = request.json or {}
+            client = (data.get("client") or "transmission").strip()
+            if client not in CLIENTS:
+                return jsonify({"error": "Unknown torrent client"}), 400
+            torrent_hash = (data.get("hash") or "").strip().lower()
+            indices = data.get("indices")
+            if not torrent_hash:
+                return jsonify({"error": "hash is required"}), 400
+            if (not isinstance(indices, list) or not indices
+                    or not all(isinstance(i, int) and not isinstance(i, bool) and i >= 0 for i in indices)):
+                return jsonify({"error": "indices must be a non-empty list of file numbers"}), 400
+            try:
+                torrent_set_file_priority(client, torrent_hash, indices, (data.get("priority") or "").strip())
+            except ValueError as e:
+                return jsonify({"error": str(e)}), 400 if "no file priority" in str(e) else 502
+            return jsonify({"status": "ok"})
 
         @self.app.route("/api/torrent/action", methods=["POST"])
         @token_required

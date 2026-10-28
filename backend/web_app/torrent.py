@@ -8,6 +8,7 @@ client and route to the right backend; everything keys torrents by hash so one
 code path drives both."""
 import json
 import posixpath
+import urllib.parse
 from backend.database import get_db
 
 CLIENTS = ("transmission", "qbittorrent")
@@ -240,6 +241,10 @@ def _transmission_normalize(t):
         "total_size": t.get("totalSize") or 0,
         "eta": eta if isinstance(eta, int) and eta >= 0 else None,
         "download_dir": t.get("downloadDir"),
+        # In Transmission the name *is* the top-level path (renaming it renames
+        # the folder), so this is exact - unlike qBittorrent, which reports it.
+        "content_path": posixpath.join(t["downloadDir"].rstrip("/"), t["name"])
+        if t.get("downloadDir") and t.get("name") else None,
         "error": t.get("errorString") or None,
         "added_date": t.get("addedDate") or 0,
         "peers_connected": t.get("peersConnected") or 0,
@@ -274,6 +279,120 @@ def transmission_get(cfg, torrent_hash):
     }, config=cfg)
     torrents = res.get("torrents", [])
     return _transmission_normalize(torrents[0]) if torrents else None
+
+
+def tracker_host(url):
+    """'udp://tracker.example.org:1337/announce' -> 'tracker.example.org'."""
+    try:
+        return urllib.parse.urlparse(url or '').hostname or url
+    except ValueError:
+        return url
+
+
+def _positive(value):
+    """Clients mark "unknown" with -1 (counts, ratio, dates); report None."""
+    return value if isinstance(value, (int, float)) and value >= 0 else None
+
+
+# Transmission file priority: -1 low, 0 normal, 1 high. An unwanted file is
+# reported as 'skip', which is what qBittorrent's priority 0 means as well.
+_TRANSMISSION_PRIORITY = {-1: 'low', 0: 'normal', 1: 'high'}
+# The levels each client can set on a file, lowest first. They don't line up:
+# Transmission has a "low", qBittorrent a "max" above high.
+FILE_PRIORITIES = {
+    "transmission": ["skip", "low", "normal", "high"],
+    "qbittorrent": ["skip", "normal", "high", "max"],
+}
+
+
+def clean_torrent_name(name):
+    """A new name for a torrent, file or folder: one path component. Raises
+    ValueError otherwise - a '/' would move the file, '..' would climb out."""
+    name = (name or "").strip()
+    if not name or name in (".", "..") or "/" in name or "\\" in name or "\x00" in name:
+        raise ValueError("Invalid name")
+    return name
+
+
+def transmission_rename(cfg, torrent_hash, path, new_name):
+    """Rename a file, a folder or (path=None) the torrent itself. In
+    Transmission the torrent's name *is* its top-level path, so renaming the
+    torrent renames that folder/file on disk - there is no separate label."""
+    if path is None:
+        t = transmission_get(cfg, torrent_hash)
+        if not t:
+            raise ValueError("That torrent is no longer in the client")
+        path = t["name"]
+    transmission_rpc("torrent-rename-path", {"ids": [torrent_hash], "path": path, "name": new_name}, config=cfg)
+
+
+def transmission_set_file_priority(cfg, torrent_hash, indices, priority):
+    """Skip files, or download them at a priority. A skipped file that is set
+    to a priority again is wanted again - one call does both."""
+    args = {"ids": [torrent_hash]}
+    if priority == "skip":
+        args["files-unwanted"] = indices
+    else:
+        args["files-wanted"] = indices
+        args[f"priority-{priority}"] = indices
+    transmission_rpc("torrent-set", args, config=cfg)
+
+
+def transmission_details(cfg, torrent_hash):
+    """One torrent in depth - files, transfer totals, trackers - in the
+    shared shape (see torrent_details), or None if the client doesn't know it."""
+    fields = [
+        "id", "name", "hashString", "status", "percentDone",
+        "rateDownload", "rateUpload", "totalSize", "eta",
+        "downloadDir", "errorString", "addedDate",
+        "peersConnected", "peersSendingToUs", "peersGettingFromUs", "trackerStats",
+        "files", "fileStats", "uploadedEver", "downloadedEver", "uploadRatio",
+        "doneDate", "comment", "isPrivate", "pieceSize", "pieceCount",
+    ]
+    res = transmission_rpc("torrent-get", {"ids": [torrent_hash], "fields": fields}, config=cfg)
+    torrents = res.get("torrents", [])
+    if not torrents:
+        return None
+    t = torrents[0]
+    stats = t.get("fileStats") or []
+    files = []
+    for index, f in enumerate(t.get("files") or []):
+        st = stats[index] if index < len(stats) else {}
+        size = f.get("length") or 0
+        done = f.get("bytesCompleted") or 0
+        wanted = st.get("wanted", True)
+        files.append({
+            "index": index,
+            "path": f.get("name"),
+            "size": size,
+            "downloaded": done,
+            "percent_done": round(done / size * 100, 1) if size else 100.0,
+            "wanted": bool(wanted),
+            "priority": _TRANSMISSION_PRIORITY.get(st.get("priority"), "normal") if wanted else "skip",
+        })
+    return {
+        "torrent": _transmission_normalize(t),
+        "files": files,
+        "priorities": FILE_PRIORITIES["transmission"],
+        "rename_renames_folder": TORRENT_RENAME_RENAMES_FOLDER["transmission"],
+        "info": {
+            "ratio": _positive(t.get("uploadRatio")),
+            "uploaded": t.get("uploadedEver") or 0,
+            "downloaded": t.get("downloadedEver") or 0,
+            "added_date": t.get("addedDate") or None,
+            "done_date": t.get("doneDate") or None,
+            "comment": t.get("comment") or None,
+            "private": bool(t.get("isPrivate")),
+            "piece_size": t.get("pieceSize") or None,
+            "piece_count": t.get("pieceCount") or None,
+            "trackers": [{
+                "host": tracker_host(s.get("announce")),
+                "seeds": _positive(s.get("seederCount")),
+                "leeches": _positive(s.get("leecherCount")),
+                "message": s.get("lastAnnounceResult") or None,
+            } for s in (t.get("trackerStats") or [])],
+        },
+    }
 
 
 def transmission_control(cfg, action, hashes, delete_data=False):
@@ -368,6 +487,55 @@ def torrent_get(client, torrent_hash, config=None):
         from backend.web_app.qbittorrent import qbit_get
         return qbit_get(cfg, torrent_hash)
     return transmission_get(cfg, torrent_hash)
+
+
+def torrent_details(client, torrent_hash, config=None):
+    """{torrent, files, info} for one torrent, or None if the client doesn't
+    have it. The same shape from both clients:
+
+    - torrent: the normalized status row (as torrent_list)
+    - files: [{index, path, size, downloaded, percent_done, wanted,
+      priority: skip|low|normal|high|max}] - `path` includes the torrent's
+      own top folder, as both clients report it
+    - info: {ratio, uploaded, downloaded, added_date, done_date (unix s or
+      None), comment, private, piece_size, piece_count,
+      trackers: [{host, seeds, leeches, message}]}
+    """
+    cfg = _resolve(client, config)
+    if client == "qbittorrent":
+        from backend.web_app.qbittorrent import qbit_details
+        return qbit_details(cfg, torrent_hash)
+    return transmission_details(cfg, torrent_hash)
+
+
+# What renaming the torrent itself does, per client - the UI says so up front
+TORRENT_RENAME_RENAMES_FOLDER = {"transmission": True, "qbittorrent": False}
+
+
+def torrent_rename(client, torrent_hash, new_name, path=None, config=None):
+    """Rename one file (`path` = its full path as details report it) or, with
+    no path, the torrent. File renames change the file on the VPS in both
+    clients; a torrent rename does in Transmission (its name is its top
+    folder) but is only the display name in qBittorrent."""
+    new_name = clean_torrent_name(new_name)
+    cfg = _resolve(client, config)
+    if client == "qbittorrent":
+        from backend.web_app.qbittorrent import qbit_rename
+        return qbit_rename(cfg, torrent_hash, path, new_name)
+    return transmission_rename(cfg, torrent_hash, path, new_name)
+
+
+def torrent_set_file_priority(client, torrent_hash, indices, priority, config=None):
+    """Set `priority` (one of FILE_PRIORITIES[client]; 'skip' = don't
+    download) on the torrent's files at `indices`. Raises ValueError on a
+    level the client doesn't have."""
+    if priority not in FILE_PRIORITIES.get(client, []):
+        raise ValueError(f"{client} has no file priority '{priority}'")
+    cfg = _resolve(client, config)
+    if client == "qbittorrent":
+        from backend.web_app.qbittorrent import qbit_set_file_priority
+        return qbit_set_file_priority(cfg, torrent_hash, indices, priority)
+    return transmission_set_file_priority(cfg, torrent_hash, indices, priority)
 
 
 def torrent_stats(client, config=None):

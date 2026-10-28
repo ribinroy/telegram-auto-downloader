@@ -25,6 +25,7 @@ export const qk = {
 
   torrentConfig: () => ['torrent', 'config'] as const,
   torrentList: (client: TorrentClient) => ['torrent', 'list', client] as const,
+  torrentDetails: (client: TorrentClient, hash: string) => ['torrent', 'details', client, hash] as const,
 
   fileRoots: (includeHidden: boolean) => ['files', 'roots', includeHidden] as const,
   fileList: (path: string, showHidden: boolean) => ['files', 'list', path, showHidden] as const,

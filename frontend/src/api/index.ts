@@ -940,6 +940,10 @@ export interface TorrentStatus {
   total_size: number;
   eta: number | null;
   download_dir: string;
+  /** Where the files really are on the VPS. Pull from this, not
+   *  `${download_dir}/${name}`: in qBittorrent the name is a label that can
+   *  differ from the folder on disk. */
+  content_path: string | null;
   error: string | null;
   peers_connected: number;
   seeds_connected: number;
@@ -952,6 +956,78 @@ export interface TorrentStatus {
   force_start: boolean | null;
   /** The VPS->DownLee transfer that already pulled this torrent, if any. */
   downlee: { id: number; message_id: string | null; status: string | null; progress: number } | null;
+}
+
+export interface TorrentFile {
+  index: number;
+  /** As the client reports it - includes the torrent's own top folder. */
+  path: string;
+  size: number;
+  downloaded: number;
+  percent_done: number;
+  wanted: boolean;
+  priority: 'skip' | 'low' | 'normal' | 'high' | 'max';
+}
+
+export type TorrentFilePriority = TorrentFile['priority'];
+
+export interface TorrentDetails {
+  torrent: TorrentStatus;
+  files: TorrentFile[];
+  /** The levels this client can set, lowest first ('skip' = don't download). */
+  priorities: TorrentFilePriority[];
+  /** Renaming the torrent renames its folder on the VPS (Transmission, where
+   *  the name *is* the top folder) rather than just its label (qBittorrent). */
+  rename_renames_folder: boolean;
+  info: {
+    ratio: number | null;
+    uploaded: number;
+    downloaded: number;
+    /** Unix seconds, or null when the client doesn't know. */
+    added_date: number | null;
+    done_date: number | null;
+    comment: string | null;
+    private: boolean;
+    piece_size: number | null;
+    piece_count: number | null;
+    trackers: { host: string; seeds: number | null; leeches: number | null; message: string | null }[];
+  };
+}
+
+export async function fetchTorrentDetails(client: TorrentClient, hash: string): Promise<TorrentDetails> {
+  const response = await authFetch(`/api/torrent/details?client=${client}&hash=${encodeURIComponent(hash)}`);
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.error || 'Failed to load the torrent');
+  return body as TorrentDetails;
+}
+
+/** Rename one file (`path` = its full path from details) on the VPS, or with
+ *  no path the torrent itself. */
+export async function renameTorrent(client: TorrentClient, hash: string, name: string, path?: string): Promise<void> {
+  const response = await authFetch('/api/torrent/rename', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ client, hash, name, path }),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.error || 'Rename failed');
+  }
+}
+
+/** Skip files, or download them at a priority (one of details' `priorities`). */
+export async function setTorrentFilePriority(
+  client: TorrentClient, hash: string, indices: number[], priority: TorrentFilePriority,
+): Promise<void> {
+  const response = await authFetch('/api/torrent/files/priority', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ client, hash, indices, priority }),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.error || 'Failed to change the file priority');
+  }
 }
 
 export async function fetchTorrentList(client: TorrentClient): Promise<{ configured: boolean; torrents?: TorrentStatus[]; error?: string }> {

@@ -190,3 +190,194 @@ def test_stop_on_complete_defaults_to_on():
 ])
 def test_transmission_urls_normalize_to_the_rpc_endpoint(given, expected):
     assert tor.normalize_transmission_url(given) == expected
+
+
+# --- torrent details (files, totals, trackers) -------------------------------
+
+def test_transmission_details_reports_files_priorities_and_trackers(monkeypatch):
+    def fake_rpc(method, arguments=None, config=None, timeout=20):
+        assert method == 'torrent-get' and arguments['ids'] == ['abc']
+        return {'torrents': [{
+            'hashString': 'abc', 'name': 'Show S01', 'status': 4, 'percentDone': 0.5,
+            'totalSize': 300, 'uploadRatio': -1, 'uploadedEver': 10, 'downloadedEver': 150,
+            'addedDate': 1700000000, 'doneDate': 0, 'isPrivate': True,
+            'pieceSize': 16384, 'pieceCount': 20,
+            'files': [{'name': 'Show S01/e01.mkv', 'length': 200, 'bytesCompleted': 150},
+                      {'name': 'Show S01/sample.mkv', 'length': 100, 'bytesCompleted': 0},
+                      {'name': 'Show S01/empty.nfo', 'length': 0, 'bytesCompleted': 0}],
+            'fileStats': [{'wanted': True, 'priority': 1},
+                          {'wanted': False, 'priority': 0},
+                          {'wanted': True, 'priority': -1}],
+            'trackerStats': [{'announce': 'udp://tracker.example.org:1337/announce',
+                              'seederCount': 12, 'leecherCount': -1, 'lastAnnounceResult': 'Success'}],
+        }]}
+    monkeypatch.setattr(tor, 'transmission_rpc', fake_rpc)
+    d = tor.torrent_details('transmission', 'abc', config={'url': 'x'})
+    assert d['torrent']['name'] == 'Show S01'
+    assert [(f['path'], f['percent_done'], f['priority']) for f in d['files']] == [
+        ('Show S01/e01.mkv', 75.0, 'high'),
+        ('Show S01/sample.mkv', 0.0, 'skip'),     # unwanted reads as skip
+        ('Show S01/empty.nfo', 100.0, 'low'),     # a zero-byte file is complete
+    ]
+    info = d['info']
+    assert info['ratio'] is None and info['done_date'] is None   # -1 / 0 mean "unknown"
+    assert info['private'] is True
+    assert info['trackers'] == [{'host': 'tracker.example.org', 'seeds': 12, 'leeches': None, 'message': 'Success'}]
+
+
+def test_transmission_details_of_an_unknown_hash_is_none(monkeypatch):
+    monkeypatch.setattr(tor, 'transmission_rpc', lambda *a, **k: {'torrents': []})
+    assert tor.torrent_details('transmission', 'nope', config={'url': 'x'}) is None
+
+
+def test_qbit_details_skips_peer_sources_and_maps_priorities(monkeypatch):
+    from backend.web_app import qbittorrent as qb
+    monkeypatch.setattr(qb, 'qbit_login', lambda cfg, timeout=20: (None, 'http://q'))
+    replies = {
+        'info': [{'hash': 'abc', 'name': 'Movie', 'state': 'downloading', 'progress': 0.25, 'size': 400}],
+        'properties': {'share_ratio': 0.5, 'total_uploaded': 50, 'total_downloaded': 100,
+                       'addition_date': 1700000000, 'completion_date': -1, 'pieces_num': 8,
+                       'piece_size': 65536, 'comment': 'hi'},
+        'files': [{'index': 0, 'name': 'Movie/movie.mkv', 'size': 400, 'progress': 0.25, 'priority': 7},
+                  {'index': 1, 'name': 'Movie/extras.mkv', 'size': 100, 'progress': 0, 'priority': 0}],
+        'trackers': [{'url': '** [DHT] **', 'num_seeds': 0},
+                     {'url': 'https://t.example.net/announce', 'num_seeds': 3, 'num_leeches': 4, 'msg': ''}],
+    }
+    monkeypatch.setattr(qb, '_qbit_request', lambda cfg, path, **k: replies[path.split('/')[-1].split('?')[0]])
+    d = tor.torrent_details('qbittorrent', 'abc', config={'url': 'x'})
+    assert [(f['priority'], f['wanted'], f['downloaded']) for f in d['files']] == [('max', True, 100), ('skip', False, 0)]
+    assert d['info']['done_date'] is None and d['info']['ratio'] == 0.5
+    assert d['info']['trackers'] == [{'host': 't.example.net', 'seeds': 3, 'leeches': 4, 'message': None}]
+
+
+def test_details_route_validates_and_404s(client, auth, monkeypatch):
+    from backend.web_app.routes import torrent as route
+    assert client.get('/api/torrent/details?client=nope&hash=a', headers=auth).status_code == 400
+    assert client.get('/api/torrent/details?client=transmission', headers=auth).status_code == 400
+    monkeypatch.setattr(route, 'torrent_details', lambda client, h: None)
+    assert client.get('/api/torrent/details?client=transmission&hash=ABC', headers=auth).status_code == 404
+
+
+# --- per-file priority ---------------------------------------------------------
+
+def test_transmission_skip_and_priorities_map_to_torrent_set(monkeypatch):
+    calls = []
+    monkeypatch.setattr(tor, 'transmission_rpc', lambda method, args=None, config=None, timeout=20: calls.append((method, args)) or {})
+    tor.torrent_set_file_priority('transmission', 'abc', [1, 2], 'skip', config={'url': 'x'})
+    tor.torrent_set_file_priority('transmission', 'abc', [0], 'high', config={'url': 'x'})
+    assert calls == [
+        ('torrent-set', {'ids': ['abc'], 'files-unwanted': [1, 2]}),
+        # a priority also makes a skipped file wanted again
+        ('torrent-set', {'ids': ['abc'], 'files-wanted': [0], 'priority-high': [0]}),
+    ]
+
+
+def test_qbit_priorities_map_to_its_codes(monkeypatch):
+    from backend.web_app import qbittorrent as qb
+    sent = []
+    monkeypatch.setattr(qb, '_qbit_request', lambda cfg, path, data=None, **k: sent.append((path, data)))
+    tor.torrent_set_file_priority('qbittorrent', 'abc', [0, 3], 'max', config={'url': 'x'})
+    tor.torrent_set_file_priority('qbittorrent', 'abc', [5], 'skip', config={'url': 'x'})
+    assert sent == [('/api/v2/torrents/filePrio', {'hash': 'abc', 'id': '0|3', 'priority': 7}),
+                    ('/api/v2/torrents/filePrio', {'hash': 'abc', 'id': '5', 'priority': 0})]
+
+
+def test_a_level_the_client_lacks_is_refused():
+    with pytest.raises(ValueError):
+        tor.torrent_set_file_priority('transmission', 'abc', [0], 'max', config={'url': 'x'})
+    with pytest.raises(ValueError):
+        tor.torrent_set_file_priority('qbittorrent', 'abc', [0], 'low', config={'url': 'x'})
+
+
+def test_file_priority_route_validates(client, auth, monkeypatch):
+    from backend.web_app.routes import torrent as route
+    post = lambda body: client.post('/api/torrent/files/priority', headers=auth, json=body)
+    assert post({'client': 'transmission', 'indices': [0], 'priority': 'high'}).status_code == 400      # no hash
+    assert post({'client': 'transmission', 'hash': 'a', 'indices': [], 'priority': 'high'}).status_code == 400
+    assert post({'client': 'transmission', 'hash': 'a', 'indices': ['x'], 'priority': 'high'}).status_code == 400
+    assert post({'client': 'transmission', 'hash': 'a', 'indices': [True], 'priority': 'high'}).status_code == 400
+    seen = []
+    monkeypatch.setattr(route, 'torrent_set_file_priority', lambda *a: seen.append(a))
+    assert post({'client': 'qbittorrent', 'hash': 'ABC', 'indices': [1], 'priority': 'skip'}).status_code == 200
+    assert seen == [('qbittorrent', 'abc', [1], 'skip')]
+
+
+# --- renaming ------------------------------------------------------------------
+
+@pytest.mark.parametrize('bad', ['', '  ', '.', '..', 'a/b', 'a\\b', 'x\x00'])
+def test_a_new_name_is_one_path_component(bad):
+    with pytest.raises(ValueError):
+        tor.clean_torrent_name(bad)
+
+
+def test_transmission_renames_a_file_or_the_top_folder(monkeypatch):
+    calls = []
+    def fake_rpc(method, args=None, config=None, timeout=20):
+        calls.append((method, args))
+        return {'torrents': [{'hashString': 'abc', 'name': 'Show S01'}]} if method == 'torrent-get' else {}
+    monkeypatch.setattr(tor, 'transmission_rpc', fake_rpc)
+    tor.torrent_rename('transmission', 'abc', 'e01 Pilot.mkv', path='Show S01/e01.mkv', config={'url': 'x'})
+    tor.torrent_rename('transmission', 'abc', ' Show (2024) ', config={'url': 'x'})
+    renames = [a for m, a in calls if m == 'torrent-rename-path']
+    assert renames == [
+        {'ids': ['abc'], 'path': 'Show S01/e01.mkv', 'name': 'e01 Pilot.mkv'},
+        # the torrent's name is its top-level path, so that is what gets renamed
+        {'ids': ['abc'], 'path': 'Show S01', 'name': 'Show (2024)'},
+    ]
+
+
+def test_qbit_renames_files_on_disk_but_only_the_torrent_label(monkeypatch):
+    from backend.web_app import qbittorrent as qb
+    sent = []
+    monkeypatch.setattr(qb, '_qbit_request', lambda cfg, path, data=None, **k: sent.append((path, data)))
+    tor.torrent_rename('qbittorrent', 'abc', 'new.mkv', path='Movie/sub/old.mkv', config={'url': 'x'})
+    tor.torrent_rename('qbittorrent', 'abc', 'loose.mkv', path='old.mkv', config={'url': 'x'})
+    tor.torrent_rename('qbittorrent', 'abc', 'Nice Name', config={'url': 'x'})
+    assert sent == [
+        ('/api/v2/torrents/renameFile', {'hash': 'abc', 'oldPath': 'Movie/sub/old.mkv', 'newPath': 'Movie/sub/new.mkv'}),
+        ('/api/v2/torrents/renameFile', {'hash': 'abc', 'oldPath': 'old.mkv', 'newPath': 'loose.mkv'}),
+        ('/api/v2/torrents/rename', {'hash': 'abc', 'name': 'Nice Name'}),
+    ]
+
+
+def test_rename_route_validates(client, auth, monkeypatch):
+    from backend.web_app.routes import torrent as route
+    post = lambda body: client.post('/api/torrent/rename', headers=auth, json=body)
+    assert post({'client': 'transmission', 'name': 'x'}).status_code == 400                    # no hash
+    assert post({'client': 'transmission', 'hash': 'a', 'name': 'x', 'path': ''}).status_code == 400
+    monkeypatch.setattr(route, 'torrent_rename', lambda *a, **k: (_ for _ in ()).throw(ValueError('Invalid name')))
+    assert post({'client': 'transmission', 'hash': 'a', 'name': '../x'}).status_code == 400
+
+
+# --- where a torrent's files really are ------------------------------------------
+
+def test_qbit_content_path_is_the_folder_on_disk_not_the_name():
+    """The SAVR-859 case: the torrent is called one thing, its folder another.
+    Pulling <save_path>/<name> failed with 'No such file' every time."""
+    t = qbit._normalize({'name': '[8KVR] SAVR-859 harem', 'save_path': '/home/u/Done',
+                         'content_path': '/home/u/Done/savr-859', 'state': 'stoppedUP', 'progress': 1})
+    assert t['content_path'] == '/home/u/Done/savr-859'
+
+
+def test_qbit_without_content_path_falls_back_to_save_path_and_name():
+    t = qbit._normalize({'name': 'Movie', 'save_path': '/home/u/Done/', 'state': 'uploading'})
+    assert t['content_path'] == '/home/u/Done/Movie'
+
+
+def test_transmission_content_path_is_dir_plus_name():
+    # Transmission's name *is* the top-level path, so this is exact there
+    t = tor._transmission_normalize({'name': 'Show S01', 'downloadDir': '/home/u/Done/', 'status': 6})
+    assert t['content_path'] == '/home/u/Done/Show S01'
+
+
+def test_a_pulled_torrent_is_matched_by_its_folder_on_disk(client, db, auth, monkeypatch):
+    from backend.web_app.routes import torrent as route
+    db.add_download(file='savr-859', status='done', downloaded_from='vps',
+                    url='/home/u/Done/savr-859')
+    monkeypatch.setattr(route, 'load_torrent_config', lambda c: {'url': 'x'})
+    monkeypatch.setattr(route, 'torrent_list', lambda c: [{
+        'name': '[8KVR] SAVR-859 harem', 'hash': 'abc', 'download_dir': '/home/u/Done',
+        'content_path': '/home/u/Done/savr-859',
+    }])
+    body = client.get('/api/torrent/list?client=qbittorrent', headers=auth).get_json()
+    assert body['torrents'][0]['downlee']['status'] == 'done'

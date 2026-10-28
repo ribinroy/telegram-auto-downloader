@@ -6,7 +6,7 @@ import type { Download } from '../types';
 const torrent = (over: Partial<TorrentStatus> = {}): TorrentStatus => ({
   id: 0, name: 't', hash: 'abc', status: 'completed', percent_done: 100,
   rate_download: 0, rate_upload: 0, total_size: 10, eta: null,
-  download_dir: '/d', error: null, peers_connected: 0, seeds_connected: 0,
+  download_dir: '/d', content_path: '/d/t', error: null, peers_connected: 0, seeds_connected: 0,
   leeches_connected: 0, seeds_total: null, leeches_total: null, added_date: 0,
   force_start: false, downlee: null, ...over,
 });
