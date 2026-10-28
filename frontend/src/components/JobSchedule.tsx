@@ -1,6 +1,7 @@
 import { Clock, Loader2, CheckCircle, AlertCircle } from 'lucide-react';
 import type { JobSchedule as Schedule } from '../api';
 import { useSaveJobSchedule } from '../hooks/useSettings';
+import { useErrorToast } from '../lib/notify';
 
 // Monday-first, matching the backend's datetime.weekday() (Monday = 0).
 const DAYS = [
@@ -34,6 +35,7 @@ export function JobSchedule({
   jobId, schedule, tz,
 }: { jobId: string; schedule: Schedule | undefined; tz: string | null }) {
   const save = useSaveJobSchedule();
+  useErrorToast(save.error, "Couldn't save the schedule");
   const days = schedule?.days ?? WEEKDAYS;
   const enabled = !!schedule?.enabled;
   const time = schedule?.time ?? '03:00';
@@ -95,10 +97,6 @@ export function JobSchedule({
           {days.length === 7 ? 'Every day' : `${days.length} day${days.length === 1 ? '' : 's'} a week`}
         </span>
       </div>
-
-      {save.isError && (
-        <p className="mt-2 text-[11px] text-red-400">{(save.error as Error).message}</p>
-      )}
 
       <div className="mt-2 space-y-0.5">
         {enabled && schedule?.next_run && (

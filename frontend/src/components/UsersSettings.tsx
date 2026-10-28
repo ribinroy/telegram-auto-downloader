@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { Loader2, AlertCircle, Shield, User as UserIcon, Globe, Send, RefreshCw, CheckCircle } from 'lucide-react';
+import { Loader2, Shield, User as UserIcon, Globe, Send, RefreshCw, CheckCircle } from 'lucide-react';
 import type { AppUser } from '../api';
 import { useUsers, useSyncUsers, useUpdateUserRole } from '../hooks/useSettings';
+import { useErrorToast } from '../lib/notify';
 
 export function UsersSettings() {
   const usersQuery = useUsers();
@@ -10,6 +11,7 @@ export function UsersSettings() {
   const syncMut = useSyncUsers();
   const roleMut = useUpdateUserRole();
   const [error, setError] = useState<string | null>(null);
+  useErrorToast(error, 'Users');
   const [savingId, setSavingId] = useState<number | null>(null);
   const [syncResult, setSyncResult] = useState<number | null>(null);
   const syncing = syncMut.isPending;
@@ -74,13 +76,6 @@ export function UsersSettings() {
         <div className="flex items-center gap-2 bg-green-500/20 border border-green-500/50 rounded-lg p-3 text-green-400 text-sm">
           <CheckCircle className="w-4 h-4 shrink-0" />
           <span>Synced {syncResult} group member(s)</span>
-        </div>
-      )}
-
-      {error && (
-        <div className="flex items-center gap-2 bg-red-500/20 border border-red-500/50 rounded-lg p-3 text-red-400 text-sm">
-          <AlertCircle className="w-4 h-4 shrink-0" />
-          <span>{error}</span>
         </div>
       )}
 

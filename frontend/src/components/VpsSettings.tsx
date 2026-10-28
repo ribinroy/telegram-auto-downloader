@@ -14,6 +14,7 @@ import {
 } from '../hooks/useTorrents';
 import { FolderBrowser } from './FolderBrowser';
 import { ConfirmDialog } from './ConfirmDialog';
+import { useErrorToast, useSuccessToast } from '../lib/notify';
 
 export function VpsSettings({ onChange }: { onChange?: () => void }) {
   // Queries
@@ -38,7 +39,9 @@ export function VpsSettings({ onChange }: { onChange?: () => void }) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
+  useErrorToast(error, 'VPS connection');
   const [success, setSuccess] = useState<string | null>(null);
+  useSuccessToast(success, 'VPS connection');
   const [testResult, setTestResult] = useState<{ success: boolean; message?: string; error?: string } | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
   // The watched folder pending removal (null = no dialog open).
@@ -48,6 +51,7 @@ export function VpsSettings({ onChange }: { onChange?: () => void }) {
 
   // Watched folders
   const [foldersError, setFoldersError] = useState<string | null>(null);
+  useErrorToast(foldersError, 'Watched folders');
   const [browserOpen, setBrowserOpen] = useState(false);
   const [destTarget, setDestTarget] = useState<VpsWatchFolder | null>(null);
 
@@ -252,20 +256,6 @@ export function VpsSettings({ onChange }: { onChange?: () => void }) {
         {!loading && statusPill}
       </div>
 
-      {success && (
-        <div className="flex items-center gap-2 bg-green-500/20 border border-green-500/50 rounded-lg p-3 mb-4 text-green-400 text-sm">
-          <CheckCircle className="w-4 h-4 shrink-0" />
-          <span>{success}</span>
-        </div>
-      )}
-
-      {error && (
-        <div className="flex items-center gap-2 bg-red-500/20 border border-red-500/50 rounded-lg p-3 mb-4 text-red-400 text-sm">
-          <AlertCircle className="w-4 h-4 shrink-0" />
-          <span>{error}</span>
-        </div>
-      )}
-
       <p className="text-sm text-slate-400 mb-4">
         Connect to a remote server over SSH/SFTP to browse and download files from watched folders.
       </p>
@@ -445,13 +435,6 @@ export function VpsSettings({ onChange }: { onChange?: () => void }) {
           </p>
         )}
 
-        {foldersError && (
-          <div className="flex items-center gap-2 bg-red-500/20 border border-red-500/50 rounded-lg p-3 mb-3 text-red-400 text-sm">
-            <AlertCircle className="w-4 h-4 shrink-0" />
-            <span>{foldersError}</span>
-          </div>
-        )}
-
         {foldersLoading ? (
           <div className="flex items-center justify-center py-6">
             <Loader2 className="w-5 h-5 text-cyan-500 animate-spin" />
@@ -605,7 +588,9 @@ function TorrentClientCard({
   const [incompleteDir, setIncompleteDir] = useState('');
   const [localDir, setLocalDir] = useState('');
   const [error, setError] = useState<string | null>(null);
+  useErrorToast(error, 'Torrent client');
   const [success, setSuccess] = useState<string | null>(null);
+  useSuccessToast(success, 'Torrent client');
   const [testResult, setTestResult] = useState<{ success: boolean; message?: string; error?: string } | null>(null);
   // Which folder field is currently picking a path (local_dir browses the home server).
   const [picking, setPicking] = useState<null | 'download_dir' | 'incomplete_dir' | 'local_dir'>(null);
@@ -723,19 +708,6 @@ function TorrentClientCard({
           </span>
         )}
       </div>
-
-      {success && (
-        <div className="flex items-center gap-2 bg-green-500/20 border border-green-500/50 rounded-lg p-3 mb-3 text-green-400 text-sm">
-          <CheckCircle className="w-4 h-4 shrink-0" />
-          <span>{success}</span>
-        </div>
-      )}
-      {error && (
-        <div className="flex items-center gap-2 bg-red-500/20 border border-red-500/50 rounded-lg p-3 mb-3 text-red-400 text-sm">
-          <AlertCircle className="w-4 h-4 shrink-0" />
-          <span>{error}</span>
-        </div>
-      )}
 
       <div className="space-y-3">
         <div>

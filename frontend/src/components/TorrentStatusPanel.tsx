@@ -14,6 +14,7 @@ import { useTorrentList, useTorrentAction } from '../hooks/useTorrents';
 import { useDownloadVpsFile } from '../hooks/useVps';
 import { useLayoutContext } from './Layout';
 import type { Download } from '../types';
+import { useErrorToast } from '../lib/notify';
 
 // Reserved filter values: not statuses the clients report, so they can't collide.
 const FORCED_FILTER = '@forced';
@@ -82,6 +83,7 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
   const loaded = !listQuery.isLoading;
   const [actionError, setActionError] = useState<string | null>(null);
   const error = actionError || listQuery.data?.error || (listQuery.isError ? 'Failed to reach the torrent client' : null);
+  useErrorToast(error, 'Torrent client');
 
   // Hashes with an action in flight (buttons disabled), and the torrent pending removal.
   const [busy, setBusy] = useState<Set<string>>(new Set());
@@ -334,10 +336,6 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
           </div>
         )}
       </div>
-
-      {error && (
-        <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-2.5 text-red-400 text-sm">{error}</div>
-      )}
 
       {!error && torrents.length === 0 && (
         <div className="min-h-[40vh] flex items-center justify-center text-slate-400">

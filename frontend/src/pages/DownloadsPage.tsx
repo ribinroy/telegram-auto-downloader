@@ -7,6 +7,7 @@ import { DownloadItem } from '../components/DownloadItem';
 import { AddUrlModal } from '../components/AddUrlModal';
 import { DownloadQueueButton } from '../components/DownloadQueue';
 import type { SortBy, SortOrder } from '../api';
+import { useErrorToast } from '../lib/notify';
 
 export const isTorrentFile = (f: File) =>
   /\.torrent$/i.test(f.name) || f.type === 'application/x-bittorrent';
@@ -21,6 +22,7 @@ export function DownloadsPage() {
     addUrlOpen, setAddUrlOpen, pastedUrl, setPastedUrl,
     vpsReady, showSecured,
   } = useLayoutContext();
+  useErrorToast(error, "Couldn't load downloads");
 
   const navigate = useNavigate();
   const searchRef = useRef<HTMLInputElement>(null);
@@ -238,12 +240,6 @@ export function DownloadsPage() {
         </div>
 
         {/* Error */}
-        {error && (
-          <div className="bg-red-500/20 border border-red-500/50 rounded-xl p-4 mb-6 text-red-400">
-            {error}
-          </div>
-        )}
-
         {/* Downloads List */}
         {loading ? (
           <div className="min-h-[50vh] flex items-center justify-center text-slate-400">

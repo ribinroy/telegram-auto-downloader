@@ -799,6 +799,17 @@ calls `logsafe.install(LOG_FILE)`.
     `message` (the count, the filename, the error), not one long sentence as
     the title. Layout renders the single `ToastContainer`, stacked above modals
     (`z-[130]`) so a modal's own action can report back.
+  - **Errors and failed loads are toasts too** ("Failed to fetch" included).
+    A component holding an error/success *state* keeps it and calls
+    `useErrorToast(error, 'Title')` / `useSuccessToast(success, 'Title')`
+    (`lib/notify.ts`) instead of rendering a row: they toast when the value
+    turns truthy or changes message, not on every render or every failed poll
+    repeating the same error, and again after a reset. Where a failed load
+    leaves nothing to show, the content area says so itself ("Couldn't load
+    this folder") - that is the content's own empty state, not an extra row.
+    Left inline on purpose: the login form (outside the app shell), the
+    add-URL dialog's URL validation, the rename-rule editor's regex error, the
+    folder picker's per-folder errors and the thumbnail-sync stats report.
   - Persistent page chrome (search, toolbars, column headers) stays put; only
     what is transient floats. A message that belongs to one form field (a
     validation error, a "Test connection" result next to its button) stays next

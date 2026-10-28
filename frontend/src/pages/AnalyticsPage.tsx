@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Loader2, Download, CheckCircle, XCircle, TrendingUp, HardDrive, Calendar, Clock, User } from 'lucide-react';
 import { formatBytes } from '../utils/format';
 import { useAnalytics } from '../hooks/useMisc';
+import { useErrorToast } from '../lib/notify';
 import {
   AreaChart,
   Area,
@@ -29,6 +30,7 @@ export function AnalyticsPage() {
   const data = analyticsQuery.data ?? null;
   const loading = analyticsQuery.isLoading;
   const error = analyticsQuery.isError ? 'Failed to load analytics' : null;
+  useErrorToast(analyticsQuery.error, "Couldn't load analytics");
 
   const formatLabel = (label: string) => {
     if (groupBy === 'hour') {

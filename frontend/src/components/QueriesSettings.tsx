@@ -1,8 +1,9 @@
 import { useState } from 'react';
-import { Loader2, AlertCircle, Plus, Trash2, Play, Pencil, X, TerminalSquare, BookOpen, ChevronDown } from 'lucide-react';
+import { Loader2, Plus, Trash2, Play, Pencil, X, TerminalSquare, BookOpen, ChevronDown } from 'lucide-react';
 import type { BotQuery } from '../api';
 import { useBotQueries, useSaveBotQuery, useDeleteBotQuery, useTestBotQuery } from '../hooks/useSettings';
 import { ConfirmDialog } from './ConfirmDialog';
+import { useErrorToast } from '../lib/notify';
 
 export function QueriesSettings() {
   const queriesQuery = useBotQueries();
@@ -12,6 +13,7 @@ export function QueriesSettings() {
   const deleteMut = useDeleteBotQuery();
   const testMut = useTestBotQuery();
   const [error, setError] = useState<string | null>(null);
+  useErrorToast(error, 'Bot queries');
 
   // Editor state (shared by "add new" and "edit existing")
   const [editingKey, setEditingKey] = useState<string | null>(null); // original key, '' = new
@@ -161,13 +163,6 @@ done`}</pre>
           </p>
         </div>
       </details>
-
-      {error && (
-        <div className="flex items-center gap-2 bg-red-500/20 border border-red-500/50 rounded-lg p-3 text-red-400 text-sm">
-          <AlertCircle className="w-4 h-4 shrink-0" />
-          <span>{error}</span>
-        </div>
-      )}
 
       {queries.length === 0 && !editorOpen && (
         <p className="text-sm text-slate-500">No queries configured yet.</p>

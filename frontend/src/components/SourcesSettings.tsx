@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import {
-  Loader2, AlertCircle, Plus, Trash2, Pencil, Check, X, Eye, EyeOff, FolderOpen, Globe,
+  Loader2, Plus, Trash2, Pencil, Check, X, Eye, EyeOff, FolderOpen, Globe,
 } from 'lucide-react';
 import { browseLocal } from '../api';
 import type { SourceMapping } from '../types';
 import { useMappings, useCreateMapping, useUpdateMapping, useDeleteMapping } from '../hooks/useSettings';
 import { ConfirmDialog } from './ConfirmDialog';
 import { FolderBrowser } from './FolderBrowser';
+import { useErrorToast } from '../lib/notify';
 
 export function SourcesSettings({ onChange }: { onChange?: () => void }) {
   const mappingsQuery = useMappings();
@@ -16,6 +17,7 @@ export function SourcesSettings({ onChange }: { onChange?: () => void }) {
   const updateMut = useUpdateMapping();
   const deleteMut = useDeleteMapping();
   const [error, setError] = useState<string | null>(null);
+  useErrorToast(error, 'Sources');
 
   // Add form
   const [showAdd, setShowAdd] = useState(false);
@@ -99,13 +101,6 @@ export function SourcesSettings({ onChange }: { onChange?: () => void }) {
 
   return (
     <div className="space-y-6">
-      {error && (
-        <div className="flex items-center gap-2 bg-red-500/20 border border-red-500/50 rounded-lg p-3 text-red-400 text-sm">
-          <AlertCircle className="w-4 h-4 shrink-0" />
-          <span>{error}</span>
-        </div>
-      )}
-
       <div>
         <div className="flex items-center justify-between mb-3">
           <div>

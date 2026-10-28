@@ -4,7 +4,7 @@ import {
   FolderOpen, Loader2, X, Download, Copy, Scissors, ClipboardPaste,
   Pencil, Trash2, Info, Eye, Link as LinkIcon, CheckSquare, HardDrive, Search, Menu,
 } from 'lucide-react';
-import { notify } from '../lib/notify';
+import { notify, useErrorToast } from '../lib/notify';
 import { useLayoutContext } from '../components/Layout';
 import { ExplorerSidebar } from '../components/explorer/ExplorerSidebar';
 import { ExplorerToolbar } from '../components/explorer/ExplorerToolbar';
@@ -482,6 +482,7 @@ export function ExplorerPage() {
   const trashPath = listing.data?.trash ?? null;
   const loading = searchQuery ? search.isLoading : (listing.isLoading && !listing.data);
   const listError = (searchQuery ? search.error : listing.error) as Error | null;
+  useErrorToast(listError, "Couldn't load this folder");
 
   return (
     // Fixed to the viewport below the header, so the page itself never
@@ -568,12 +569,6 @@ export function ExplorerPage() {
           />
 
 
-          {listError && (
-            <div className="bg-red-500/15 border border-red-500/40 rounded-xl p-3 mb-3 text-sm text-red-300">
-              {listError.message}
-            </div>
-          )}
-
           {searchQuery && (
             <p className="text-xs text-slate-500 mb-2">
               {search.data?.entries.length ?? 0} match(es) under {currentPath}
@@ -597,7 +592,8 @@ export function ExplorerPage() {
                   {searchQuery || filter
                     ? <Search className="w-12 h-12 mx-auto mb-4 opacity-40" />
                     : <FolderOpen className="w-12 h-12 mx-auto mb-4 opacity-40" />}
-                  <p>{searchQuery || filter ? 'Nothing matches' : 'This folder is empty'}</p>
+                  {/* A failed load isn't an empty folder; the toast carries the reason */}
+                  <p>{listError ? "Couldn't load this folder" : searchQuery || filter ? 'Nothing matches' : 'This folder is empty'}</p>
                 </div>
               </div>
             ) : (
