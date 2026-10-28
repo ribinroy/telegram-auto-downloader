@@ -205,10 +205,12 @@ Access/refresh token pair. Access tokens are short (`ACCESS_TOKEN_MINUTES`, defa
 - `POST /api/delete` - Soft delete
 
 ### Download Queue
-- `GET /api/queue` - `{limits, max_limit, active: {total, telegram, ytdlp, vps}, waiting: [download...]}` (waiting carries `hidden`)
+- `GET /api/queue` - `{limits, max_limit, active: {total, telegram, ytdlp, vps}, running, waiting, resumable}` (rows carry `hidden`; `resumable` = stopped + paused)
 - `PUT /api/queue/limits` - any of `{global, telegram, ytdlp, vps}`; a per-source `null` removes that cap
 - `POST /api/queue/reorder` - `{message_ids}`, first to start first
 - `POST /api/queue/start-now` - `{message_id}`, past the limits
+- `POST /api/queue/stop-all` - stop every running and waiting download -> `{stopped, errors, ...queue}`
+- `POST /api/queue/resume-all` - queue every stopped/paused one again (not failed) -> `{queued, ...queue}`
 
 ### Rename Rules
 - `GET/POST /api/settings/rename-rules`, `PUT/DELETE /api/settings/rename-rules/<id>`, `POST .../reorder`
@@ -442,13 +444,26 @@ owns all of it.
   stop/pause/delete/limit changes. Lowering a limit never stops a running
   download. `/api/retry` and Telegram `/api/resume` go through
   `admit_existing()`, so with no free slot they join the back of the line.
-- UI: `components/DownloadQueue.tsx` above the downloads list, shown while
-  anything runs or waits: an "At once" stepper, per-source caps behind the
-  sliders button, and the waiting line - drag the grip to reorder (@dnd-kit,
-  pointer + keyboard; only the grip drags, so a phone can still scroll), ⚡ to
-  start now, ✕ to leave the queue. Secured sources' waiting items are counted,
-  not named, unless secured items are shown. List rows show "Waiting · #n",
-  read live from the queue query (`useQueuePlace`).
+- **Stop all / resume all.** `stop_all()` empties the waiting line first,
+  under the lock (so the runner can't start one of them in the gap the first
+  stopped download leaves), then stops running ones in parallel through the
+  route's own `stop_one_download()` - the same work as each row's stop button;
+  a VPS stop waits for its thread, so ten in series would take minutes.
+  `resume_all()` puts stopped + paused downloads back in the line, oldest first,
+  rather than resuming them directly: resume-all on twenty must not start
+  twenty. Failed ones are left to their own retry - a failure has a reason.
+- UI: `components/DownloadQueue.tsx` - a floating button stacked above the VPS
+  and + buttons showing `running/total`, also shown (as a pause icon with a
+  count) while anything is stopped, so resume-all stays reachable after
+  stop-all. It opens a modal (bottom sheet on a phone): Stop all (with an
+  inline confirm) / Resume all, an "At once" stepper, per-source caps behind
+  the sliders button, the running downloads with live bars (`useRealtime`
+  patches the queue cache's `running` on every progress event), and the
+  waiting line - drag the grip to reorder (@dnd-kit, pointer + keyboard; only
+  the grip drags, so a phone can still scroll), ⚡ to start now, ✕ to leave the
+  queue. Secured sources' rows are counted, not named, unless secured items are
+  shown. List rows show "Waiting · #n", read live from the queue query
+  (`useQueuePlace`).
 
 ## Download Flow
 
