@@ -50,7 +50,16 @@ export interface QueueState {
   limits: { global: number } & Record<QueueSource, number | null>;
   max_limit: number;
   active: { total: number } & Record<QueueSource, number>;
+  /** Downloads holding a slot right now, oldest first. */
+  running: Download[];
   waiting: Download[];
+  /** Stopped + paused downloads - what "resume all" would bring back. */
+  resumable: number;
+}
+
+export interface StopAllResult extends QueueState {
+  stopped: number;
+  errors: { message_id: string; file: string; error: string }[];
 }
 
 export interface VideoFormat {

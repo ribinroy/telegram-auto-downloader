@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import { connectSocket, disconnectSocket, type StatusUpdate } from '../api/socket';
 import { qk } from '../api/queryKeys';
-import type { Download, DownloadsResponse } from '../types';
+import type { Download, DownloadsResponse, QueueState } from '../types';
 
 type DownloadsCache = InfiniteData<DownloadsResponse> | undefined;
 
@@ -57,13 +57,21 @@ export function useRealtime(cb: RealtimeCallbacks = {}) {
         patchDownloads(list => list.filter(d => d.message_id !== message_id));
         refreshQueue();
       },
-      onProgress: (p) => mergeById(p.message_id, {
-        progress: p.progress,
-        downloaded_bytes: p.downloaded_bytes,
-        total_bytes: p.total_bytes,
-        speed: p.speed,
-        pending_time: p.pending_time,
-      }),
+      onProgress: (p) => {
+        const patch = {
+          progress: p.progress,
+          downloaded_bytes: p.downloaded_bytes,
+          total_bytes: p.total_bytes,
+          speed: p.speed,
+          pending_time: p.pending_time,
+        };
+        mergeById(p.message_id, patch);
+        // The queue modal lists running downloads too; keep its bars live
+        qc.setQueryData<QueueState>(qk.queue(), old => old && {
+          ...old,
+          running: old.running.map(d => (d.message_id === p.message_id ? { ...d, ...patch } : d)),
+        });
+      },
       onStatus: (s) => {
         const dl = findDownload(s.message_id);
         mergeById(s.message_id, { status: s.status, error: s.error || null, speed: 0 });

@@ -209,3 +209,42 @@ def test_a_retry_with_no_free_slot_joins_the_queue(client, db, auth, started):
     assert res.get_json() == {'status': 'waiting'}
     assert [d['file'] for d in db.get_waiting_downloads()] == ['old']
     assert started == []
+
+
+def test_stop_all_empties_the_queue_and_stops_what_runs(client, db, auth, started):
+    dq.set_limits({'global': 2})
+    for n in ('a', 'b', 'c', 'd'):
+        new(db, n, 'ytdlp')
+    res = client.post('/api/queue/stop-all', headers=auth).get_json()
+    assert res['stopped'] == 4 and res['errors'] == []
+    assert set(statuses(db).values()) == {'stopped'}
+    assert res['waiting'] == [] and res['active']['total'] == 0
+    assert res['resumable'] == 4
+    # Nothing was left in line for the runner to pick up
+    assert dq.pump() == 0 and started == []
+
+
+def test_resume_all_goes_through_the_queue_not_around_it(client, db, auth, started):
+    dq.set_limits({'global': 2})
+    for n in ('a', 'b', 'c', 'd'):
+        new(db, n, 'ytdlp')
+    client.post('/api/queue/stop-all', headers=auth)
+    db.add_download(file='broken', status='failed', message_id='id-broken',
+                    downloaded_from='example.com', url='https://x/broken')
+
+    res = client.post('/api/queue/resume-all', headers=auth).get_json()
+    assert res['queued'] == 4                       # the failed one is left alone
+    assert statuses(db)['broken'] == 'failed'
+    assert dq.pump() == 2                           # the limit still applies
+    assert started == ['id-a', 'id-b']
+    assert [d['file'] for d in db.get_waiting_downloads()] == ['c', 'd']
+
+
+def test_the_snapshot_lists_running_downloads(client, db, auth, started):
+    dq.set_limits({'global': 1})
+    new(db, 'a')
+    new(db, 'b')
+    body = client.get('/api/queue', headers=auth).get_json()
+    assert [d['file'] for d in body['running']] == ['a']
+    assert [d['file'] for d in body['waiting']] == ['b']
+    assert body['resumable'] == 0

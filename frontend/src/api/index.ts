@@ -1,4 +1,4 @@
-import type { DownloadsResponse, Stats, UrlCheckResult, Download, SourceMapping, AnalyticsData, QueueState } from '../types';
+import type { DownloadsResponse, Stats, UrlCheckResult, Download, SourceMapping, AnalyticsData, QueueState, StopAllResult } from '../types';
 
 export const API_BASE = import.meta.env.DEV ? (import.meta.env.VITE_API_BASE || 'http://localhost:4444') : '';
 const TOKEN_KEY = 'auth_token';
@@ -312,6 +312,14 @@ export const reorderQueue = (messageIds: string[]) =>
 /** Start one waiting download now, past the limits. */
 export const startQueuedNow = (messageId: string) =>
   queueRequest('/start-now', jsonInit('POST', { message_id: messageId }));
+
+/** Stop every running and waiting download. */
+export const stopAllDownloads = () =>
+  queueRequest('/stop-all', { method: 'POST' }) as Promise<StopAllResult>;
+
+/** Queue every stopped/paused download again; the limits decide how many start. */
+export const resumeAllDownloads = () =>
+  queueRequest('/resume-all', { method: 'POST' }) as Promise<QueueState & { queued: number }>;
 
 export async function stopDownload(message_id: string): Promise<void> {
   await authFetch(`/api/stop`, {

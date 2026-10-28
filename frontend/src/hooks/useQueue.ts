@@ -1,5 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchQueue, setQueueLimits, reorderQueue, startQueuedNow } from '../api';
+import {
+  fetchQueue, setQueueLimits, reorderQueue, startQueuedNow, stopAllDownloads, resumeAllDownloads,
+} from '../api';
 import { qk } from '../api/queryKeys';
 import type { Download, QueueSource, QueueState } from '../types';
 
@@ -72,3 +74,20 @@ export function useStartQueuedNow() {
     },
   });
 }
+
+/** Bulk actions change many rows at once: take the queue from the response
+ *  and refetch the downloads list rather than patching it row by row. */
+function useBulkQueueAction<T extends QueueState>(fn: () => Promise<T>) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: fn,
+    onSuccess: (state) => {
+      qc.setQueryData(qk.queue(), state);
+      qc.invalidateQueries({ queryKey: ['downloads'] });
+      qc.invalidateQueries({ queryKey: qk.stats() });
+    },
+  });
+}
+
+export const useStopAllDownloads = () => useBulkQueueAction(stopAllDownloads);
+export const useResumeAllDownloads = () => useBulkQueueAction(resumeAllDownloads);

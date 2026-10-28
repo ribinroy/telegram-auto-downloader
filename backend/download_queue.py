@@ -136,15 +136,21 @@ def snapshot():
     list does, so the page can keep a secured source's filenames out of the
     queue panel unless secured items are being shown."""
     from backend.web_app import get_web_app
-    waiting = get_db().get_waiting_downloads()
+    db = get_db()
+    waiting = db.get_waiting_downloads()
+    running = sorted(db.get_downloads_by_status('downloading'), key=lambda d: d.get('created_at') or '')
     web = get_web_app()
-    if web and waiting:
-        waiting = web._annotate_downloads(waiting)
+    if web:
+        waiting = web._annotate_downloads(waiting) if waiting else waiting
+        running = web._annotate_downloads(running) if running else running
     return {
         'limits': get_limits(),
         'max_limit': MAX_LIMIT,
         'active': active_counts(),
+        'running': running,
         'waiting': waiting,
+        # What "resume all" would bring back
+        'resumable': len(_resumable()),
     }
 
 
@@ -213,6 +219,61 @@ def start_now(message_id):
         _claim(download)
     _start(download)
     return True, None
+
+
+def _resumable():
+    """Stopped and paused downloads - decisions the user can undo in bulk.
+    Failed ones are left out: a failure has a reason, and its own retry."""
+    db = get_db()
+    rows = db.get_downloads_by_status('stopped') + db.get_downloads_by_status('paused')
+    return sorted(rows, key=lambda d: d.get('created_at') or '')
+
+
+def stop_all(stop_one):
+    """Stop every waiting and running download. `stop_one(message_id)` is the
+    route's single-download stop (returns an error or None).
+
+    The waiting line is emptied first, under the lock, so the runner can't
+    start one of them in the gap left by the first running download stopping.
+    Running ones are then stopped in parallel - a VPS stop waits for its
+    transfer thread, and doing ten of those in a row would take minutes."""
+    from concurrent.futures import ThreadPoolExecutor
+    db = get_db()
+    errors = []
+    with _lock:
+        waiting = db.get_waiting_downloads()
+        for download in waiting:
+            error = stop_one(download['message_id'])
+            if error:
+                errors.append({'message_id': download['message_id'], 'file': download['file'], 'error': error})
+    running = db.get_downloads_by_status('downloading')
+    if running:
+        with ThreadPoolExecutor(max_workers=min(8, len(running))) as pool:
+            results = list(pool.map(lambda d: (d, stop_one(d['message_id'])), running))
+        errors += [{'message_id': d['message_id'], 'file': d['file'], 'error': e}
+                   for d, e in results if e]
+    _notify()
+    return {'stopped': len(waiting) + len(running) - len(errors), 'errors': errors}
+
+
+def resume_all():
+    """Queue every stopped/paused download, oldest first; the runner then
+    starts as many as the limits allow. Going through the queue rather than
+    resuming them directly is the point - "resume all" on twenty downloads
+    must not start twenty at once. Returns how many were queued."""
+    db = get_db()
+    with _lock:
+        rows = _resumable()
+        position = db.next_queue_position()
+        for offset, download in enumerate(rows):
+            db.update_download_by_message_id(
+                download['message_id'], status='waiting', speed=0, error=None,
+                queue_position=position + offset)
+    for download in rows:
+        _emit_status(download['message_id'], 'waiting')
+    kick()
+    _notify()
+    return len(rows)
 
 
 # --- running -----------------------------------------------------------------
