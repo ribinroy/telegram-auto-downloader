@@ -578,7 +578,10 @@ a pulled USB drive disappears from the sidebar.
   above the list it ate the top of every folder on a phone. Below `sm` the toolbar's
   seven action buttons collapse the same way, into one overflow menu (reusing
   `FileContextMenu`, whose items gained an `active` flag for the toggles) that also
-  carries sorting - the list header can only sort by name at that width. The current directory lives in the URL
+  carries sorting - the list header can only sort by name at that width. The page is
+  pinned to the viewport below the header (`h-[calc(100dvh-...)]`, flex column), so the
+  document never scrolls: only the listing box does, with the list's column header
+  pinned above its rows, and the lg sidebar scrolls on its own if it overflows. The current directory lives in the URL
   (`/files?path=...`), so browser back/forward is the explorer's history.
   **Click opens; press-and-hold selects** (`useRowPress` in `FileList.tsx`, 450 ms,
   cancelled by any real pointer movement, and it swallows the `click` that follows

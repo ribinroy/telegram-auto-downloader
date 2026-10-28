@@ -426,8 +426,10 @@ export function ExplorerPage() {
   const selectedSize = selectedEntries.reduce((sum, e) => sum + e.size, 0);
 
   return (
-    <div className="max-w-[1600px] mx-auto px-3 sm:px-4 pt-2 sm:pt-4 pb-24 w-full">
-      <div className="flex items-center gap-2 mb-3">
+    // Fixed to the viewport below the header, so the page itself never
+    // scrolls: only the listing box does, and the toolbar stays put.
+    <div className="max-w-[1600px] mx-auto px-3 sm:px-4 pt-2 sm:pt-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] w-full h-[calc(100dvh-3.5rem)] sm:h-[calc(100dvh-4rem)] flex flex-col">
+      <div className="shrink-0 flex items-center gap-2 mb-3">
         <button
           onClick={() => setPlacesOpen(true)}
           className="lg:hidden p-2 -ml-1 rounded-lg bg-slate-800/60 text-slate-300 hover:text-white hover:bg-slate-700/60 transition-colors"
@@ -445,8 +447,8 @@ export function ExplorerPage() {
         )}
       </div>
 
-      <div className="flex gap-4">
-        <div className="hidden lg:block w-64 shrink-0">
+      <div className="flex-1 min-h-0 flex gap-4">
+        <div className="hidden lg:block w-64 shrink-0 overflow-y-auto">
           <ExplorerSidebar
             roots={rootsQuery.data?.roots ?? []}
             loading={rootsQuery.isLoading}
@@ -459,7 +461,7 @@ export function ExplorerPage() {
         </div>
 
         <div
-          className={`flex-1 min-w-0 rounded-xl transition-colors ${dragging ? 'ring-2 ring-cyan-500 ring-offset-2 ring-offset-slate-900' : ''}`}
+          className={`flex-1 min-w-0 min-h-0 flex flex-col rounded-xl transition-colors ${dragging ? 'ring-2 ring-cyan-500 ring-offset-2 ring-offset-slate-900' : ''}`}
           onDragOver={e => { if (writable) { e.preventDefault(); setDragging(true); } }}
           onDragLeave={() => setDragging(false)}
           onDrop={e => {
@@ -610,41 +612,43 @@ export function ExplorerPage() {
             </p>
           )}
 
-          {loading ? (
-            <div className="min-h-[40vh] flex items-center justify-center text-slate-400">
-              <Loader2 className="w-8 h-8 animate-spin text-cyan-500" />
-            </div>
-          ) : visible.length === 0 ? (
-            <div className="min-h-[40vh] flex items-center justify-center text-slate-400">
-              <div className="text-center">
-                {searchQuery || filter
-                  ? <Search className="w-12 h-12 mx-auto mb-4 opacity-40" />
-                  : <FolderOpen className="w-12 h-12 mx-auto mb-4 opacity-40" />}
-                <p>{searchQuery || filter ? 'Nothing matches' : 'This folder is empty'}</p>
+          <div className="flex-1 min-h-0">
+            {loading ? (
+              <div className="h-full flex items-center justify-center text-slate-400">
+                <Loader2 className="w-8 h-8 animate-spin text-cyan-500" />
               </div>
-            </div>
-          ) : (
-            <FileList
-              entries={visible}
-              selected={selected}
-              view={prefs.view}
-              sortKey={prefs.sortKey}
-              sortAsc={prefs.sortAsc}
-              renaming={renaming}
-              showPath={!!searchQuery}
-              onSort={key => patchPrefs({ sortKey: key, sortAsc: prefs.sortKey === key ? !prefs.sortAsc : true })}
-              onActivate={handleActivate}
-              onLongPress={handleLongPress}
-              onContext={(entry, x, y) => {
-                // Touch reaches this through the ⋮ button only - a long press
-                // there is the select gesture, not "open the menu".
-                if (!selected.has(entry.path)) setSelected(new Set([entry.path]));
-                setMenu({ entry, x, y });
-              }}
-              onRename={runRename}
-              onRenameCancel={() => setRenaming(null)}
-            />
-          )}
+            ) : visible.length === 0 ? (
+              <div className="h-full flex items-center justify-center text-slate-400">
+                <div className="text-center">
+                  {searchQuery || filter
+                    ? <Search className="w-12 h-12 mx-auto mb-4 opacity-40" />
+                    : <FolderOpen className="w-12 h-12 mx-auto mb-4 opacity-40" />}
+                  <p>{searchQuery || filter ? 'Nothing matches' : 'This folder is empty'}</p>
+                </div>
+              </div>
+            ) : (
+              <FileList
+                entries={visible}
+                selected={selected}
+                view={prefs.view}
+                sortKey={prefs.sortKey}
+                sortAsc={prefs.sortAsc}
+                renaming={renaming}
+                showPath={!!searchQuery}
+                onSort={key => patchPrefs({ sortKey: key, sortAsc: prefs.sortKey === key ? !prefs.sortAsc : true })}
+                onActivate={handleActivate}
+                onLongPress={handleLongPress}
+                onContext={(entry, x, y) => {
+                  // Touch reaches this through the ⋮ button only - a long press
+                  // there is the select gesture, not "open the menu".
+                  if (!selected.has(entry.path)) setSelected(new Set([entry.path]));
+                  setMenu({ entry, x, y });
+                }}
+                onRename={runRename}
+                onRenameCancel={() => setRenaming(null)}
+              />
+            )}
+          </div>
         </div>
       </div>
 

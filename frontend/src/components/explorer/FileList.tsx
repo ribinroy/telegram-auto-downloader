@@ -172,15 +172,15 @@ function ListView({
 }: FileListProps) {
   const press = useRowPress(onActivate, onLongPress);
   return (
-    <div className="rounded-xl border border-slate-700/50 overflow-hidden">
-      <div className="flex items-center gap-3 px-3 py-2 bg-slate-800/60 border-b border-slate-700/50">
+    <div className="h-full flex flex-col rounded-xl border border-slate-700/50 overflow-hidden">
+      <div className="shrink-0 flex items-center gap-3 px-3 py-2 bg-slate-800/60 border-b border-slate-700/50">
         <SortHeader label="Name" column="name" sortKey={sortKey} sortAsc={sortAsc} onSort={onSort} className="flex-1" />
         <SortHeader label="Size" column="size" sortKey={sortKey} sortAsc={sortAsc} onSort={onSort} className="w-24 justify-end hidden sm:flex" />
         <SortHeader label="Modified" column="modified" sortKey={sortKey} sortAsc={sortAsc} onSort={onSort} className="w-32 justify-end hidden md:flex" />
         <span className="w-8" />
       </div>
 
-      <div className="divide-y divide-slate-800">
+      <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain divide-y divide-slate-800">
         {entries.map(entry => {
           const isSelected = selected.has(entry.path);
           return (
@@ -372,6 +372,7 @@ function GridView({
   useWarmThumbs(entries);
   const revs = useThumbRevisions(entries);
   return (
+    <div className="h-full overflow-y-auto overscroll-contain">
     <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
       {entries.map(entry => {
         const isSelected = selected.has(entry.path);
@@ -424,6 +425,7 @@ function GridView({
           </div>
         );
       })}
+    </div>
     </div>
   );
 }
