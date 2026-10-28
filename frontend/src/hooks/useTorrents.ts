@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  fetchTorrentConfig, fetchTorrentList, fetchTorrentDetails, setTorrentFilePriority, saveTorrentConfig, deleteTorrentConfig,
+  fetchTorrentConfig, fetchTorrentList, fetchTorrentDetails, setTorrentFilePriority, renameTorrent, saveTorrentConfig, deleteTorrentConfig,
   testTorrentConnection, setTelegramDefault, torrentAction, addTorrent, addTorrentFile,
   setStopOnComplete,
   type TorrentClient, type TorrentActionName, type TorrentDetails, type TorrentFilePriority,
@@ -54,6 +54,19 @@ export function useSetTorrentFilePriority(client: TorrentClient, hash: string) {
     },
     onError: (_e, _vars, ctx) => { if (ctx?.previous) qc.setQueryData(key, ctx.previous); },
     onSettled: () => qc.invalidateQueries({ queryKey: key }),
+  });
+}
+
+/** Rename a file, or the torrent (no path). Refreshes the modal and the
+ *  client's list, since a torrent rename changes the list's row too. */
+export function useRenameTorrent(client: TorrentClient, hash: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ name, path }: { name: string; path?: string }) => renameTorrent(client, hash, name, path),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.torrentDetails(client, hash) });
+      qc.invalidateQueries({ queryKey: qk.torrentList(client) });
+    },
   });
 }
 

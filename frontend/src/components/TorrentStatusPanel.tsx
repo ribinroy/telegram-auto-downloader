@@ -545,7 +545,13 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
       )}
 
       {detailsFor && (
-        <TorrentDetailsModal client={client} hash={detailsFor.hash} name={detailsFor.name} onClose={closeDetails} />
+        <TorrentDetailsModal
+          client={client}
+          hash={detailsFor.hash}
+          name={detailsFor.name}
+          pulled={detailsFor.downlee?.status === 'done'}
+          onClose={closeDetails}
+        />
       )}
 
       <ConfirmDialog

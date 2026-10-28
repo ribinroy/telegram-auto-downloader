@@ -300,3 +300,50 @@ def test_file_priority_route_validates(client, auth, monkeypatch):
     monkeypatch.setattr(route, 'torrent_set_file_priority', lambda *a: seen.append(a))
     assert post({'client': 'qbittorrent', 'hash': 'ABC', 'indices': [1], 'priority': 'skip'}).status_code == 200
     assert seen == [('qbittorrent', 'abc', [1], 'skip')]
+
+
+# --- renaming ------------------------------------------------------------------
+
+@pytest.mark.parametrize('bad', ['', '  ', '.', '..', 'a/b', 'a\\b', 'x\x00'])
+def test_a_new_name_is_one_path_component(bad):
+    with pytest.raises(ValueError):
+        tor.clean_torrent_name(bad)
+
+
+def test_transmission_renames_a_file_or_the_top_folder(monkeypatch):
+    calls = []
+    def fake_rpc(method, args=None, config=None, timeout=20):
+        calls.append((method, args))
+        return {'torrents': [{'hashString': 'abc', 'name': 'Show S01'}]} if method == 'torrent-get' else {}
+    monkeypatch.setattr(tor, 'transmission_rpc', fake_rpc)
+    tor.torrent_rename('transmission', 'abc', 'e01 Pilot.mkv', path='Show S01/e01.mkv', config={'url': 'x'})
+    tor.torrent_rename('transmission', 'abc', ' Show (2024) ', config={'url': 'x'})
+    renames = [a for m, a in calls if m == 'torrent-rename-path']
+    assert renames == [
+        {'ids': ['abc'], 'path': 'Show S01/e01.mkv', 'name': 'e01 Pilot.mkv'},
+        # the torrent's name is its top-level path, so that is what gets renamed
+        {'ids': ['abc'], 'path': 'Show S01', 'name': 'Show (2024)'},
+    ]
+
+
+def test_qbit_renames_files_on_disk_but_only_the_torrent_label(monkeypatch):
+    from backend.web_app import qbittorrent as qb
+    sent = []
+    monkeypatch.setattr(qb, '_qbit_request', lambda cfg, path, data=None, **k: sent.append((path, data)))
+    tor.torrent_rename('qbittorrent', 'abc', 'new.mkv', path='Movie/sub/old.mkv', config={'url': 'x'})
+    tor.torrent_rename('qbittorrent', 'abc', 'loose.mkv', path='old.mkv', config={'url': 'x'})
+    tor.torrent_rename('qbittorrent', 'abc', 'Nice Name', config={'url': 'x'})
+    assert sent == [
+        ('/api/v2/torrents/renameFile', {'hash': 'abc', 'oldPath': 'Movie/sub/old.mkv', 'newPath': 'Movie/sub/new.mkv'}),
+        ('/api/v2/torrents/renameFile', {'hash': 'abc', 'oldPath': 'old.mkv', 'newPath': 'loose.mkv'}),
+        ('/api/v2/torrents/rename', {'hash': 'abc', 'name': 'Nice Name'}),
+    ]
+
+
+def test_rename_route_validates(client, auth, monkeypatch):
+    from backend.web_app.routes import torrent as route
+    post = lambda body: client.post('/api/torrent/rename', headers=auth, json=body)
+    assert post({'client': 'transmission', 'name': 'x'}).status_code == 400                    # no hash
+    assert post({'client': 'transmission', 'hash': 'a', 'name': 'x', 'path': ''}).status_code == 400
+    monkeypatch.setattr(route, 'torrent_rename', lambda *a, **k: (_ for _ in ()).throw(ValueError('Invalid name')))
+    assert post({'client': 'transmission', 'hash': 'a', 'name': '../x'}).status_code == 400

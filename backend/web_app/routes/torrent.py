@@ -17,7 +17,7 @@ from backend.web_app.torrent import (
     CLIENTS, read_torrent_settings, write_torrent_settings, load_torrent_config,
     apply_torrent_session, normalize_transmission_url,
     torrent_test, torrent_add_magnet, torrent_add_file, torrent_list, torrent_control,
-    torrent_details, torrent_set_file_priority,
+    torrent_details, torrent_set_file_priority, torrent_rename,
     stop_on_complete_enabled,
 )
 from backend.web_app.vps import load_vps_credentials, annotate_vps_folders, open_vps_sftp
@@ -307,6 +307,28 @@ class TorrentRoutesMixin:
             if details is None:
                 return jsonify({"error": "That torrent is no longer in the client"}), 404
             return jsonify(details)
+
+        @self.app.route("/api/torrent/rename", methods=["POST"])
+        @token_required
+        def torrent_rename_route():
+            """Rename a torrent's file, or the torrent itself.
+            Body: {client, hash, name, path?} - `path` is the file's full path
+            as details report it; without it the torrent is renamed."""
+            data = request.json or {}
+            client = (data.get("client") or "transmission").strip()
+            if client not in CLIENTS:
+                return jsonify({"error": "Unknown torrent client"}), 400
+            torrent_hash = (data.get("hash") or "").strip().lower()
+            if not torrent_hash:
+                return jsonify({"error": "hash is required"}), 400
+            path = data.get("path")
+            if path is not None and (not isinstance(path, str) or not path.strip()):
+                return jsonify({"error": "path must be a file path"}), 400
+            try:
+                torrent_rename(client, torrent_hash, data.get("name"), path=path)
+            except ValueError as e:
+                return jsonify({"error": str(e)}), 400 if str(e) == "Invalid name" else 502
+            return jsonify({"status": "ok"})
 
         @self.app.route("/api/torrent/files/priority", methods=["POST"])
         @token_required

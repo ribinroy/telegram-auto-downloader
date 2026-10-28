@@ -972,6 +972,9 @@ export interface TorrentDetails {
   files: TorrentFile[];
   /** The levels this client can set, lowest first ('skip' = don't download). */
   priorities: TorrentFilePriority[];
+  /** Renaming the torrent renames its folder on the VPS (Transmission, where
+   *  the name *is* the top folder) rather than just its label (qBittorrent). */
+  rename_renames_folder: boolean;
   info: {
     ratio: number | null;
     uploaded: number;
@@ -992,6 +995,20 @@ export async function fetchTorrentDetails(client: TorrentClient, hash: string): 
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(body.error || 'Failed to load the torrent');
   return body as TorrentDetails;
+}
+
+/** Rename one file (`path` = its full path from details) on the VPS, or with
+ *  no path the torrent itself. */
+export async function renameTorrent(client: TorrentClient, hash: string, name: string, path?: string): Promise<void> {
+  const response = await authFetch('/api/torrent/rename', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ client, hash, name, path }),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.error || 'Rename failed');
+  }
 }
 
 /** Skip files, or download them at a priority (one of details' `priorities`). */

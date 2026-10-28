@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { Magnet, X, Loader2, Search, File, Lock, ArrowDown, ArrowUp, Check, Minus } from 'lucide-react';
-import { useTorrentDetails, useSetTorrentFilePriority } from '../hooks/useTorrents';
-import { useErrorToast } from '../lib/notify';
+import { Magnet, X, Loader2, Search, File, Lock, ArrowDown, ArrowUp, Check, Minus, Pencil, AlertTriangle } from 'lucide-react';
+import { useTorrentDetails, useSetTorrentFilePriority, useRenameTorrent } from '../hooks/useTorrents';
+import { notify, useErrorToast } from '../lib/notify';
 import { formatBytes, formatTime } from '../utils/format';
 import { commonRoot } from '../utils/torrent';
 import type { TorrentClient, TorrentFile, TorrentFilePriority } from '../api';
@@ -53,13 +53,50 @@ function Stat({ label, children, wide = false }: { label: string; children: Reac
   );
 }
 
-function FileRow({ file, root, priorities, selected, onToggle, onPriority }: {
+/** An in-place name editor: Enter or leaving the field saves, Escape cancels
+ *  (without closing the modal). A file's extension starts unselected, so
+ *  typing replaces the name and keeps the type. */
+function InlineRename({ initial, onSubmit, onCancel, label, className = '' }: {
+  initial: string;
+  onSubmit: (name: string) => void;
+  onCancel: () => void;
+  label: string;
+  className?: string;
+}) {
+  const submit = (value: string) => {
+    const name = value.trim();
+    if (!name || name === initial) onCancel(); else onSubmit(name);
+  };
+  return (
+    <input
+      autoFocus
+      defaultValue={initial}
+      aria-label={label}
+      onFocus={e => {
+        const dot = initial.lastIndexOf('.');
+        e.currentTarget.setSelectionRange(0, dot > 0 ? dot : initial.length);
+      }}
+      onKeyDown={e => {
+        if (e.key === 'Enter') { e.preventDefault(); submit(e.currentTarget.value); }
+        if (e.key === 'Escape') { e.stopPropagation(); onCancel(); }
+      }}
+      onBlur={e => submit(e.currentTarget.value)}
+      className={`min-w-0 bg-slate-900 border border-purple-500 rounded-md px-2 py-0.5 text-sm text-white focus:outline-none ${className}`}
+    />
+  );
+}
+
+function FileRow({ file, root, priorities, selected, onToggle, onPriority, renaming, onRenameStart, onRename, onRenameCancel }: {
   file: TorrentFile;
   root: string | null;
   priorities: TorrentFilePriority[];
   selected: boolean;
   onToggle: () => void;
   onPriority: (p: TorrentFilePriority) => void;
+  renaming: boolean;
+  onRenameStart: () => void;
+  onRename: (name: string) => void;
+  onRenameCancel: () => void;
 }) {
   // Every path repeats the torrent's own folder; the header already says it
   const relative = root ? file.path.slice(root.length + 1) : file.path;
@@ -69,14 +106,32 @@ function FileRow({ file, root, priorities, selected, onToggle, onPriority }: {
   const skipped = !file.wanted;
 
   return (
-    <li className={`px-4 py-2 ${selected ? 'bg-purple-500/5' : ''}`}>
+    <li className={`group px-4 py-2 ${selected ? 'bg-purple-500/5' : ''}`}>
       <div className="flex items-center gap-2">
         <Checkbox state={selected} onClick={onToggle} label={`Select ${name}`} />
         <File className={`w-4 h-4 shrink-0 ${skipped ? 'text-slate-600' : 'text-slate-500'}`} />
-        <span className={`flex-1 min-w-0 truncate text-sm ${skipped ? 'line-through decoration-slate-600' : ''}`} title={file.path}>
-          {dir && <span className="text-slate-500">{dir}</span>}
-          <span className={skipped ? 'text-slate-500' : 'text-slate-200'}>{name}</span>
-        </span>
+        {renaming ? (
+          <span className="flex-1 min-w-0 flex items-center gap-1 text-sm">
+            {dir && <span className="shrink min-w-0 truncate text-slate-500">{dir}</span>}
+            <InlineRename initial={name} label={`New name for ${name}`} onSubmit={onRename} onCancel={onRenameCancel} className="flex-1" />
+          </span>
+        ) : (
+          <>
+            <span className={`flex-1 min-w-0 truncate text-sm ${skipped ? 'line-through decoration-slate-600' : ''}`} title={file.path}>
+              {dir && <span className="text-slate-500">{dir}</span>}
+              <span className={skipped ? 'text-slate-500' : 'text-slate-200'}>{name}</span>
+            </span>
+            {/* Shown on hover with a mouse; always there on touch */}
+            <button
+              onClick={onRenameStart}
+              aria-label={`Rename ${name}`}
+              title="Rename on the VPS"
+              className="shrink-0 p-1 rounded text-slate-500 hover:text-white hover:bg-slate-700/60 [@media(pointer:fine)]:opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity"
+            >
+              <Pencil className="w-3.5 h-3.5" />
+            </button>
+          </>
+        )}
         <span className="hidden sm:inline shrink-0 w-20 whitespace-nowrap text-right text-xs tabular-nums text-slate-400">
           {formatBytes(file.size)}
         </span>
@@ -110,11 +165,13 @@ function FileRow({ file, root, priorities, selected, onToggle, onPriority }: {
  * One torrent in depth: transfer totals, its files with per-file progress,
  * and its trackers. Live while open (5s) until the torrent completes.
  */
-export function TorrentDetailsModal({ client, hash, name, onClose }: {
+export function TorrentDetailsModal({ client, hash, name, pulled = false, onClose }: {
   client: TorrentClient;
   hash: string;
   /** Shown while the details load, so the header isn't blank. */
   name: string;
+  /** Already pulled to DownLee - renaming its folder breaks that match. */
+  pulled?: boolean;
   onClose: () => void;
 }) {
   const details = useTorrentDetails(client, hash);
@@ -123,6 +180,16 @@ export function TorrentDetailsModal({ client, hash, name, onClose }: {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const setPriority = useSetTorrentFilePriority(client, hash);
   useErrorToast(setPriority.error, "Couldn't change the file priority");
+  const rename = useRenameTorrent(client, hash);
+  useErrorToast(rename.error, 'Rename failed');
+  // What is being renamed: a file's index, the torrent itself, or nothing
+  const [renaming, setRenaming] = useState<number | 'torrent' | null>(null);
+  const runRename = (newName: string, path?: string) => {
+    setRenaming(null);
+    rename.mutate({ name: newName, path }, {
+      onSuccess: () => notify({ type: 'success', title: 'Renamed', message: newName }),
+    });
+  };
 
   // Escape closes; the page behind doesn't scroll while the modal is up
   useEffect(() => {
@@ -175,7 +242,37 @@ export function TorrentDetailsModal({ client, hash, name, onClose }: {
         <div className="shrink-0 flex items-start gap-3 px-4 pt-4 pb-3 border-b border-slate-700/60">
           <Magnet className="w-5 h-5 text-purple-400 shrink-0 mt-0.5" />
           <div className="flex-1 min-w-0">
-            <h2 id="torrent-title" className="text-base font-semibold text-white break-words">{t?.name ?? name}</h2>
+            {renaming === 'torrent' && t ? (
+              <>
+                <InlineRename initial={t.name} label="New torrent name" onSubmit={n => runRename(n)} onCancel={() => setRenaming(null)} className="w-full" />
+                {/* What this rename actually does differs per client - say so */}
+                <p className="mt-1 text-[11px] text-slate-400">
+                  {data.rename_renames_folder
+                    ? 'Renames its folder on the VPS too.'
+                    : 'Changes the name shown in the client; the folder on the VPS keeps its name.'}
+                </p>
+                {data.rename_renames_folder && pulled && (
+                  <p className="mt-1 flex items-start gap-1 text-[11px] text-amber-300">
+                    <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />
+                    Already pulled to DownLee - after this the panel won't recognise it as downloaded.
+                  </p>
+                )}
+              </>
+            ) : (
+              <h2 id="torrent-title" className="group text-base font-semibold text-white break-words">
+                {t?.name ?? name}
+                {t && (
+                  <button
+                    onClick={() => setRenaming('torrent')}
+                    aria-label="Rename torrent"
+                    title="Rename torrent"
+                    className="ml-1.5 inline-flex align-middle p-1 rounded text-slate-500 hover:text-white hover:bg-slate-700/60"
+                  >
+                    <Pencil className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </h2>
+            )}
             {t && (
               <p className="text-xs text-slate-400 capitalize">
                 {t.status.replace('-', ' ')} · {t.percent_done}% of {formatBytes(t.total_size)}
@@ -283,6 +380,10 @@ export function TorrentDetailsModal({ client, hash, name, onClose }: {
                         selected={selected.has(f.index)}
                         onToggle={() => toggle(f.index)}
                         onPriority={p => setPriority.mutate({ indices: [f.index], priority: p })}
+                        renaming={renaming === f.index}
+                        onRenameStart={() => setRenaming(f.index)}
+                        onRename={n => runRename(n, f.path)}
+                        onRenameCancel={() => setRenaming(null)}
                       />
                     ))}
                   </ul>

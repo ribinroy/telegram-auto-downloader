@@ -204,6 +204,18 @@ _QBIT_PRIORITY = {0: "skip", 1: "normal", 6: "high", 7: "max"}
 _QBIT_PRIORITY_CODE = {name: code for code, name in _QBIT_PRIORITY.items()}
 
 
+def qbit_rename(cfg, torrent_hash, path, new_name):
+    """Rename a file (`path` = its full path) on disk, or with no path the
+    torrent's display name only - qBittorrent keeps the folder as it is."""
+    if path is None:
+        _qbit_request(cfg, "/api/v2/torrents/rename", data={"hash": torrent_hash, "name": new_name})
+        return
+    parent = path.rsplit("/", 1)[0] + "/" if "/" in path else ""
+    _qbit_request(cfg, "/api/v2/torrents/renameFile", data={
+        "hash": torrent_hash, "oldPath": path, "newPath": parent + new_name,
+    })
+
+
 def qbit_set_file_priority(cfg, torrent_hash, indices, priority):
     """Set one priority on several files ('skip' = don't download)."""
     _qbit_request(cfg, "/api/v2/torrents/filePrio", data={
@@ -249,11 +261,12 @@ def qbit_details(cfg, torrent_hash):
     } for tr in (get(f"/api/v2/torrents/trackers?hash={torrent_hash}") or [])
         # "** [DHT] **", "** [PeX] **", "** [LSD] **" are peer sources, not trackers
         if not (tr.get("url") or "").startswith("** [")]
-    from backend.web_app.torrent import FILE_PRIORITIES
+    from backend.web_app.torrent import FILE_PRIORITIES, TORRENT_RENAME_RENAMES_FOLDER
     return {
         "torrent": _normalize(rows[0]),
         "files": files,
         "priorities": FILE_PRIORITIES["qbittorrent"],
+        "rename_renames_folder": TORRENT_RENAME_RENAMES_FOLDER["qbittorrent"],
         "info": {
             "ratio": _positive(props.get("share_ratio")),
             "uploaded": props.get("total_uploaded") or 0,

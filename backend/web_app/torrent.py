@@ -301,6 +301,27 @@ FILE_PRIORITIES = {
 }
 
 
+def clean_torrent_name(name):
+    """A new name for a torrent, file or folder: one path component. Raises
+    ValueError otherwise - a '/' would move the file, '..' would climb out."""
+    name = (name or "").strip()
+    if not name or name in (".", "..") or "/" in name or "\\" in name or "\x00" in name:
+        raise ValueError("Invalid name")
+    return name
+
+
+def transmission_rename(cfg, torrent_hash, path, new_name):
+    """Rename a file, a folder or (path=None) the torrent itself. In
+    Transmission the torrent's name *is* its top-level path, so renaming the
+    torrent renames that folder/file on disk - there is no separate label."""
+    if path is None:
+        t = transmission_get(cfg, torrent_hash)
+        if not t:
+            raise ValueError("That torrent is no longer in the client")
+        path = t["name"]
+    transmission_rpc("torrent-rename-path", {"ids": [torrent_hash], "path": path, "name": new_name}, config=cfg)
+
+
 def transmission_set_file_priority(cfg, torrent_hash, indices, priority):
     """Skip files, or download them at a priority. A skipped file that is set
     to a priority again is wanted again - one call does both."""
@@ -349,6 +370,7 @@ def transmission_details(cfg, torrent_hash):
         "torrent": _transmission_normalize(t),
         "files": files,
         "priorities": FILE_PRIORITIES["transmission"],
+        "rename_renames_folder": TORRENT_RENAME_RENAMES_FOLDER["transmission"],
         "info": {
             "ratio": _positive(t.get("uploadRatio")),
             "uploaded": t.get("uploadedEver") or 0,
@@ -480,6 +502,23 @@ def torrent_details(client, torrent_hash, config=None):
         from backend.web_app.qbittorrent import qbit_details
         return qbit_details(cfg, torrent_hash)
     return transmission_details(cfg, torrent_hash)
+
+
+# What renaming the torrent itself does, per client - the UI says so up front
+TORRENT_RENAME_RENAMES_FOLDER = {"transmission": True, "qbittorrent": False}
+
+
+def torrent_rename(client, torrent_hash, new_name, path=None, config=None):
+    """Rename one file (`path` = its full path as details report it) or, with
+    no path, the torrent. File renames change the file on the VPS in both
+    clients; a torrent rename does in Transmission (its name is its top
+    folder) but is only the display name in qBittorrent."""
+    new_name = clean_torrent_name(new_name)
+    cfg = _resolve(client, config)
+    if client == "qbittorrent":
+        from backend.web_app.qbittorrent import qbit_rename
+        return qbit_rename(cfg, torrent_hash, path, new_name)
+    return transmission_rename(cfg, torrent_hash, path, new_name)
 
 
 def torrent_set_file_priority(client, torrent_hash, indices, priority, config=None):
