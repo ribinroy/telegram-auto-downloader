@@ -73,6 +73,9 @@ export interface FileOpResult {
   trashed?: boolean;
   trash_path?: string;
   error?: string;
+  /** A permanent folder delete that removed what it could; `error` says what is left. */
+  partial?: boolean;
+  left?: number;
 }
 
 export interface FileOpResponse {

@@ -145,12 +145,44 @@ class VpsBrowseRoutesMixin:
                     ))
             return jsonify({"folders": annotate_vps_folders(db.get_vps_watch_folders()), "added": added})
 
+        def unhide_impact(folder_id):
+            """Downloads currently hidden that would show in the default listing
+            once this watched folder is gone: {count, sample}, or None if the
+            folder doesn't exist."""
+            db = get_db()
+            folders = db.get_vps_watch_folders()
+            if not any(f["id"] == folder_id for f in folders):
+                return None
+            remaining = [f for f in folders if f["id"] != folder_id]
+            vps = [d for d in db.get_all_downloads() if d.get("downloaded_from") == "vps"]
+            before = self._annotate_downloads([dict(d) for d in vps], vps_folders=folders)
+            after = self._annotate_downloads([dict(d) for d in vps], vps_folders=remaining)
+            files = [new.get("file") for old, new in zip(before, after) if old["hidden"] and not new["hidden"]]
+            return {"count": len(files), "sample": files[:5]}
+
+        @self.app.route("/api/settings/vps/folders/<int:folder_id>/delete-impact", methods=["GET"])
+        @token_required
+        def vps_folder_delete_impact(folder_id):
+            """What removing this watched folder would unhide, for the confirm dialog."""
+            impact = unhide_impact(folder_id)
+            if impact is None:
+                return jsonify({"error": "Folder not found"}), 404
+            return jsonify(impact)
+
         @self.app.route("/api/settings/vps/folders/<int:folder_id>", methods=["DELETE"])
         @token_required
         def delete_vps_folder(folder_id):
-            """Remove a watched folder by id."""
+            """Soft-delete a watched folder by id. If that would unhide downloads,
+            refuses with 409 + the impact unless `?confirm_unhide=1` is passed."""
             db = get_db()
             folder = next((f for f in db.get_vps_watch_folders() if f["id"] == folder_id), None)
+            if not folder:
+                return jsonify({"error": "Folder not found"}), 404
+            if request.args.get("confirm_unhide") not in ("1", "true"):
+                impact = unhide_impact(folder_id)
+                if impact and impact["count"]:
+                    return jsonify({"error": "Removing this folder would show hidden downloads",
+                                    "unhide": impact}), 409
             ok = db.delete_vps_watch_folder(folder_id)
             if not ok:
                 return jsonify({"error": "Folder not found"}), 404

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   FolderOpen, Loader2, AlertTriangle, X, Download, Copy, Scissors, ClipboardPaste,
@@ -20,6 +20,8 @@ import { getFileDownloadUrl, type FileEntry, type FileOpResponse, isRemotePath }
 import { formatBytes } from '../utils/format';
 
 const PREFS_KEY = 'explorer_prefs';
+// Matches the bar's duration-200 transition (plus the list padding's).
+const BAR_ANIM_MS = 200;
 const AUTO_REFRESH_MS = 10_000;
 
 interface Prefs {
@@ -88,6 +90,9 @@ export function ExplorerPage() {
   const createFolder = useCreateFolder();
   const renameMut = useRenamePath();
   const deleteMut = useDeletePaths();
+  // A delete is one request with no progress of its own, so the page says it
+  // is running and refuses a second one on top of it.
+  const deleting = deleteMut.isPending;
   const transferMut = useTransferPaths();
   const uploadMut = useUploadFiles();
 
@@ -140,6 +145,49 @@ export function ExplorerPage() {
 
   const selectedEntries = useMemo(
     () => visible.filter(e => selected.has(e.path)), [visible, selected]);
+
+  // The floating selection bar wraps to two lines on a phone, so the list's
+  // end padding follows its real height (as --bar-h) rather than a guess.
+  const barRef = useRef<HTMLDivElement>(null);
+  const listBoxRef = useRef<HTMLDivElement>(null);
+  const [barHeight, setBarHeight] = useState(0);
+  const barShown = selectedEntries.length > 0 || !!clipboard;
+  useEffect(() => {
+    const el = barRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setBarHeight(el.offsetHeight));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // The bar stays mounted so it can animate out. While it does, it keeps
+  // showing what it last held - otherwise clearing the selection would empty
+  // it mid-fade. (State adjusted during render, React's derived-state pattern.)
+  const [barSnapshot, setBarSnapshot] = useState({ entries: selectedEntries, clipboard });
+  if (barShown && (barSnapshot.entries !== selectedEntries || barSnapshot.clipboard !== clipboard)) {
+    setBarSnapshot({ entries: selectedEntries, clipboard });
+  }
+  const barEntries = barShown ? selectedEntries : barSnapshot.entries;
+  const barClipboard = barShown ? clipboard : barSnapshot.clipboard;
+  const barSize = barEntries.reduce((sum, e) => sum + e.size, 0);
+
+  // The list's end padding grows with the bar. If the list was scrolled to
+  // the bottom, ride the growth so the last rows slide up above the bar
+  // instead of ending up underneath it.
+  useEffect(() => {
+    if (!barShown) return;
+    const scroller = listBoxRef.current?.querySelector<HTMLElement>('[data-scroller]');
+    if (!scroller || scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight > 2) return;
+    let frame = 0;
+    const until = performance.now() + BAR_ANIM_MS + 50;
+    const pin = () => {
+      scroller.scrollTop = scroller.scrollHeight;
+      if (performance.now() < until) frame = requestAnimationFrame(pin);
+    };
+    frame = requestAnimationFrame(pin);
+    return () => cancelAnimationFrame(frame);
+  }, [barShown]);
+
   const previewable = useMemo(
     () => visible.filter(e => !e.is_dir), [visible]);
   const writable = !!listing.data?.writable && !searchQuery;
@@ -196,7 +244,12 @@ export function ExplorerPage() {
 
   const reportErrors = (res: FileOpResponse, verb: string) => {
     if (res.errors?.length) {
-      setNotice({ kind: 'error', text: `${verb} failed for ${res.errors.length} item(s): ${res.errors[0].error}` });
+      const [first, ...rest] = res.errors;
+      // A partial delete's message already says what happened to it
+      const text = first.partial
+        ? `${first.path.split('/').pop()}: ${first.error}${rest.length ? ` (${rest.length} more item(s) had errors)` : ''}`
+        : `${verb} failed for ${res.errors.length} item(s): ${first.error}`;
+      setNotice({ kind: 'error', text });
     }
     return !res.errors?.length;
   };
@@ -212,13 +265,19 @@ export function ExplorerPage() {
   };
 
   const runDelete = async () => {
-    if (!confirmDelete) return;
+    if (!confirmDelete || deleting) return;
     const { entries, permanent } = confirmDelete;
     setConfirmDelete(null);
+    setNotice(null);
     try {
       const res = await deleteMut.mutateAsync({ paths: entries.map(e => e.path), permanent });
-      if (reportErrors(res, 'Delete') && !permanent && !res.permanent) {
-        setNotice({ kind: 'info', text: `Moved ${entries.length} item(s) to the trash folder on this disk.` });
+      if (reportErrors(res, 'Delete')) {
+        setNotice({
+          kind: 'info',
+          text: !permanent && !res.permanent
+            ? `Moved ${entries.length} item(s) to the trash folder on this disk.`
+            : `Deleted ${entries.length} item(s).`,
+        });
       }
       setSelected(new Set());
     } catch (e) {
@@ -341,7 +400,7 @@ export function ExplorerPage() {
       items.push({
         label: 'Move to trash', icon: <Trash2 className="w-4 h-4" />, danger: true, separated: single ? false : true,
         onClick: () => setConfirmDelete({ entries: targets, permanent: false }),
-        disabled: !writable,
+        disabled: !writable || deleting,
       });
     }
     items.push({
@@ -350,7 +409,7 @@ export function ExplorerPage() {
       label: remote ? 'Delete on the VPS' : 'Delete permanently',
       icon: <Trash2 className="w-4 h-4" />, danger: true, separated: remote,
       onClick: () => setConfirmDelete({ entries: targets, permanent: true }),
-      disabled: !remote && !writable,
+      disabled: (!remote && !writable) || deleting,
     });
 
     if (single) {
@@ -388,7 +447,7 @@ export function ExplorerPage() {
       } else if (e.key === 'F2' && selectedEntries.length === 1 && writable) {
         e.preventDefault();
         setRenaming(selectedEntries[0].path);
-      } else if (e.key === 'Delete' && selectedEntries.length && writable) {
+      } else if (e.key === 'Delete' && selectedEntries.length && writable && !deleting) {
         setConfirmDelete({ entries: selectedEntries, permanent: e.shiftKey });
       } else if (e.key === 'Escape') {
         if (placesOpen) setPlacesOpen(false);
@@ -409,11 +468,12 @@ export function ExplorerPage() {
   const trashPath = listing.data?.trash ?? null;
   const loading = searchQuery ? search.isLoading : (listing.isLoading && !listing.data);
   const listError = (searchQuery ? search.error : listing.error) as Error | null;
-  const selectedSize = selectedEntries.reduce((sum, e) => sum + e.size, 0);
 
   return (
-    <div className="max-w-[1600px] mx-auto px-3 sm:px-4 pt-2 sm:pt-4 pb-24 w-full">
-      <div className="flex items-center gap-2 mb-3">
+    // Fixed to the viewport below the header, so the page itself never
+    // scrolls: only the listing box does, and the toolbar stays put.
+    <div className="max-w-[1600px] mx-auto px-3 sm:px-4 pt-2 sm:pt-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] w-full h-[calc(100dvh-3.5rem)] sm:h-[calc(100dvh-4rem)] flex flex-col">
+      <div className="shrink-0 flex items-center gap-2 mb-3">
         <button
           onClick={() => setPlacesOpen(true)}
           className="lg:hidden p-2 -ml-1 rounded-lg bg-slate-800/60 text-slate-300 hover:text-white hover:bg-slate-700/60 transition-colors"
@@ -431,8 +491,8 @@ export function ExplorerPage() {
         )}
       </div>
 
-      <div className="flex gap-4">
-        <div className="hidden lg:block w-64 shrink-0">
+      <div className="flex-1 min-h-0 flex gap-4">
+        <div className="hidden lg:block w-64 shrink-0 overflow-y-auto">
           <ExplorerSidebar
             roots={rootsQuery.data?.roots ?? []}
             loading={rootsQuery.isLoading}
@@ -445,7 +505,7 @@ export function ExplorerPage() {
         </div>
 
         <div
-          className={`flex-1 min-w-0 rounded-xl transition-colors ${dragging ? 'ring-2 ring-cyan-500 ring-offset-2 ring-offset-slate-900' : ''}`}
+          className={`flex-1 min-w-0 min-h-0 flex flex-col rounded-xl transition-colors ${dragging ? 'ring-2 ring-cyan-500 ring-offset-2 ring-offset-slate-900' : ''}`}
           onDragOver={e => { if (writable) { e.preventDefault(); setDragging(true); } }}
           onDragLeave={() => setDragging(false)}
           onDrop={e => {
@@ -493,6 +553,16 @@ export function ExplorerPage() {
             }}
           />
 
+          {deleting && (
+            <div className="flex items-center gap-2 rounded-xl p-3 mb-3 text-sm bg-slate-700/40 border border-slate-600/50 text-slate-300">
+              <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+              <span>
+                {deleteMut.variables?.permanent ? 'Deleting' : 'Moving'} {deleteMut.variables?.paths.length ?? 0} item(s)
+                {deleteMut.variables?.permanent ? '…' : ' to the trash…'}
+              </span>
+            </div>
+          )}
+
           {notice && (
             <div className={`flex items-start gap-2 rounded-xl p-3 mb-3 text-sm ${
               notice.kind === 'error'
@@ -513,68 +583,6 @@ export function ExplorerPage() {
             </div>
           )}
 
-          {/* Selection / clipboard bar */}
-          {(selectedEntries.length > 0 || clipboard) && (
-            <div className="flex items-center gap-2 flex-wrap rounded-xl border border-slate-700/60 bg-slate-800/50 px-3 py-2 mb-3">
-              {selectedEntries.length > 0 && (
-                <>
-                  <span className="text-sm text-slate-300">
-                    {selectedEntries.length} selected
-                    {selectedSize > 0 && <span className="text-slate-500"> · {formatBytes(selectedSize)}</span>}
-                  </span>
-                  <button
-                    onClick={() => setClipboard({ paths: selectedEntries.map(s => s.path), move: false })}
-                    className="flex items-center gap-1.5 text-xs px-2 py-1 rounded-lg bg-slate-700/60 text-slate-300 hover:text-white transition-colors"
-                  >
-                    <Copy className="w-3.5 h-3.5" /> Copy
-                  </button>
-                  {writable && (
-                    <>
-                      <button
-                        onClick={() => setClipboard({ paths: selectedEntries.map(s => s.path), move: true })}
-                        className="flex items-center gap-1.5 text-xs px-2 py-1 rounded-lg bg-slate-700/60 text-slate-300 hover:text-white transition-colors"
-                      >
-                        <Scissors className="w-3.5 h-3.5" /> Cut
-                      </button>
-                      <button
-                        onClick={() => setConfirmDelete({ entries: selectedEntries, permanent: false })}
-                        className="flex items-center gap-1.5 text-xs px-2 py-1 rounded-lg bg-red-500/15 text-red-400 hover:bg-red-500/25 transition-colors"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" /> Trash
-                      </button>
-                    </>
-                  )}
-                  <button
-                    onClick={() => setSelected(new Set())}
-                    className="text-xs text-slate-500 hover:text-white transition-colors"
-                  >
-                    Clear
-                  </button>
-                </>
-              )}
-              {clipboard && (
-                <div className="flex items-center gap-2 ml-auto">
-                  <span className="text-xs text-slate-500">
-                    {clipboard.paths.length} item(s) ready to {clipboard.move ? 'move' : 'copy'}
-                  </span>
-                  <button
-                    onClick={runPaste}
-                    disabled={!writable || transferMut.isPending}
-                    className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white disabled:bg-slate-700 disabled:text-slate-500 transition-colors"
-                  >
-                    {transferMut.isPending
-                      ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      : <ClipboardPaste className="w-3.5 h-3.5" />}
-                    Paste here
-                  </button>
-                  <button onClick={() => setClipboard(null)} className="text-slate-500 hover:text-white transition-colors">
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
-
           {searchQuery && (
             <p className="text-xs text-slate-500 mb-2">
               {search.data?.entries.length ?? 0} match(es) under {currentPath}
@@ -582,41 +590,124 @@ export function ExplorerPage() {
             </p>
           )}
 
-          {loading ? (
-            <div className="min-h-[40vh] flex items-center justify-center text-slate-400">
-              <Loader2 className="w-8 h-8 animate-spin text-cyan-500" />
-            </div>
-          ) : visible.length === 0 ? (
-            <div className="min-h-[40vh] flex items-center justify-center text-slate-400">
-              <div className="text-center">
-                {searchQuery || filter
-                  ? <Search className="w-12 h-12 mx-auto mb-4 opacity-40" />
-                  : <FolderOpen className="w-12 h-12 mx-auto mb-4 opacity-40" />}
-                <p>{searchQuery || filter ? 'Nothing matches' : 'This folder is empty'}</p>
+          <div
+            ref={listBoxRef}
+            className="relative flex-1 min-h-0 group/list"
+            data-bar={barShown ? '' : undefined}
+            style={{ '--bar-h': `${barHeight}px` } as CSSProperties}
+          >
+            {loading ? (
+              <div className="h-full flex items-center justify-center text-slate-400">
+                <Loader2 className="w-8 h-8 animate-spin text-cyan-500" />
+              </div>
+            ) : visible.length === 0 ? (
+              <div className="h-full flex items-center justify-center text-slate-400">
+                <div className="text-center">
+                  {searchQuery || filter
+                    ? <Search className="w-12 h-12 mx-auto mb-4 opacity-40" />
+                    : <FolderOpen className="w-12 h-12 mx-auto mb-4 opacity-40" />}
+                  <p>{searchQuery || filter ? 'Nothing matches' : 'This folder is empty'}</p>
+                </div>
+              </div>
+            ) : (
+              <FileList
+                entries={visible}
+                selected={selected}
+                view={prefs.view}
+                sortKey={prefs.sortKey}
+                sortAsc={prefs.sortAsc}
+                renaming={renaming}
+                showPath={!!searchQuery}
+                onSort={key => patchPrefs({ sortKey: key, sortAsc: prefs.sortKey === key ? !prefs.sortAsc : true })}
+                onActivate={handleActivate}
+                onLongPress={handleLongPress}
+                onContext={(entry, x, y) => {
+                  // Touch reaches this through the ⋮ button only - a long press
+                  // there is the select gesture, not "open the menu".
+                  if (!selected.has(entry.path)) setSelected(new Set([entry.path]));
+                  setMenu({ entry, x, y });
+                }}
+                onRename={runRename}
+                onRenameCancel={() => setRenaming(null)}
+              />
+            )}
+
+            {/* Selection / clipboard bar - floats over the bottom of the listing
+                instead of pushing it down; the list pads its end to clear it. */}
+            <div
+              className="absolute inset-x-0 bottom-3 z-20 flex justify-center px-2 pointer-events-none"
+              inert={!barShown}
+              aria-hidden={!barShown}
+            >
+              <div
+                ref={barRef}
+                className={`flex items-center justify-center gap-2 flex-wrap max-w-full rounded-2xl border border-slate-600/60 bg-slate-900/90 backdrop-blur-md shadow-2xl shadow-black/50 px-3 py-2 transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none ${
+                  barShown ? 'pointer-events-auto opacity-100 translate-y-0 scale-100' : 'opacity-0 translate-y-4 scale-95'
+                }`}
+              >
+                {barEntries.length > 0 && (
+                  <>
+                    <span className="text-sm text-slate-300">
+                      {barEntries.length} selected
+                      {barSize > 0 && <span className="text-slate-500"> · {formatBytes(barSize)}</span>}
+                    </span>
+                    <button
+                      onClick={() => setClipboard({ paths: barEntries.map(s => s.path), move: false })}
+                      className="flex items-center gap-1.5 text-xs px-2 py-1 rounded-lg bg-slate-700/60 text-slate-300 hover:text-white transition-colors"
+                    >
+                      <Copy className="w-3.5 h-3.5" /> Copy
+                    </button>
+                    {writable && (
+                      <>
+                        <button
+                          onClick={() => setClipboard({ paths: barEntries.map(s => s.path), move: true })}
+                          className="flex items-center gap-1.5 text-xs px-2 py-1 rounded-lg bg-slate-700/60 text-slate-300 hover:text-white transition-colors"
+                        >
+                          <Scissors className="w-3.5 h-3.5" /> Cut
+                        </button>
+                        <button
+                          onClick={() => setConfirmDelete({ entries: barEntries, permanent: false })}
+                          disabled={deleting}
+                          className="flex items-center gap-1.5 text-xs px-2 py-1 rounded-lg bg-red-500/15 text-red-400 hover:bg-red-500/25 disabled:opacity-50 disabled:hover:bg-red-500/15 transition-colors"
+                        >
+                          {deleting
+                            ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            : <Trash2 className="w-3.5 h-3.5" />}
+                          Trash
+                        </button>
+                      </>
+                    )}
+                    <button
+                      onClick={() => setSelected(new Set())}
+                      className="text-xs text-slate-500 hover:text-white transition-colors"
+                    >
+                      Clear
+                    </button>
+                  </>
+                )}
+                {barClipboard && (
+                  <div className={`flex items-center gap-2 ${barEntries.length > 0 ? 'border-slate-700 max-sm:basis-full max-sm:justify-center max-sm:pt-2 max-sm:border-t sm:pl-2 sm:border-l' : ''}`}>
+                    <span className="text-xs text-slate-500">
+                      {barClipboard.paths.length} item(s) ready to {barClipboard.move ? 'move' : 'copy'}
+                    </span>
+                    <button
+                      onClick={runPaste}
+                      disabled={!writable || transferMut.isPending}
+                      className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white disabled:bg-slate-700 disabled:text-slate-500 transition-colors"
+                    >
+                      {transferMut.isPending
+                        ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        : <ClipboardPaste className="w-3.5 h-3.5" />}
+                      Paste here
+                    </button>
+                    <button onClick={() => setClipboard(null)} className="text-slate-500 hover:text-white transition-colors">
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
-          ) : (
-            <FileList
-              entries={visible}
-              selected={selected}
-              view={prefs.view}
-              sortKey={prefs.sortKey}
-              sortAsc={prefs.sortAsc}
-              renaming={renaming}
-              showPath={!!searchQuery}
-              onSort={key => patchPrefs({ sortKey: key, sortAsc: prefs.sortKey === key ? !prefs.sortAsc : true })}
-              onActivate={handleActivate}
-              onLongPress={handleLongPress}
-              onContext={(entry, x, y) => {
-                // Touch reaches this through the ⋮ button only - a long press
-                // there is the select gesture, not "open the menu".
-                if (!selected.has(entry.path)) setSelected(new Set([entry.path]));
-                setMenu({ entry, x, y });
-              }}
-              onRename={runRename}
-              onRenameCancel={() => setRenaming(null)}
-            />
-          )}
+          </div>
         </div>
       </div>
 

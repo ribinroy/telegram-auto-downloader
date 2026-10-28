@@ -145,15 +145,18 @@ Main Thread
 - `id` (PK), `key` (unique), `value` (text), `updated_at`
 
 **`download_type_maps`** - Per-source download specs
-- `id` (PK), `downloaded_from` (unique), `is_secured` (hide from default view), `folder`, `quality`
+- `id` (PK), `downloaded_from` (unique among live rows), `is_secured` (hide from default view), `folder`, `quality`
+- `deleted_at` (soft delete)
 
 **`vps_watch_folders`** - Watched VPS folders
 - `id` (PK), `path` (remote), `host`/`port`/`username` (owning connection)
 - `auto_sync` (hourly auto-download of new files), `folder` (local destination), `is_secured`
+- `deleted_at` (soft delete: removal stamps it, every query filters it out; re-adding a path creates a fresh row)
 
 **`rename_rules`** - Filename rewrite rules
 - `id` (PK), `name`, `pattern` (regex), `replacement`, `enabled`, `position` (lower runs first)
 - `source` (limit to one `downloaded_from`; NULL = all), `stop_on_match`
+- `deleted_at` (soft delete; a delete also stamps `updated_at` so the compiled-rule cache token moves)
 
 **`users`** - Authentication
 - `id` (PK), `username` (unique), `password_hash` (bcrypt; legacy SHA-256 auto-upgraded on login)
@@ -165,6 +168,11 @@ Main Thread
 - `user_agent`, `ip`, `created_at`, `last_used_at`
 
 Note: legacy `labels`/`source_labels` tables and `downloads.label_id` may still exist in older DBs but are unused (the labels feature was reverted; see `_migrate_labels_to_specs()`).
+
+**`bot_queries`** - Bot chat commands
+- `id` (PK), `key` (unique among live rows), `command`, `deleted_at` (soft delete; renaming onto a live key soft-deletes the one replaced)
+
+**Soft deletes.** `downloads`, `vps_watch_folders`, `download_type_maps`, `rename_rules` and `bot_queries` are never hard-deleted: a delete stamps `deleted_at` and every read filters on `deleted_at IS NULL`. Where a column has to be unique (`downloaded_from`, `key`) it is a **partial unique index over live rows** (`uq_*_live`), not a plain constraint - otherwise a deleted row would block re-adding the same source or key forever. Settings kept as JSON blobs (VPS connection, torrent client config, Telegram channels) are still replaced outright.
 
 ### Migrations
 - Handled in `DatabaseManager._run_migrations()` using ALTER TABLE statements
@@ -211,6 +219,7 @@ Access/refresh token pair. Access tokens are short (`ACCESS_TOKEN_MINUTES`, defa
 - `POST /api/settings/vps/test` - Test SSH connection
 - `POST /api/settings/vps/browse` / `POST /api/settings/local/browse` - Remote/local folder listing
 - `GET/POST /api/settings/vps/folders`, `PATCH/DELETE /api/settings/vps/folders/<id>` - Watched folders (PATCH: `auto_sync`, `folder`, `is_secured`)
+- `GET /api/settings/vps/folders/<id>/delete-impact` - `{count, sample}` of downloads hidden only by this folder. `DELETE` refuses with 409 + `unhide` while that count is non-zero unless `?confirm_unhide=1`; the Settings dialog shows the impact and sends the flag once the user confirms
 - `GET /api/vps/files` - Live listing of watched folders
 - `GET /api/vps/usage` - Seedbox usage, cached 60s (`?refresh=1` bypasses). Two different things, which the UI must not blur: **the account** (`disk` - the per-user `quota -w` figure a seedbox actually bills against, falling back to `df` when no quota is set; `traffic`/`clients` - the torrent clients' own cumulative counters) and **the shared machine** (`server.volume`/`load`/`net`, every tenant combined). Per-account traffic is not exposed on a seedhost box at all (no vnstat, no accounting file), so the client counters are the closest honest substitute and are labelled as such. One SSH session runs every probe (`vps_usage_snapshot()` in `web_app/vps.py`, marker-split output). `net` counters are since boot, so `rx_rate`/`tx_rate` come from the delta against the previous poll - absent on the first call, and skipped if the counters went backwards (reboot) or the window is under 5s. UI: `components/VpsUsageBar.tsx`, a strip above the VPS page tabs - quota bar + up/down totals, with the per-client split and the muted server-health row behind a chevron.
 - `POST /api/vps/download` - Download a file/directory to the home server
@@ -489,7 +498,12 @@ a pulled USB drive disappears from the sidebar.
 - **Delete is a trash move by default**, into `<mount>/.downlee-trash` - per mount,
   so it stays a rename instead of copying 50 GB across drives, and stays
   recoverable. Root-filesystem deletes park in `BASE_DIR/.trash`. `permanent: true`
-  unlinks for real. The trash path is reported by `/api/files/list` (only once it
+  unlinks for real. A permanent folder delete **keeps going past failures** (`_remove_tree()`):
+  plain `rmtree` stopped at the first folder Plex or a torrent client owns and left half a
+  folder behind with one opaque error, so instead everything removable goes and the
+  result comes back `partial` with the count left and the blocking folders named
+  (parents' ENOTEMPTY is a consequence and isn't reported). The page shows a
+  "Deleting…" bar and disables the delete actions while the request runs. The trash path is reported by `/api/files/list` (only once it
   exists) and linked in the sidebar.
 - **Bounded work**: recursive search and folder sizes both stop on a wall-clock
   deadline as well as a result cap, because "search from the root of a 20 TB array"
@@ -571,7 +585,17 @@ a pulled USB drive disappears from the sidebar.
   above the list it ate the top of every folder on a phone. Below `sm` the toolbar's
   seven action buttons collapse the same way, into one overflow menu (reusing
   `FileContextMenu`, whose items gained an `active` flag for the toggles) that also
-  carries sorting - the list header can only sort by name at that width. The current directory lives in the URL
+  carries sorting - the list header can only sort by name at that width. The page is
+  pinned to the viewport below the header (`h-[calc(100dvh-...)]`, flex column), so the
+  document never scrolls: only the listing box does, with the list's column header
+  pinned above its rows, and the lg sidebar scrolls on its own if it overflows. The
+  selection/clipboard bar floats over the bottom of the listing rather than taking
+  a row; the list pads its end by the bar's measured height (`--bar-h`, a
+  ResizeObserver - it wraps to two lines on a phone) so the last row stays reachable.
+  Both animate (200ms, off under `prefers-reduced-motion`): the bar is kept mounted
+  (`inert` while hidden) and shows a snapshot of its last content while fading out,
+  the padding transitions with it, and a list scrolled to the bottom is held there
+  while the padding grows so the last rows ride up above the bar. The current directory lives in the URL
   (`/files?path=...`), so browser back/forward is the explorer's history.
   **Click opens; press-and-hold selects** (`useRowPress` in `FileList.tsx`, 450 ms,
   cancelled by any real pointer movement, and it swallows the `click` that follows
