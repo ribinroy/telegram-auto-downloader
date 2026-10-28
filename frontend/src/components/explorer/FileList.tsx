@@ -180,7 +180,7 @@ function ListView({
         <span className="w-8" />
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain divide-y divide-slate-800 group-data-[bar]/list:pb-[calc(var(--bar-h)+1.5rem)]">
+      <div data-scroller className="flex-1 min-h-0 overflow-y-auto overscroll-contain divide-y divide-slate-800 group-data-[bar]/list:pb-[calc(var(--bar-h)+1.5rem)] transition-[padding] duration-200 ease-out motion-reduce:transition-none">
         {entries.map(entry => {
           const isSelected = selected.has(entry.path);
           return (
@@ -372,7 +372,7 @@ function GridView({
   useWarmThumbs(entries);
   const revs = useThumbRevisions(entries);
   return (
-    <div className="h-full overflow-y-auto overscroll-contain group-data-[bar]/list:pb-[calc(var(--bar-h)+1.5rem)]">
+    <div data-scroller className="h-full overflow-y-auto overscroll-contain group-data-[bar]/list:pb-[calc(var(--bar-h)+1.5rem)] transition-[padding] duration-200 ease-out motion-reduce:transition-none">
     <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
       {entries.map(entry => {
         const isSelected = selected.has(entry.path);

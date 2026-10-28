@@ -584,7 +584,11 @@ a pulled USB drive disappears from the sidebar.
   pinned above its rows, and the lg sidebar scrolls on its own if it overflows. The
   selection/clipboard bar floats over the bottom of the listing rather than taking
   a row; the list pads its end by the bar's measured height (`--bar-h`, a
-  ResizeObserver - it wraps to two lines on a phone) so the last row stays reachable. The current directory lives in the URL
+  ResizeObserver - it wraps to two lines on a phone) so the last row stays reachable.
+  Both animate (200ms, off under `prefers-reduced-motion`): the bar is kept mounted
+  (`inert` while hidden) and shows a snapshot of its last content while fading out,
+  the padding transitions with it, and a list scrolled to the bottom is held there
+  while the padding grows so the last rows ride up above the bar. The current directory lives in the URL
   (`/files?path=...`), so browser back/forward is the explorer's history.
   **Click opens; press-and-hold selects** (`useRowPress` in `FileList.tsx`, 450 ms,
   cancelled by any real pointer movement, and it swallows the `click` that follows

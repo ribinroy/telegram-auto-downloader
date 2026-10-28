@@ -20,6 +20,8 @@ import { getFileDownloadUrl, type FileEntry, type FileOpResponse, isRemotePath }
 import { formatBytes } from '../utils/format';
 
 const PREFS_KEY = 'explorer_prefs';
+// Matches the bar's duration-200 transition (plus the list padding's).
+const BAR_ANIM_MS = 200;
 const AUTO_REFRESH_MS = 10_000;
 
 interface Prefs {
@@ -147,14 +149,43 @@ export function ExplorerPage() {
   // The floating selection bar wraps to two lines on a phone, so the list's
   // end padding follows its real height (as --bar-h) rather than a guess.
   const barRef = useRef<HTMLDivElement>(null);
+  const listBoxRef = useRef<HTMLDivElement>(null);
   const [barHeight, setBarHeight] = useState(0);
   const barShown = selectedEntries.length > 0 || !!clipboard;
   useEffect(() => {
     const el = barRef.current;
-    if (!barShown || !el) return;
+    if (!el) return;
     const ro = new ResizeObserver(() => setBarHeight(el.offsetHeight));
     ro.observe(el);
     return () => ro.disconnect();
+  }, []);
+
+  // The bar stays mounted so it can animate out. While it does, it keeps
+  // showing what it last held - otherwise clearing the selection would empty
+  // it mid-fade. (State adjusted during render, React's derived-state pattern.)
+  const [barSnapshot, setBarSnapshot] = useState({ entries: selectedEntries, clipboard });
+  if (barShown && (barSnapshot.entries !== selectedEntries || barSnapshot.clipboard !== clipboard)) {
+    setBarSnapshot({ entries: selectedEntries, clipboard });
+  }
+  const barEntries = barShown ? selectedEntries : barSnapshot.entries;
+  const barClipboard = barShown ? clipboard : barSnapshot.clipboard;
+  const barSize = barEntries.reduce((sum, e) => sum + e.size, 0);
+
+  // The list's end padding grows with the bar. If the list was scrolled to
+  // the bottom, ride the growth so the last rows slide up above the bar
+  // instead of ending up underneath it.
+  useEffect(() => {
+    if (!barShown) return;
+    const scroller = listBoxRef.current?.querySelector<HTMLElement>('[data-scroller]');
+    if (!scroller || scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight > 2) return;
+    let frame = 0;
+    const until = performance.now() + BAR_ANIM_MS + 50;
+    const pin = () => {
+      scroller.scrollTop = scroller.scrollHeight;
+      if (performance.now() < until) frame = requestAnimationFrame(pin);
+    };
+    frame = requestAnimationFrame(pin);
+    return () => cancelAnimationFrame(frame);
   }, [barShown]);
 
   const previewable = useMemo(
@@ -437,7 +468,6 @@ export function ExplorerPage() {
   const trashPath = listing.data?.trash ?? null;
   const loading = searchQuery ? search.isLoading : (listing.isLoading && !listing.data);
   const listError = (searchQuery ? search.error : listing.error) as Error | null;
-  const selectedSize = selectedEntries.reduce((sum, e) => sum + e.size, 0);
 
   return (
     // Fixed to the viewport below the header, so the page itself never
@@ -561,6 +591,7 @@ export function ExplorerPage() {
           )}
 
           <div
+            ref={listBoxRef}
             className="relative flex-1 min-h-0 group/list"
             data-bar={barShown ? '' : undefined}
             style={{ '--bar-h': `${barHeight}px` } as CSSProperties}
@@ -603,72 +634,79 @@ export function ExplorerPage() {
 
             {/* Selection / clipboard bar - floats over the bottom of the listing
                 instead of pushing it down; the list pads its end to clear it. */}
-            {barShown && (
-              <div className="absolute inset-x-0 bottom-3 z-20 flex justify-center px-2 pointer-events-none">
-                <div ref={barRef} className="pointer-events-auto flex items-center justify-center gap-2 flex-wrap max-w-full rounded-2xl border border-slate-600/60 bg-slate-900/90 backdrop-blur-md shadow-2xl shadow-black/50 px-3 py-2">
-                  {selectedEntries.length > 0 && (
-                    <>
-                      <span className="text-sm text-slate-300">
-                        {selectedEntries.length} selected
-                        {selectedSize > 0 && <span className="text-slate-500"> · {formatBytes(selectedSize)}</span>}
-                      </span>
-                      <button
-                        onClick={() => setClipboard({ paths: selectedEntries.map(s => s.path), move: false })}
-                        className="flex items-center gap-1.5 text-xs px-2 py-1 rounded-lg bg-slate-700/60 text-slate-300 hover:text-white transition-colors"
-                      >
-                        <Copy className="w-3.5 h-3.5" /> Copy
-                      </button>
-                      {writable && (
-                        <>
-                          <button
-                            onClick={() => setClipboard({ paths: selectedEntries.map(s => s.path), move: true })}
-                            className="flex items-center gap-1.5 text-xs px-2 py-1 rounded-lg bg-slate-700/60 text-slate-300 hover:text-white transition-colors"
-                          >
-                            <Scissors className="w-3.5 h-3.5" /> Cut
-                          </button>
-                          <button
-                            onClick={() => setConfirmDelete({ entries: selectedEntries, permanent: false })}
-                            disabled={deleting}
-                            className="flex items-center gap-1.5 text-xs px-2 py-1 rounded-lg bg-red-500/15 text-red-400 hover:bg-red-500/25 disabled:opacity-50 disabled:hover:bg-red-500/15 transition-colors"
-                          >
-                            {deleting
-                              ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                              : <Trash2 className="w-3.5 h-3.5" />}
-                            Trash
-                          </button>
-                        </>
-                      )}
-                      <button
-                        onClick={() => setSelected(new Set())}
-                        className="text-xs text-slate-500 hover:text-white transition-colors"
-                      >
-                        Clear
-                      </button>
-                    </>
-                  )}
-                  {clipboard && (
-                    <div className={`flex items-center gap-2 ${selectedEntries.length > 0 ? 'border-slate-700 max-sm:basis-full max-sm:justify-center max-sm:pt-2 max-sm:border-t sm:pl-2 sm:border-l' : ''}`}>
-                      <span className="text-xs text-slate-500">
-                        {clipboard.paths.length} item(s) ready to {clipboard.move ? 'move' : 'copy'}
-                      </span>
-                      <button
-                        onClick={runPaste}
-                        disabled={!writable || transferMut.isPending}
-                        className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white disabled:bg-slate-700 disabled:text-slate-500 transition-colors"
-                      >
-                        {transferMut.isPending
-                          ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                          : <ClipboardPaste className="w-3.5 h-3.5" />}
-                        Paste here
-                      </button>
-                      <button onClick={() => setClipboard(null)} className="text-slate-500 hover:text-white transition-colors">
-                        <X className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  )}
-                </div>
+            <div
+              className="absolute inset-x-0 bottom-3 z-20 flex justify-center px-2 pointer-events-none"
+              inert={!barShown}
+              aria-hidden={!barShown}
+            >
+              <div
+                ref={barRef}
+                className={`flex items-center justify-center gap-2 flex-wrap max-w-full rounded-2xl border border-slate-600/60 bg-slate-900/90 backdrop-blur-md shadow-2xl shadow-black/50 px-3 py-2 transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none ${
+                  barShown ? 'pointer-events-auto opacity-100 translate-y-0 scale-100' : 'opacity-0 translate-y-4 scale-95'
+                }`}
+              >
+                {barEntries.length > 0 && (
+                  <>
+                    <span className="text-sm text-slate-300">
+                      {barEntries.length} selected
+                      {barSize > 0 && <span className="text-slate-500"> · {formatBytes(barSize)}</span>}
+                    </span>
+                    <button
+                      onClick={() => setClipboard({ paths: barEntries.map(s => s.path), move: false })}
+                      className="flex items-center gap-1.5 text-xs px-2 py-1 rounded-lg bg-slate-700/60 text-slate-300 hover:text-white transition-colors"
+                    >
+                      <Copy className="w-3.5 h-3.5" /> Copy
+                    </button>
+                    {writable && (
+                      <>
+                        <button
+                          onClick={() => setClipboard({ paths: barEntries.map(s => s.path), move: true })}
+                          className="flex items-center gap-1.5 text-xs px-2 py-1 rounded-lg bg-slate-700/60 text-slate-300 hover:text-white transition-colors"
+                        >
+                          <Scissors className="w-3.5 h-3.5" /> Cut
+                        </button>
+                        <button
+                          onClick={() => setConfirmDelete({ entries: barEntries, permanent: false })}
+                          disabled={deleting}
+                          className="flex items-center gap-1.5 text-xs px-2 py-1 rounded-lg bg-red-500/15 text-red-400 hover:bg-red-500/25 disabled:opacity-50 disabled:hover:bg-red-500/15 transition-colors"
+                        >
+                          {deleting
+                            ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            : <Trash2 className="w-3.5 h-3.5" />}
+                          Trash
+                        </button>
+                      </>
+                    )}
+                    <button
+                      onClick={() => setSelected(new Set())}
+                      className="text-xs text-slate-500 hover:text-white transition-colors"
+                    >
+                      Clear
+                    </button>
+                  </>
+                )}
+                {barClipboard && (
+                  <div className={`flex items-center gap-2 ${barEntries.length > 0 ? 'border-slate-700 max-sm:basis-full max-sm:justify-center max-sm:pt-2 max-sm:border-t sm:pl-2 sm:border-l' : ''}`}>
+                    <span className="text-xs text-slate-500">
+                      {barClipboard.paths.length} item(s) ready to {barClipboard.move ? 'move' : 'copy'}
+                    </span>
+                    <button
+                      onClick={runPaste}
+                      disabled={!writable || transferMut.isPending}
+                      className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white disabled:bg-slate-700 disabled:text-slate-500 transition-colors"
+                    >
+                      {transferMut.isPending
+                        ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        : <ClipboardPaste className="w-3.5 h-3.5" />}
+                      Paste here
+                    </button>
+                    <button onClick={() => setClipboard(null)} className="text-slate-500 hover:text-white transition-colors">
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
               </div>
-            )}
+            </div>
           </div>
         </div>
       </div>
