@@ -256,3 +256,47 @@ def test_details_route_validates_and_404s(client, auth, monkeypatch):
     assert client.get('/api/torrent/details?client=transmission', headers=auth).status_code == 400
     monkeypatch.setattr(route, 'torrent_details', lambda client, h: None)
     assert client.get('/api/torrent/details?client=transmission&hash=ABC', headers=auth).status_code == 404
+
+
+# --- per-file priority ---------------------------------------------------------
+
+def test_transmission_skip_and_priorities_map_to_torrent_set(monkeypatch):
+    calls = []
+    monkeypatch.setattr(tor, 'transmission_rpc', lambda method, args=None, config=None, timeout=20: calls.append((method, args)) or {})
+    tor.torrent_set_file_priority('transmission', 'abc', [1, 2], 'skip', config={'url': 'x'})
+    tor.torrent_set_file_priority('transmission', 'abc', [0], 'high', config={'url': 'x'})
+    assert calls == [
+        ('torrent-set', {'ids': ['abc'], 'files-unwanted': [1, 2]}),
+        # a priority also makes a skipped file wanted again
+        ('torrent-set', {'ids': ['abc'], 'files-wanted': [0], 'priority-high': [0]}),
+    ]
+
+
+def test_qbit_priorities_map_to_its_codes(monkeypatch):
+    from backend.web_app import qbittorrent as qb
+    sent = []
+    monkeypatch.setattr(qb, '_qbit_request', lambda cfg, path, data=None, **k: sent.append((path, data)))
+    tor.torrent_set_file_priority('qbittorrent', 'abc', [0, 3], 'max', config={'url': 'x'})
+    tor.torrent_set_file_priority('qbittorrent', 'abc', [5], 'skip', config={'url': 'x'})
+    assert sent == [('/api/v2/torrents/filePrio', {'hash': 'abc', 'id': '0|3', 'priority': 7}),
+                    ('/api/v2/torrents/filePrio', {'hash': 'abc', 'id': '5', 'priority': 0})]
+
+
+def test_a_level_the_client_lacks_is_refused():
+    with pytest.raises(ValueError):
+        tor.torrent_set_file_priority('transmission', 'abc', [0], 'max', config={'url': 'x'})
+    with pytest.raises(ValueError):
+        tor.torrent_set_file_priority('qbittorrent', 'abc', [0], 'low', config={'url': 'x'})
+
+
+def test_file_priority_route_validates(client, auth, monkeypatch):
+    from backend.web_app.routes import torrent as route
+    post = lambda body: client.post('/api/torrent/files/priority', headers=auth, json=body)
+    assert post({'client': 'transmission', 'indices': [0], 'priority': 'high'}).status_code == 400      # no hash
+    assert post({'client': 'transmission', 'hash': 'a', 'indices': [], 'priority': 'high'}).status_code == 400
+    assert post({'client': 'transmission', 'hash': 'a', 'indices': ['x'], 'priority': 'high'}).status_code == 400
+    assert post({'client': 'transmission', 'hash': 'a', 'indices': [True], 'priority': 'high'}).status_code == 400
+    seen = []
+    monkeypatch.setattr(route, 'torrent_set_file_priority', lambda *a: seen.append(a))
+    assert post({'client': 'qbittorrent', 'hash': 'ABC', 'indices': [1], 'priority': 'skip'}).status_code == 200
+    assert seen == [('qbittorrent', 'abc', [1], 'skip')]

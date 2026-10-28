@@ -201,6 +201,16 @@ def qbit_get(cfg, torrent_hash):
 
 # qBittorrent file priority: 0 = do not download, 1 normal, 6 high, 7 maximal
 _QBIT_PRIORITY = {0: "skip", 1: "normal", 6: "high", 7: "max"}
+_QBIT_PRIORITY_CODE = {name: code for code, name in _QBIT_PRIORITY.items()}
+
+
+def qbit_set_file_priority(cfg, torrent_hash, indices, priority):
+    """Set one priority on several files ('skip' = don't download)."""
+    _qbit_request(cfg, "/api/v2/torrents/filePrio", data={
+        "hash": torrent_hash,
+        "id": "|".join(str(i) for i in indices),
+        "priority": _QBIT_PRIORITY_CODE[priority],
+    })
 
 
 def qbit_details(cfg, torrent_hash):
@@ -239,9 +249,11 @@ def qbit_details(cfg, torrent_hash):
     } for tr in (get(f"/api/v2/torrents/trackers?hash={torrent_hash}") or [])
         # "** [DHT] **", "** [PeX] **", "** [LSD] **" are peer sources, not trackers
         if not (tr.get("url") or "").startswith("** [")]
+    from backend.web_app.torrent import FILE_PRIORITIES
     return {
         "torrent": _normalize(rows[0]),
         "files": files,
+        "priorities": FILE_PRIORITIES["qbittorrent"],
         "info": {
             "ratio": _positive(props.get("share_ratio")),
             "uploaded": props.get("total_uploaded") or 0,

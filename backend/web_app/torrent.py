@@ -293,6 +293,24 @@ def _positive(value):
 # Transmission file priority: -1 low, 0 normal, 1 high. An unwanted file is
 # reported as 'skip', which is what qBittorrent's priority 0 means as well.
 _TRANSMISSION_PRIORITY = {-1: 'low', 0: 'normal', 1: 'high'}
+# The levels each client can set on a file, lowest first. They don't line up:
+# Transmission has a "low", qBittorrent a "max" above high.
+FILE_PRIORITIES = {
+    "transmission": ["skip", "low", "normal", "high"],
+    "qbittorrent": ["skip", "normal", "high", "max"],
+}
+
+
+def transmission_set_file_priority(cfg, torrent_hash, indices, priority):
+    """Skip files, or download them at a priority. A skipped file that is set
+    to a priority again is wanted again - one call does both."""
+    args = {"ids": [torrent_hash]}
+    if priority == "skip":
+        args["files-unwanted"] = indices
+    else:
+        args["files-wanted"] = indices
+        args[f"priority-{priority}"] = indices
+    transmission_rpc("torrent-set", args, config=cfg)
 
 
 def transmission_details(cfg, torrent_hash):
@@ -330,6 +348,7 @@ def transmission_details(cfg, torrent_hash):
     return {
         "torrent": _transmission_normalize(t),
         "files": files,
+        "priorities": FILE_PRIORITIES["transmission"],
         "info": {
             "ratio": _positive(t.get("uploadRatio")),
             "uploaded": t.get("uploadedEver") or 0,
@@ -461,6 +480,19 @@ def torrent_details(client, torrent_hash, config=None):
         from backend.web_app.qbittorrent import qbit_details
         return qbit_details(cfg, torrent_hash)
     return transmission_details(cfg, torrent_hash)
+
+
+def torrent_set_file_priority(client, torrent_hash, indices, priority, config=None):
+    """Set `priority` (one of FILE_PRIORITIES[client]; 'skip' = don't
+    download) on the torrent's files at `indices`. Raises ValueError on a
+    level the client doesn't have."""
+    if priority not in FILE_PRIORITIES.get(client, []):
+        raise ValueError(f"{client} has no file priority '{priority}'")
+    cfg = _resolve(client, config)
+    if client == "qbittorrent":
+        from backend.web_app.qbittorrent import qbit_set_file_priority
+        return qbit_set_file_priority(cfg, torrent_hash, indices, priority)
+    return transmission_set_file_priority(cfg, torrent_hash, indices, priority)
 
 
 def torrent_stats(client, config=None):

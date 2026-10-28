@@ -965,9 +965,13 @@ export interface TorrentFile {
   priority: 'skip' | 'low' | 'normal' | 'high' | 'max';
 }
 
+export type TorrentFilePriority = TorrentFile['priority'];
+
 export interface TorrentDetails {
   torrent: TorrentStatus;
   files: TorrentFile[];
+  /** The levels this client can set, lowest first ('skip' = don't download). */
+  priorities: TorrentFilePriority[];
   info: {
     ratio: number | null;
     uploaded: number;
@@ -988,6 +992,21 @@ export async function fetchTorrentDetails(client: TorrentClient, hash: string): 
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(body.error || 'Failed to load the torrent');
   return body as TorrentDetails;
+}
+
+/** Skip files, or download them at a priority (one of details' `priorities`). */
+export async function setTorrentFilePriority(
+  client: TorrentClient, hash: string, indices: number[], priority: TorrentFilePriority,
+): Promise<void> {
+  const response = await authFetch('/api/torrent/files/priority', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ client, hash, indices, priority }),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.error || 'Failed to change the file priority');
+  }
 }
 
 export async function fetchTorrentList(client: TorrentClient): Promise<{ configured: boolean; torrents?: TorrentStatus[]; error?: string }> {

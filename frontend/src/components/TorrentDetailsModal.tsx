@@ -1,21 +1,44 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { Magnet, X, Loader2, Search, File, Lock, ArrowDown, ArrowUp } from 'lucide-react';
-import { useTorrentDetails } from '../hooks/useTorrents';
+import { Magnet, X, Loader2, Search, File, Lock, ArrowDown, ArrowUp, Check, Minus } from 'lucide-react';
+import { useTorrentDetails, useSetTorrentFilePriority } from '../hooks/useTorrents';
 import { useErrorToast } from '../lib/notify';
 import { formatBytes, formatTime } from '../utils/format';
 import { commonRoot } from '../utils/torrent';
-import type { TorrentClient, TorrentFile } from '../api';
+import type { TorrentClient, TorrentFile, TorrentFilePriority } from '../api';
 
 /** Above this many files the list gets a filter box. */
 const FILTER_FROM = 8;
 
-const PRIORITY_BADGE: Partial<Record<TorrentFile['priority'], string>> = {
-  skip: 'bg-slate-700/60 text-slate-400',
-  low: 'bg-slate-700/60 text-slate-300',
-  high: 'bg-amber-500/15 text-amber-300',
-  max: 'bg-red-500/15 text-red-300',
+const PRIORITY_LABEL: Record<TorrentFilePriority, string> = {
+  skip: 'Skip', low: 'Low', normal: 'Normal', high: 'High', max: 'Max',
 };
+
+// Colours the per-file select, so a list's priorities read at a glance
+const PRIORITY_TONE: Record<TorrentFilePriority, string> = {
+  skip: 'text-slate-500 border-slate-700',
+  low: 'text-slate-300 border-slate-600',
+  normal: 'text-slate-300 border-slate-700',
+  high: 'text-amber-300 border-amber-500/40',
+  max: 'text-red-300 border-red-500/40',
+};
+
+function Checkbox({ state, onClick, label }: { state: boolean | 'some'; onClick: () => void; label: string }) {
+  return (
+    <button
+      onClick={onClick}
+      aria-label={label}
+      aria-checked={state === 'some' ? 'mixed' : state}
+      role="checkbox"
+      className={`shrink-0 w-4 h-4 rounded border flex items-center justify-center transition-colors ${
+        state ? 'bg-purple-500 border-purple-500' : 'border-slate-500 hover:border-slate-300'
+      }`}
+    >
+      {state === true && <Check className="w-3 h-3 text-white" />}
+      {state === 'some' && <Minus className="w-3 h-3 text-white" />}
+    </button>
+  );
+}
 
 function formatDate(seconds: number | null) {
   return seconds ? new Date(seconds * 1000).toLocaleString() : '—';
@@ -30,34 +53,44 @@ function Stat({ label, children, wide = false }: { label: string; children: Reac
   );
 }
 
-function FileRow({ file, root }: { file: TorrentFile; root: string | null }) {
+function FileRow({ file, root, priorities, selected, onToggle, onPriority }: {
+  file: TorrentFile;
+  root: string | null;
+  priorities: TorrentFilePriority[];
+  selected: boolean;
+  onToggle: () => void;
+  onPriority: (p: TorrentFilePriority) => void;
+}) {
   // Every path repeats the torrent's own folder; the header already says it
   const relative = root ? file.path.slice(root.length + 1) : file.path;
   const slash = relative.lastIndexOf('/');
   const dir = slash >= 0 ? relative.slice(0, slash + 1) : '';
   const name = slash >= 0 ? relative.slice(slash + 1) : relative;
-  const badge = PRIORITY_BADGE[file.priority];
   const skipped = !file.wanted;
 
   return (
-    <li className={`px-4 py-2 ${skipped ? 'opacity-50' : ''}`}>
+    <li className={`px-4 py-2 ${selected ? 'bg-purple-500/5' : ''}`}>
       <div className="flex items-center gap-2">
-        <File className="w-4 h-4 shrink-0 text-slate-500" />
-        <span className="flex-1 min-w-0 truncate text-sm" title={file.path}>
+        <Checkbox state={selected} onClick={onToggle} label={`Select ${name}`} />
+        <File className={`w-4 h-4 shrink-0 ${skipped ? 'text-slate-600' : 'text-slate-500'}`} />
+        <span className={`flex-1 min-w-0 truncate text-sm ${skipped ? 'line-through decoration-slate-600' : ''}`} title={file.path}>
           {dir && <span className="text-slate-500">{dir}</span>}
-          <span className="text-slate-200">{name}</span>
+          <span className={skipped ? 'text-slate-500' : 'text-slate-200'}>{name}</span>
         </span>
-        {badge && (
-          <span className={`shrink-0 text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded ${badge}`}>
-            {skipped ? 'skipped' : file.priority}
-          </span>
-        )}
-        <span className="shrink-0 w-20 whitespace-nowrap text-right text-xs tabular-nums text-slate-400">
+        <span className="hidden sm:inline shrink-0 w-20 whitespace-nowrap text-right text-xs tabular-nums text-slate-400">
           {formatBytes(file.size)}
         </span>
+        <select
+          value={file.priority}
+          onChange={e => onPriority(e.target.value as TorrentFilePriority)}
+          aria-label={`Priority of ${name}`}
+          className={`shrink-0 bg-slate-900/70 border rounded-md py-0.5 pl-1.5 pr-1 text-xs focus:outline-none focus:border-purple-500 ${PRIORITY_TONE[file.priority]}`}
+        >
+          {priorities.map(p => <option key={p} value={p}>{PRIORITY_LABEL[p]}</option>)}
+        </select>
       </div>
       {!skipped && (
-        <div className="mt-1.5 ml-6 flex items-center gap-2">
+        <div className="mt-1.5 ml-12 flex items-center gap-2">
           <div className="flex-1 h-1 rounded-full bg-slate-700 overflow-hidden">
             <div
               className={`h-full transition-[width] duration-300 ${file.percent_done >= 100 ? 'bg-green-500' : 'bg-cyan-500'}`}
@@ -87,6 +120,9 @@ export function TorrentDetailsModal({ client, hash, name, onClose }: {
   const details = useTorrentDetails(client, hash);
   useErrorToast(details.error, "Couldn't load the torrent");
   const [filter, setFilter] = useState('');
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const setPriority = useSetTorrentFilePriority(client, hash);
+  useErrorToast(setPriority.error, "Couldn't change the file priority");
 
   // Escape closes; the page behind doesn't scroll while the modal is up
   useEffect(() => {
@@ -109,6 +145,20 @@ export function TorrentDetailsModal({ client, hash, name, onClose }: {
   }, [data?.files, filter]);
   const root = useMemo(() => commonRoot((data?.files ?? []).map(f => f.path)), [data?.files]);
   const fileCount = data?.files.length ?? 0;
+  const selectedInView = files.filter(f => selected.has(f.index));
+  const allState: boolean | 'some' = selectedInView.length === 0 ? false
+    : selectedInView.length === files.length ? true : 'some';
+  const toggle = (index: number) => setSelected(prev => {
+    const next = new Set(prev);
+    if (next.has(index)) next.delete(index); else next.add(index);
+    return next;
+  });
+  // Select-all works on what the filter shows: filter "sample", select all, Skip
+  const toggleAll = () => setSelected(allState === true ? new Set() : new Set(files.map(f => f.index)));
+  const applyToSelected = (priority: TorrentFilePriority) => {
+    setPriority.mutate({ indices: [...selected], priority });
+    setSelected(new Set());
+  };
   const skippedCount = data?.files.filter(f => !f.wanted).length ?? 0;
   const active = t ? t.status === 'downloading' || t.status === 'seeding' : false;
 
@@ -199,6 +249,9 @@ export function TorrentDetailsModal({ client, hash, name, onClose }: {
               {/* Files */}
               <section className="border-t border-slate-700/60">
                 <div className="flex items-center gap-3 px-4 pt-3 pb-2">
+                  {files.length > 0 && (
+                    <Checkbox state={allState} onClick={toggleAll} label={filter ? 'Select the files shown' : 'Select all files'} />
+                  )}
                   <h3 className="min-w-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                     Files · {fileCount}{skippedCount > 0 && ` (${skippedCount} skipped)`}
                     {root && <span className="block normal-case tracking-normal font-normal text-slate-500 truncate" title={root}>in {root}/</span>}
@@ -221,10 +274,44 @@ export function TorrentDetailsModal({ client, hash, name, onClose }: {
                   </p>
                 ) : (
                   <ul className="divide-y divide-slate-700/40 pb-2">
-                    {files.map(f => <FileRow key={f.index} file={f} root={root} />)}
+                    {files.map(f => (
+                      <FileRow
+                        key={f.index}
+                        file={f}
+                        root={root}
+                        priorities={data.priorities}
+                        selected={selected.has(f.index)}
+                        onToggle={() => toggle(f.index)}
+                        onPriority={p => setPriority.mutate({ indices: [f.index], priority: p })}
+                      />
+                    ))}
                   </ul>
                 )}
               </section>
+
+              {/* Bulk priority for the selected files - pinned to the bottom of
+                  the scroll area while there is a selection, and collapsed to
+                  nothing (no reserved space) when there isn't */}
+              <div
+                inert={selected.size === 0}
+                className={`sticky bottom-0 z-10 flex justify-center px-3 overflow-hidden transition-[max-height,opacity,padding] duration-200 ease-out motion-reduce:transition-none ${
+                  selected.size > 0 ? 'max-h-32 opacity-100 py-2' : 'max-h-0 opacity-0 py-0'
+                }`}
+              >
+                <div className="flex flex-wrap items-center justify-center gap-1.5 rounded-2xl border border-slate-600/60 bg-slate-900/95 backdrop-blur-md shadow-2xl shadow-black/50 px-3 py-2">
+                  <span className="text-sm text-slate-300 mr-1">{selected.size} selected</span>
+                  {data.priorities.map(p => (
+                    <button
+                      key={p}
+                      onClick={() => applyToSelected(p)}
+                      className={`text-xs px-2.5 py-1 rounded-lg border bg-slate-800 hover:bg-slate-700 transition-colors ${PRIORITY_TONE[p]}`}
+                    >
+                      {PRIORITY_LABEL[p]}
+                    </button>
+                  ))}
+                  <button onClick={() => setSelected(new Set())} className="text-xs px-1.5 text-slate-500 hover:text-white">Clear</button>
+                </div>
+              </div>
 
               {/* Trackers */}
               {data.info.trackers.length > 0 && (
