@@ -61,7 +61,7 @@ function Toast({ toast, onDismiss }: ToastProps) {
       aria-live="polite"
       className={`flex items-start gap-3 p-4 rounded-xl border-2 shadow-xl transition-all duration-300 ${
         bgColors[toast.type]
-      } ${isExiting ? 'opacity-0 translate-x-full' : 'opacity-100 translate-x-0'}`}
+      } ${isExiting ? 'opacity-0 translate-x-full' : 'opacity-100 translate-x-0 toast-enter'}`}
     >
       {icons[toast.type]}
       <div className="flex-1 min-w-0">

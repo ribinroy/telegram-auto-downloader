@@ -29,6 +29,29 @@ body {
   animation: shimmer 1.5s linear infinite;
 }
 
+/* Toasts slide in from the right on arrival - the mirror of their exit
+   (translate-x-full + fade, Toast.tsx), same 300ms */
+@keyframes toast-enter {
+  from {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.toast-enter {
+  animation: toast-enter 300ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast-enter {
+    animation: none;
+  }
+}
+
 @keyframes thumb-pop {
   0% {
     opacity: 0;
