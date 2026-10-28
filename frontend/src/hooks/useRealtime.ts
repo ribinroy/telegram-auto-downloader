@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import { connectSocket, disconnectSocket, type StatusUpdate } from '../api/socket';
 import { qk } from '../api/queryKeys';
-import type { Download, DownloadsResponse } from '../types';
+import type { Download, DownloadsResponse, QueueState } from '../types';
 
 type DownloadsCache = InfiniteData<DownloadsResponse> | undefined;
 
@@ -44,30 +44,48 @@ export function useRealtime(cb: RealtimeCallbacks = {}) {
     const mergeById = (messageId: string, patch: Partial<Download>) =>
       patchDownloads(list => list.map(d => (d.message_id === messageId ? { ...d, ...patch } : d)));
 
+    // Any download starting, finishing or arriving can move the queue
+    const refreshQueue = () => qc.invalidateQueries({ queryKey: qk.queue() });
+
     connectSocket({
       onNew: (download) => {
+        refreshQueue();
         patchDownloads(list => (list.some(d => d.message_id === download.message_id) ? list : [download, ...list]));
         onNewDownload?.(download);
       },
-      onDeleted: ({ message_id }) => patchDownloads(list => list.filter(d => d.message_id !== message_id)),
-      onProgress: (p) => mergeById(p.message_id, {
-        progress: p.progress,
-        downloaded_bytes: p.downloaded_bytes,
-        total_bytes: p.total_bytes,
-        speed: p.speed,
-        pending_time: p.pending_time,
-      }),
+      onDeleted: ({ message_id }) => {
+        patchDownloads(list => list.filter(d => d.message_id !== message_id));
+        refreshQueue();
+      },
+      onProgress: (p) => {
+        const patch = {
+          progress: p.progress,
+          downloaded_bytes: p.downloaded_bytes,
+          total_bytes: p.total_bytes,
+          speed: p.speed,
+          pending_time: p.pending_time,
+        };
+        mergeById(p.message_id, patch);
+        // The queue modal lists running downloads too; keep its bars live
+        qc.setQueryData<QueueState>(qk.queue(), old => old && {
+          ...old,
+          running: old.running.map(d => (d.message_id === p.message_id ? { ...d, ...patch } : d)),
+        });
+      },
       onStatus: (s) => {
         const dl = findDownload(s.message_id);
         mergeById(s.message_id, { status: s.status, error: s.error || null, speed: 0 });
+        refreshQueue();
         onStatusChange?.(s, dl);
       },
       onMeta: (m) => mergeById(m.message_id, { file_meta: m.file_meta }),
       onStats: (stats) => qc.setQueryData(qk.stats(), stats),
+      onQueueChanged: refreshQueue,
       onConnect: () => {
         onConnectedChange?.(true);
         qc.invalidateQueries({ queryKey: ['downloads'] });
         qc.invalidateQueries({ queryKey: qk.stats() });
+        refreshQueue();
       },
       onDisconnect: () => onConnectedChange?.(false),
     });

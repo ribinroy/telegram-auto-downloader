@@ -5,6 +5,7 @@ import { useLayoutContext } from '../components/Layout';
 import { ROUTES } from '../routes';
 import { DownloadItem } from '../components/DownloadItem';
 import { AddUrlModal } from '../components/AddUrlModal';
+import { DownloadQueueButton } from '../components/DownloadQueue';
 import type { SortBy, SortOrder } from '../api';
 
 export const isTorrentFile = (f: File) =>
@@ -18,7 +19,7 @@ export function DownloadsPage() {
     authors, selectedAuthor, setSelectedAuthor,
     loadMore, onRetry, onStop, onPause, onResume, onDelete,
     addUrlOpen, setAddUrlOpen, pastedUrl, setPastedUrl,
-    vpsReady,
+    vpsReady, showSecured,
   } = useLayoutContext();
 
   const navigate = useNavigate();
@@ -295,6 +296,14 @@ export function DownloadsPage() {
           </div>
         </div>
       )}
+
+      {/* Floating queue button - running/total, opens the queue modal. Sits
+          above the VPS button when that one is shown. */}
+      <DownloadQueueButton
+        showSecured={showSecured}
+        onStop={onStop}
+        className={vpsReady ? 'bottom-36 sm:bottom-[10.5rem]' : 'bottom-20 sm:bottom-24'}
+      />
 
       {/* Floating Add Button */}
       <div className="group fixed bottom-4 right-4 sm:bottom-6 sm:right-6 z-40">

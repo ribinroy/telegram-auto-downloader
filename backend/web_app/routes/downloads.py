@@ -9,6 +9,7 @@ from flask import jsonify, request, send_from_directory, Response
 from backend.config import JWT_SECRET
 from backend.database import get_db
 from backend import metrics
+from backend import download_queue
 from backend.web_app.base import (
     token_required, get_socketio, get_web_app,
     JWT_EXPIRY_DAYS, PASSWORD_CHANGE_ALLOWED_PATHS, FRONTEND_DIST,
@@ -22,6 +23,77 @@ from backend.web_app.helpers import candidate_file_paths
 
 
 class DownloadRoutesMixin:
+    def stop_one_download(self, message_id, requeue=False):
+        """Stop one download, running or waiting, and mark it stopped (a waiting
+        one leaves the queue). Shared by /api/stop and stop-all, so stopping
+        everything is the same work as pressing stop on each row. Returns an
+        error string, or None once it has stopped.
+
+        `requeue` sends it back to the download queue instead (a reorder put a
+        waiting download ahead of it). That has to wait for the handler to
+        finish exiting: yt-dlp and VPS write 'stopped' on their way out, which
+        would land after 'waiting' and drop the download out of line."""
+        import time
+        db = get_db()
+        message_id = str(message_id) if message_id is not None else None
+        if not message_id:
+            return "message_id is required"
+
+        # The rank a reorder gave it - the handler's own 'stopped' write on
+        # the way out clears it, so it is put back with 'waiting'
+        current = db.get_download_by_message_id(message_id) if requeue else None
+        rank = current.get('queue_position') if current else None
+
+        # Check if it's a yt-dlp download (UUID format) or Telegram (numeric string)
+        is_uuid = '-' in message_id
+
+        if is_uuid:
+            # VPS and yt-dlp both use UUIDs - distinguish by source
+            download = db.get_download_by_message_id(message_id)
+            if download and download.get("downloaded_from") == "vps" and self.vps_downloader:
+                # Blocks until the transfer thread has actually exited
+                if not self.vps_downloader.stop_download(message_id):
+                    return "Download did not stop in time"
+            elif self.ytdlp_downloader:
+                # yt-dlp download - stop via ytdlp_downloader
+                self.ytdlp_downloader.stop_download(message_id)
+            # Also try to cancel from download_tasks (yt-dlp futures)
+            task = self.download_tasks.get(message_id)
+            if task and hasattr(task, 'cancel'):
+                task.cancel()
+            if requeue and task is not None:
+                # The coroutine deregisters itself last, after its 'stopped'
+                deadline = time.time() + 20
+                while self.download_tasks.get(message_id) is task and time.time() < deadline:
+                    time.sleep(0.2)
+                if self.download_tasks.get(message_id) is task:
+                    return "Download did not stop in time"
+        else:
+            # Telegram download - convert to int for task lookup
+            telegram_id = int(message_id)
+            task = self.download_tasks.get(telegram_id)
+            if task and not task.done():
+                task.cancel()
+                if requeue:
+                    deadline = time.time() + 20
+                    while not task.done() and time.time() < deadline:
+                        time.sleep(0.2)
+                    if not task.done():
+                        return "Download did not stop in time"
+            # Update Telegram status message
+            if self.telegram_downloader and self.telegram_downloader.loop:
+                asyncio.run_coroutine_threadsafe(
+                    self.telegram_downloader.update_status_message(
+                        telegram_id, "Waiting" if requeue else "Stopped"),
+                    self.telegram_downloader.loop
+                )
+
+        status = 'waiting' if requeue else 'stopped'
+        extra = {'queue_position': rank} if requeue else {}
+        db.update_download_by_message_id(message_id, status=status, speed=0, **extra)
+        self.emit_status(message_id, status)
+        return None
+
     def register_download_routes(self):
         @self.app.route("/api/downloads", methods=["GET"])
         @token_required
@@ -76,50 +148,25 @@ class DownloadRoutesMixin:
                 return jsonify({"error": "Download not found"}), 404
             if download["status"] not in ("failed", "stopped"):
                 return jsonify({"error": f"Cannot retry a {download['status']} download"}), 400
+            # A retry takes a slot like any other download: with all of them
+            # busy it joins the back of the queue instead of running anyway.
+            previous = download["status"]
+            if download_queue.admit_existing(download) == 'queued':
+                return jsonify({"status": "waiting"})
             if not resume_download(download):
+                get_db().update_download_by_message_id(download["message_id"], status=previous)
+                self.emit_status(download["message_id"], previous)
                 return jsonify({"error": "Failed to restart the download"}), 500
             return jsonify({"status": "ok"})
 
         @self.app.route("/api/stop", methods=["POST"])
         @token_required
         def api_stop():
-            data = request.json
-            message_id = data.get("message_id")  # Now always a string
-            db = get_db()
-
-            # Check if it's a yt-dlp download (UUID format) or Telegram (numeric string)
-            is_uuid = message_id and '-' in message_id
-
-            if is_uuid:
-                # VPS and yt-dlp both use UUIDs - distinguish by source
-                download = db.get_download_by_message_id(message_id)
-                if download and download.get("downloaded_from") == "vps" and self.vps_downloader:
-                    # Blocks until the transfer thread has actually exited
-                    if not self.vps_downloader.stop_download(message_id):
-                        return jsonify({"error": "Download did not stop in time"}), 500
-                elif self.ytdlp_downloader:
-                    # yt-dlp download - stop via ytdlp_downloader
-                    self.ytdlp_downloader.stop_download(message_id)
-                # Also try to cancel from download_tasks (yt-dlp futures)
-                task = self.download_tasks.get(message_id)
-                if task and hasattr(task, 'cancel'):
-                    task.cancel()
-            else:
-                # Telegram download - convert to int for task lookup
-                telegram_id = int(message_id) if message_id else None
-                task = self.download_tasks.get(telegram_id)
-                if task and not task.done():
-                    task.cancel()
-                # Update Telegram status message
-                if self.telegram_downloader and telegram_id:
-                    asyncio.run_coroutine_threadsafe(
-                        self.telegram_downloader.update_status_message(telegram_id, "Stopped"),
-                        self.telegram_downloader.loop
-                    )
-
-            # Update database status to stopped
-            db.update_download_by_message_id(message_id, status='stopped', speed=0)
-            self.emit_status(message_id, 'stopped')
+            message_id = (request.json or {}).get("message_id")  # Now always a string
+            error = self.stop_one_download(message_id)
+            if error:
+                return jsonify({"error": error}), 500
+            download_queue.kick()
             return jsonify({"status": "stopped"})
 
         @self.app.route("/api/pause", methods=["POST"])
@@ -144,6 +191,7 @@ class DownloadRoutesMixin:
 
             db.update_download_by_message_id(message_id, status='paused', speed=0, pending_time=None)
             self.emit_status(message_id, 'paused')
+            download_queue.kick()
             return jsonify({"status": "paused"})
 
         @self.app.route("/api/resume", methods=["POST"])
@@ -158,6 +206,10 @@ class DownloadRoutesMixin:
                 return jsonify({"error": "Resume not supported for this download type"}), 400
 
             telegram_id = int(message_id) if message_id else None
+            # Un-pausing takes a slot; with none free it waits its turn
+            download = db.get_download_by_message_id(message_id)
+            if download and download_queue.admit_existing(download) == 'queued':
+                return jsonify({"status": "waiting"})
             if self.telegram_downloader and telegram_id:
                 future = asyncio.run_coroutine_threadsafe(
                     self.telegram_downloader.restart_download(telegram_id),
@@ -165,10 +217,14 @@ class DownloadRoutesMixin:
                 )
                 try:
                     success = future.result(timeout=30)
-                    if not success:
-                        return jsonify({"error": "Failed to restart download from Telegram"}), 500
+                    error = None if success else "Failed to restart download from Telegram"
                 except Exception as e:
-                    return jsonify({"error": f"Failed to restart download: {str(e)}"}), 500
+                    error = f"Failed to restart download: {str(e)}"
+                if error:
+                    # Give back the slot admit_existing() took for it
+                    db.update_download_by_message_id(message_id, status='paused', speed=0)
+                    self.emit_status(message_id, 'paused')
+                    return jsonify({"error": error}), 500
 
             db.update_download_by_message_id(message_id, status='downloading', speed=0)
             self.emit_status(message_id, 'downloading')
@@ -239,5 +295,65 @@ class DownloadRoutesMixin:
             # Soft delete from database
             db.delete_download_by_message_id(message_id)
             self.emit_deleted(message_id)
+            download_queue.kick()
             return jsonify({"status": "deleted"})
+
+        # --- download queue ----------------------------------------------
+
+        @self.app.route("/api/queue", methods=["GET"])
+        @token_required
+        def api_queue():
+            """Limits, how many are running (total and per source), and the
+            waiting downloads in start order."""
+            return jsonify(download_queue.snapshot())
+
+        @self.app.route("/api/queue/limits", methods=["PUT"])
+        @token_required
+        def api_queue_limits():
+            """Body: any of {global, telegram, ytdlp, vps}; a per-source null
+            removes that cap. Raising a limit starts waiting downloads now."""
+            try:
+                download_queue.set_limits(request.json or {})
+            except ValueError as e:
+                return jsonify({"error": str(e)}), 400
+            return jsonify(download_queue.snapshot())
+
+        @self.app.route("/api/queue/reorder", methods=["POST"])
+        @token_required
+        def api_queue_reorder():
+            """Body: {message_ids: [...]} - running and waiting downloads, first
+            to run first. A waiting one moved above a running one takes its
+            slot; the running one goes back to waiting with its bytes kept."""
+            ids = (request.json or {}).get("message_ids")
+            if not isinstance(ids, list):
+                return jsonify({"error": "message_ids (list) is required"}), 400
+            return jsonify(download_queue.reorder(
+                ids, requeue_one=lambda m: self.stop_one_download(m, requeue=True)))
+
+        @self.app.route("/api/queue/start-now", methods=["POST"])
+        @token_required
+        def api_queue_start_now():
+            """Body: {message_id} - start a waiting download now, past the limits."""
+            message_id = (request.json or {}).get("message_id")
+            if not message_id:
+                return jsonify({"error": "message_id is required"}), 400
+            ok, error = download_queue.start_now(str(message_id))
+            if not ok:
+                return jsonify({"error": error}), 400
+            return jsonify(download_queue.snapshot())
+
+        @self.app.route("/api/queue/stop-all", methods=["POST"])
+        @token_required
+        def api_queue_stop_all():
+            """Stop every running and waiting local download."""
+            result = download_queue.stop_all(self.stop_one_download)
+            return jsonify({**result, **download_queue.snapshot()})
+
+        @self.app.route("/api/queue/resume-all", methods=["POST"])
+        @token_required
+        def api_queue_resume_all():
+            """Put every stopped/paused local download back in the queue; the
+            limits decide how many start right away."""
+            queued = download_queue.resume_all()
+            return jsonify({"queued": queued, **download_queue.snapshot()})
 

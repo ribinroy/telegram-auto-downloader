@@ -21,7 +21,7 @@ export interface Download {
   id: number;
   message_id: string | null;  // UUID for yt-dlp or Telegram message ID as string
   file: string;
-  status: 'downloading' | 'done' | 'failed' | 'stopped' | 'paused';
+  status: 'downloading' | 'waiting' | 'done' | 'failed' | 'stopped' | 'paused';
   progress: number;
   speed: number;
   error: string | null;
@@ -38,6 +38,28 @@ export interface Download {
   thumb_count: number;  // Number of thumbnail images available
   hidden?: boolean;  // Computed: source/watchfolder is secured
   dest_folder?: string | null;  // Computed: configured destination folder
+  queue_position?: number | null;  // Place in the download queue while waiting
+}
+
+/** Which handler a download belongs to, as the download queue counts them. */
+export type QueueSource = 'telegram' | 'ytdlp' | 'vps';
+
+/** GET /api/queue - limits, what is running, and who waits (in start order). */
+export interface QueueState {
+  /** `global` caps everything; a per-source null means no cap of its own. */
+  limits: { global: number } & Record<QueueSource, number | null>;
+  max_limit: number;
+  active: { total: number } & Record<QueueSource, number>;
+  /** Downloads holding a slot right now, oldest first. */
+  running: Download[];
+  waiting: Download[];
+  /** Stopped + paused downloads - what "resume all" would bring back. */
+  resumable: number;
+}
+
+export interface StopAllResult extends QueueState {
+  stopped: number;
+  errors: { message_id: string; file: string; error: string }[];
 }
 
 export interface VideoFormat {

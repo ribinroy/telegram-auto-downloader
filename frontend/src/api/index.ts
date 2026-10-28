@@ -1,4 +1,4 @@
-import type { DownloadsResponse, Stats, UrlCheckResult, Download, SourceMapping, AnalyticsData } from '../types';
+import type { DownloadsResponse, Stats, UrlCheckResult, Download, SourceMapping, AnalyticsData, QueueState, StopAllResult } from '../types';
 
 export const API_BASE = import.meta.env.DEV ? (import.meta.env.VITE_API_BASE || 'http://localhost:4444') : '';
 const TOKEN_KEY = 'auth_token';
@@ -283,6 +283,46 @@ export async function retryDownload(id: number): Promise<void> {
     throw new Error(body.error || 'Failed to restart the download');
   }
 }
+
+// --- Download queue --------------------------------------------------------
+
+async function queueRequest(path: string, init: RequestInit = {}): Promise<QueueState> {
+  const response = await authFetch(`/api/queue${path}`, init);
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.error || 'Queue request failed');
+  return body as QueueState;
+}
+
+const jsonInit = (method: string, data: unknown): RequestInit => ({
+  method,
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(data),
+});
+
+export const fetchQueue = () => queueRequest('');
+
+/** Change any limit; a per-source `null` removes that source's cap. */
+export const setQueueLimits = (limits: Partial<QueueState['limits']>) =>
+  queueRequest('/limits', jsonInit('PUT', limits));
+
+/** Running and waiting downloads' message ids, first to run first. A waiting
+ *  one moved above a running one takes its slot; `requeued` counts the
+ *  running ones sent back to wait. */
+export const reorderQueue = (messageIds: string[]) =>
+  queueRequest('/reorder', jsonInit('POST', { message_ids: messageIds })) as
+    Promise<QueueState & Pick<StopAllResult, 'errors'> & { requeued: number }>;
+
+/** Start one waiting download now, past the limits. */
+export const startQueuedNow = (messageId: string) =>
+  queueRequest('/start-now', jsonInit('POST', { message_id: messageId }));
+
+/** Stop every running and waiting download. */
+export const stopAllDownloads = () =>
+  queueRequest('/stop-all', { method: 'POST' }) as Promise<StopAllResult>;
+
+/** Queue every stopped/paused download again; the limits decide how many start. */
+export const resumeAllDownloads = () =>
+  queueRequest('/resume-all', { method: 'POST' }) as Promise<QueueState & { queued: number }>;
 
 export async function stopDownload(message_id: string): Promise<void> {
   await authFetch(`/api/stop`, {

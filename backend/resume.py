@@ -37,10 +37,13 @@ def source_of(download) -> str:
     return 'ytdlp' if download.get('url') else 'telegram'
 
 
-def resume_download(download, force: bool = False) -> bool:
+def resume_download(download, force: bool = False, count_retry: bool = True) -> bool:
     """Restart `download` from where it stopped. Returns True if a transfer is
     running again. Never raises - callers are route handlers and a watchdog
-    thread, neither of which should die over one stubborn record."""
+    thread, neither of which should die over one stubborn record.
+
+    `count_retry=False` is for the download queue starting a waiting download
+    for the first time, which is not a retry and shouldn't count as one."""
     from backend.web_app import get_web_app
 
     web = get_web_app()
@@ -62,7 +65,7 @@ def resume_download(download, force: bool = False) -> bool:
         logger.warning("resume failed for %s (%s): %s", message_id, source, e)
         return False
 
-    if ok:
+    if ok and count_retry:
         metrics.record_retry(download.get('downloaded_from') or source)
     return ok
 

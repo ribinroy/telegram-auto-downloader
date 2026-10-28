@@ -7,6 +7,7 @@ export const qk = {
   downloads: (filters: Omit<FetchDownloadsOptions, 'offset' | 'limit'>) => ['downloads', filters] as const,
   authors: () => ['authors'] as const,
   stats: () => ['stats'] as const,
+  queue: () => ['queue'] as const,
   analytics: (days: number, groupBy: 'day' | 'hour', includeDeleted: boolean) =>
     ['analytics', days, groupBy, includeDeleted] as const,
   mappings: () => ['mappings'] as const,

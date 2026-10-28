@@ -553,10 +553,11 @@ class YtdlpDownloader:
         filename = rename_for_download(f"{title}.{ext or 'mp4'}", domain)
         filename_base = _Path(filename).stem
 
-        # Add to database
-        new_download = db.add_download(
+        # Add to database - running, or waiting its turn in the download queue
+        from backend.download_queue import admit
+        new_download, started = admit('ytdlp', lambda status, position: db.add_download(
             file=filename,
-            status='downloading',
+            status=status,
             progress=0,
             speed=0,
             error=None,
@@ -567,10 +568,15 @@ class YtdlpDownloader:
             downloaded_from=domain,
             url=url,
             author=author,
-        )
+            queue_position=position,
+            format_id=format_id,
+        ))
 
         # Emit new download event
         self.emit_new_download(new_download)
+        if not started:
+            # The queue starts it through resume_download() when a slot frees
+            return new_download
 
         # Start download task
         import sys
@@ -637,7 +643,7 @@ class YtdlpDownloader:
         self.emit_status(message_id, 'downloading')
 
         future = asyncio.run_coroutine_threadsafe(
-            self.download(url, message_id, None, custom_title), loop)
+            self.download(url, message_id, download.get('format_id'), custom_title), loop)
         self.download_tasks[message_id] = future
         return True
 

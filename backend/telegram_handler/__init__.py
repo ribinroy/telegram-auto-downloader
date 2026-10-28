@@ -845,23 +845,37 @@ class TelegramDownloader:
         except Exception as e:
             logging.error(f"Failed to get sender info: {e}")
 
-        # Add to database with Telegram message ID
-        new_download = db.add_download(
+        # Add to database with Telegram message ID - running, or waiting its
+        # turn in the download queue
+        from backend.download_queue import admit
+        new_download, started = admit('telegram', lambda status, position: db.add_download(
             file=filename,
-            status='downloading',
+            status=status,
             progress=0,
             speed=0,
             error=None,
             downloaded_bytes=0,
-            total_bytes=0,
+            total_bytes=event.file.size or 0,
             pending_time=None,
             message_id=event.id,
             author=author,
             chat_id=event.chat_id,
-        )
+            queue_position=position,
+        ))
 
         # Emit new download event
         self.emit_new_download(new_download)
+
+        if not started:
+            # The queue starts it later through restart_download(), which
+            # re-fetches the message and edits this reply to "Downloading".
+            try:
+                place = (new_download.get('queue_position') or 0) + 1
+                msg = await event.reply(f"⏳ Status: Waiting (#{place} in queue)")
+                db.update_download_by_message_id(event.id, chat_id=event.chat_id, status_msg_id=msg.id)
+            except Exception as e:
+                logging.error(f"Failed to send queued status message: {e}")
+            return
 
         # Create entry dict for status message tracking
         entry = {
