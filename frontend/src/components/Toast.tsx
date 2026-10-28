@@ -1,4 +1,5 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState } from 'react';
+import { notify, dismissNotification, subscribeNotifications } from '../lib/notify';
 import { CheckCircle, XCircle, AlertCircle, X, Download } from 'lucide-react';
 
 export type ToastType = 'success' | 'error' | 'warning' | 'info';
@@ -59,9 +60,9 @@ function Toast({ toast, onDismiss }: ToastProps) {
     <div
       role="alert"
       aria-live="polite"
-      className={`flex items-start gap-3 p-4 rounded-xl border-2 shadow-xl transition-all duration-300 ${
+      className={`flex items-start gap-3 p-4 rounded-xl border-2 shadow-xl backdrop-blur-md transition-all duration-300 motion-reduce:transition-none ${
         bgColors[toast.type]
-      } ${isExiting ? 'opacity-0 translate-x-full' : 'opacity-100 translate-x-0'}`}
+      } ${isExiting ? 'opacity-0 -translate-y-2' : 'opacity-100 translate-y-0 animate-toast-in'}`}
     >
       {icons[toast.type]}
       <div className="flex-1 min-w-0">
@@ -86,11 +87,17 @@ interface ToastContainerProps {
   onDismiss: (id: string) => void;
 }
 
+/**
+ * The notification stack: floating, top-centre under the header. Not the
+ * bottom-right corner, where the floating action buttons and the explorer's
+ * selection bar live; and above modals, so a modal's own action can report
+ * its result.
+ */
 export function ToastContainer({ toasts, onDismiss }: ToastContainerProps) {
   return (
-    <div className="fixed bottom-6 right-6 z-50 flex flex-col gap-2 max-w-sm w-full pointer-events-none">
+    <div className="fixed top-16 sm:top-20 inset-x-0 z-[130] flex flex-col items-center gap-2 px-4 pointer-events-none">
       {toasts.map((toast) => (
-        <div key={toast.id} className="pointer-events-auto">
+        <div key={toast.id} className="pointer-events-auto w-full max-w-sm">
           <Toast toast={toast} onDismiss={onDismiss} />
         </div>
       ))}
@@ -98,18 +105,10 @@ export function ToastContainer({ toasts, onDismiss }: ToastContainerProps) {
   );
 }
 
-// Hook for managing toasts
+// The app-wide stack (lib/notify). Anything can call notify() directly;
+// this hook is what Layout renders the container from.
 export function useToast() {
   const [toasts, setToasts] = useState<ToastData[]>([]);
-
-  const addToast = useCallback((toast: Omit<ToastData, 'id'>) => {
-    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
-    setToasts((prev) => [...prev, { ...toast, id }]);
-  }, []);
-
-  const dismissToast = useCallback((id: string) => {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
-  }, []);
-
-  return { toasts, addToast, dismissToast };
+  useEffect(() => subscribeNotifications(setToasts), []);
+  return { toasts, addToast: notify, dismissToast: dismissNotification };
 }

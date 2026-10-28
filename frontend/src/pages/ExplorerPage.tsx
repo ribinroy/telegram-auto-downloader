@@ -4,6 +4,7 @@ import {
   FolderOpen, Loader2, AlertTriangle, X, Download, Copy, Scissors, ClipboardPaste,
   Pencil, Trash2, Info, Eye, Link as LinkIcon, CheckSquare, HardDrive, Search, Menu,
 } from 'lucide-react';
+import { notify } from '../lib/notify';
 import { useLayoutContext } from '../components/Layout';
 import { ExplorerSidebar } from '../components/explorer/ExplorerSidebar';
 import { ExplorerToolbar } from '../components/explorer/ExplorerToolbar';
@@ -62,7 +63,10 @@ export function ExplorerPage() {
   const [confirmDelete, setConfirmDelete] = useState<{ entries: FileEntry[]; permanent: boolean } | null>(null);
   const [filter, setFilter] = useState('');
   const [searchQuery, setSearchQuery] = useState<string | null>(null);
-  const [notice, setNotice] = useState<{ kind: 'error' | 'info'; text: string } | null>(null);
+  // Results of actions float (lib/notify) rather than taking a row above the list
+  const setNotice = (n: { kind: 'error' | 'info'; text: string } | null) => {
+    if (n) notify({ type: n.kind === 'error' ? 'error' : 'success', title: n.text, duration: n.kind === 'error' ? 7000 : 4000 });
+  };
   const [dragging, setDragging] = useState(false);
   // Below lg the places list is a drawer: on a phone it was eating the top of
   // every folder before you could see a single file.
@@ -176,6 +180,7 @@ export function ExplorerPage() {
   const barClipboard = barShown ? clipboard : barSnapshot.clipboard;
   const barDeleting = barShown ? deletingLabel : barSnapshot.deletingLabel;
   const barSize = barEntries.reduce((sum, e) => sum + e.size, 0);
+  const barRemote = barEntries.length > 0 && barEntries.every(e => e.remote);
 
   // The list's end padding grows with the bar. If the list was scrolled to
   // the bottom, ride the growth so the last rows slide up above the bar
@@ -564,19 +569,6 @@ export function ExplorerPage() {
             }}
           />
 
-          {notice && (
-            <div className={`flex items-start gap-2 rounded-xl p-3 mb-3 text-sm ${
-              notice.kind === 'error'
-                ? 'bg-red-500/15 border border-red-500/40 text-red-300'
-                : 'bg-cyan-500/10 border border-cyan-500/30 text-cyan-300'
-            }`}>
-              <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
-              <span className="flex-1">{notice.text}</span>
-              <button onClick={() => setNotice(null)} className="text-current opacity-70 hover:opacity-100">
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-          )}
 
           {listError && (
             <div className="bg-red-500/15 border border-red-500/40 rounded-xl p-3 mb-3 text-sm text-red-300">
@@ -683,6 +675,19 @@ export function ExplorerPage() {
                           Trash
                         </button>
                       </>
+                    )}
+                    {/* Permanent delete - and the only delete for a VPS selection,
+                        which has no trash (the same rule as the context menu) */}
+                    {(writable || barRemote) && (
+                      <button
+                        onClick={() => setConfirmDelete({ entries: barEntries, permanent: true })}
+                        disabled={deleting}
+                        title={barRemote ? 'Delete on the VPS (permanent)' : 'Delete permanently'}
+                        className="flex items-center gap-1.5 text-xs px-2 py-1 rounded-lg bg-red-600/80 text-white hover:bg-red-500 disabled:opacity-50 disabled:hover:bg-red-600/80 transition-colors"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        {barRemote ? 'Delete on VPS' : 'Delete'}
+                      </button>
                     )}
                     <button
                       onClick={() => setSelected(new Set())}
