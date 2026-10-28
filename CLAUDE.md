@@ -491,7 +491,12 @@ a pulled USB drive disappears from the sidebar.
 - **Delete is a trash move by default**, into `<mount>/.downlee-trash` - per mount,
   so it stays a rename instead of copying 50 GB across drives, and stays
   recoverable. Root-filesystem deletes park in `BASE_DIR/.trash`. `permanent: true`
-  unlinks for real. The trash path is reported by `/api/files/list` (only once it
+  unlinks for real. A permanent folder delete **keeps going past failures** (`_remove_tree()`):
+  plain `rmtree` stopped at the first folder Plex or a torrent client owns and left half a
+  folder behind with one opaque error, so instead everything removable goes and the
+  result comes back `partial` with the count left and the blocking folders named
+  (parents' ENOTEMPTY is a consequence and isn't reported). The page shows a
+  "Deleting…" bar and disables the delete actions while the request runs. The trash path is reported by `/api/files/list` (only once it
   exists) and linked in the sidebar.
 - **Bounded work**: recursive search and folder sizes both stop on a wall-clock
   deadline as well as a result cap, because "search from the root of a 20 TB array"

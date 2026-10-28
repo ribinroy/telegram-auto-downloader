@@ -88,6 +88,9 @@ export function ExplorerPage() {
   const createFolder = useCreateFolder();
   const renameMut = useRenamePath();
   const deleteMut = useDeletePaths();
+  // A delete is one request with no progress of its own, so the page says it
+  // is running and refuses a second one on top of it.
+  const deleting = deleteMut.isPending;
   const transferMut = useTransferPaths();
   const uploadMut = useUploadFiles();
 
@@ -196,7 +199,12 @@ export function ExplorerPage() {
 
   const reportErrors = (res: FileOpResponse, verb: string) => {
     if (res.errors?.length) {
-      setNotice({ kind: 'error', text: `${verb} failed for ${res.errors.length} item(s): ${res.errors[0].error}` });
+      const [first, ...rest] = res.errors;
+      // A partial delete's message already says what happened to it
+      const text = first.partial
+        ? `${first.path.split('/').pop()}: ${first.error}${rest.length ? ` (${rest.length} more item(s) had errors)` : ''}`
+        : `${verb} failed for ${res.errors.length} item(s): ${first.error}`;
+      setNotice({ kind: 'error', text });
     }
     return !res.errors?.length;
   };
@@ -212,13 +220,19 @@ export function ExplorerPage() {
   };
 
   const runDelete = async () => {
-    if (!confirmDelete) return;
+    if (!confirmDelete || deleting) return;
     const { entries, permanent } = confirmDelete;
     setConfirmDelete(null);
+    setNotice(null);
     try {
       const res = await deleteMut.mutateAsync({ paths: entries.map(e => e.path), permanent });
-      if (reportErrors(res, 'Delete') && !permanent && !res.permanent) {
-        setNotice({ kind: 'info', text: `Moved ${entries.length} item(s) to the trash folder on this disk.` });
+      if (reportErrors(res, 'Delete')) {
+        setNotice({
+          kind: 'info',
+          text: !permanent && !res.permanent
+            ? `Moved ${entries.length} item(s) to the trash folder on this disk.`
+            : `Deleted ${entries.length} item(s).`,
+        });
       }
       setSelected(new Set());
     } catch (e) {
@@ -341,7 +355,7 @@ export function ExplorerPage() {
       items.push({
         label: 'Move to trash', icon: <Trash2 className="w-4 h-4" />, danger: true, separated: single ? false : true,
         onClick: () => setConfirmDelete({ entries: targets, permanent: false }),
-        disabled: !writable,
+        disabled: !writable || deleting,
       });
     }
     items.push({
@@ -350,7 +364,7 @@ export function ExplorerPage() {
       label: remote ? 'Delete on the VPS' : 'Delete permanently',
       icon: <Trash2 className="w-4 h-4" />, danger: true, separated: remote,
       onClick: () => setConfirmDelete({ entries: targets, permanent: true }),
-      disabled: !remote && !writable,
+      disabled: (!remote && !writable) || deleting,
     });
 
     if (single) {
@@ -388,7 +402,7 @@ export function ExplorerPage() {
       } else if (e.key === 'F2' && selectedEntries.length === 1 && writable) {
         e.preventDefault();
         setRenaming(selectedEntries[0].path);
-      } else if (e.key === 'Delete' && selectedEntries.length && writable) {
+      } else if (e.key === 'Delete' && selectedEntries.length && writable && !deleting) {
         setConfirmDelete({ entries: selectedEntries, permanent: e.shiftKey });
       } else if (e.key === 'Escape') {
         if (placesOpen) setPlacesOpen(false);
@@ -493,6 +507,16 @@ export function ExplorerPage() {
             }}
           />
 
+          {deleting && (
+            <div className="flex items-center gap-2 rounded-xl p-3 mb-3 text-sm bg-slate-700/40 border border-slate-600/50 text-slate-300">
+              <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+              <span>
+                {deleteMut.variables?.permanent ? 'Deleting' : 'Moving'} {deleteMut.variables?.paths.length ?? 0} item(s)
+                {deleteMut.variables?.permanent ? '…' : ' to the trash…'}
+              </span>
+            </div>
+          )}
+
           {notice && (
             <div className={`flex items-start gap-2 rounded-xl p-3 mb-3 text-sm ${
               notice.kind === 'error'
@@ -538,9 +562,13 @@ export function ExplorerPage() {
                       </button>
                       <button
                         onClick={() => setConfirmDelete({ entries: selectedEntries, permanent: false })}
-                        className="flex items-center gap-1.5 text-xs px-2 py-1 rounded-lg bg-red-500/15 text-red-400 hover:bg-red-500/25 transition-colors"
+                        disabled={deleting}
+                        className="flex items-center gap-1.5 text-xs px-2 py-1 rounded-lg bg-red-500/15 text-red-400 hover:bg-red-500/25 disabled:opacity-50 disabled:hover:bg-red-500/15 transition-colors"
                       >
-                        <Trash2 className="w-3.5 h-3.5" /> Trash
+                        {deleting
+                          ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          : <Trash2 className="w-3.5 h-3.5" />}
+                        Trash
                       </button>
                     </>
                   )}

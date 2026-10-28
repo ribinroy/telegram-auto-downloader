@@ -195,6 +195,30 @@ def test_delete_reports_per_path_errors_without_aborting(tmp_tree):
     assert not (tmp_tree / 'notes.txt').exists()
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason='root ignores directory permissions')
+def test_permanent_delete_keeps_going_past_an_unwritable_folder(tmp_tree):
+    """A folder Plex owns inside the tree must not stop the delete at the
+    first error: everything else goes, and the result says what was left."""
+    movies = tmp_tree / 'Movies'
+    locked = movies / 'locked'
+    locked.mkdir()
+    (locked / 'x.nfo').write_text('plex')
+    for i in range(5):
+        (movies / f'clip{i}.mp4').write_bytes(b'z')
+    locked.chmod(0o555)
+    try:
+        result = fs.delete([str(movies)], permanent=True)[0]
+        assert result['partial'] is True
+        assert result['left'] == 1
+        assert 'Blocked in: locked' in result['error']
+        assert 'permission denied' in result['error']
+        # Everything outside the locked folder went
+        assert sorted(p.name for p in movies.iterdir()) == ['locked']
+        assert (locked / 'x.nfo').exists()
+    finally:
+        locked.chmod(0o755)
+
+
 def test_transfer_copies_without_clobbering(tmp_tree):
     dest = tmp_tree / 'dest'
     dest.mkdir()

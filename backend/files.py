@@ -11,12 +11,14 @@ a browser tab must never be able to unlink /usr. Data disks mounted outside /
 (the /mnt, /media, /srv... case) are always writable, since that is exactly
 where a media library lives.
 """
+import errno
 import hashlib
 import json
 import os
 import shutil
 import stat as stat_module
 import subprocess
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
@@ -385,6 +387,53 @@ def trash_dir_for(path):
     return base
 
 
+# How many blocking folders a partial delete names - the rest are counted.
+DELETE_BLOCKED_SHOWN = 5
+
+
+def _remove_tree(path):
+    """rmtree that keeps going past failures. Returns the failures as
+    [(path, OSError)], empty when everything went.
+
+    Plain rmtree raises on the first error, which on a disk shared with Plex
+    or a torrent client (folders the service user can't write) stopped the
+    delete partway through and left half a folder behind with one opaque
+    error. Each failure also makes every parent's rmdir fail with ENOTEMPTY;
+    those are consequences, not causes, so they are left out."""
+    failures = []
+
+    def record(_func, failed_path, exc):
+        if isinstance(exc, tuple):  # onerror passes exc_info
+            exc = exc[1]
+        if getattr(exc, 'errno', None) != errno.ENOTEMPTY:
+            failures.append((failed_path, exc))
+
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=record)
+    else:
+        shutil.rmtree(path, onerror=record)
+    return failures
+
+
+def _partial_delete_message(root, failures):
+    """'Partly deleted - 12 item(s) couldn't be removed. Blocked in: Extras,
+    Extras/Lore (permission denied)' - named relative to what was deleted."""
+    blocked = []
+    for failed, _exc in failures:
+        parent = os.path.dirname(str(failed)) or str(failed)
+        rel = os.path.relpath(parent, str(root))
+        name = root.name if rel == '.' else rel
+        if name not in blocked:
+            blocked.append(name)
+    shown = ', '.join(blocked[:DELETE_BLOCKED_SHOWN])
+    if len(blocked) > DELETE_BLOCKED_SHOWN:
+        shown += f' and {len(blocked) - DELETE_BLOCKED_SHOWN} more folder(s)'
+    reasons = {getattr(e, 'strerror', None) or str(e) for _p, e in failures}
+    reason = reasons.pop().lower() if len(reasons) == 1 else 'various errors'
+    return (f"Partly deleted - {len(failures)} item(s) couldn't be removed. "
+            f"Blocked in: {shown} ({reason})")
+
+
 def delete(raw_paths, permanent=False):
     """Delete files/folders. Default is a move to the mount's trash folder."""
     results = []
@@ -394,7 +443,13 @@ def delete(raw_paths, permanent=False):
             guard_target(path)
             if permanent:
                 if path.is_dir() and not path.is_symlink():
-                    shutil.rmtree(path)
+                    failures = _remove_tree(path)
+                    if failures:
+                        results.append({
+                            'path': str(path), 'partial': True, 'left': len(failures),
+                            'error': _partial_delete_message(path, failures),
+                        })
+                        continue
                 else:
                     path.unlink()
                 results.append({'path': str(path), 'trashed': False})
