@@ -92,7 +92,11 @@ export function ExplorerPage() {
   const deleteMut = useDeletePaths();
   // A delete is one request with no progress of its own, so the page says it
   // is running and refuses a second one on top of it.
-  const deleting = deleteMut.isPending;
+  // Shown in the floating bar while a delete runs. Its own state rather than
+  // the mutation's: it is cleared in the same render as the selection, so the
+  // bar fades out from "Deleting…" instead of flashing back to "N selected".
+  const [deletingLabel, setDeletingLabel] = useState<string | null>(null);
+  const deleting = deleteMut.isPending || deletingLabel !== null;
   const transferMut = useTransferPaths();
   const uploadMut = useUploadFiles();
 
@@ -151,7 +155,7 @@ export function ExplorerPage() {
   const barRef = useRef<HTMLDivElement>(null);
   const listBoxRef = useRef<HTMLDivElement>(null);
   const [barHeight, setBarHeight] = useState(0);
-  const barShown = selectedEntries.length > 0 || !!clipboard;
+  const barShown = selectedEntries.length > 0 || !!clipboard || deletingLabel !== null;
   useEffect(() => {
     const el = barRef.current;
     if (!el) return;
@@ -163,12 +167,14 @@ export function ExplorerPage() {
   // The bar stays mounted so it can animate out. While it does, it keeps
   // showing what it last held - otherwise clearing the selection would empty
   // it mid-fade. (State adjusted during render, React's derived-state pattern.)
-  const [barSnapshot, setBarSnapshot] = useState({ entries: selectedEntries, clipboard });
-  if (barShown && (barSnapshot.entries !== selectedEntries || barSnapshot.clipboard !== clipboard)) {
-    setBarSnapshot({ entries: selectedEntries, clipboard });
+  const [barSnapshot, setBarSnapshot] = useState({ entries: selectedEntries, clipboard, deletingLabel });
+  if (barShown && (barSnapshot.entries !== selectedEntries || barSnapshot.clipboard !== clipboard
+      || barSnapshot.deletingLabel !== deletingLabel)) {
+    setBarSnapshot({ entries: selectedEntries, clipboard, deletingLabel });
   }
   const barEntries = barShown ? selectedEntries : barSnapshot.entries;
   const barClipboard = barShown ? clipboard : barSnapshot.clipboard;
+  const barDeleting = barShown ? deletingLabel : barSnapshot.deletingLabel;
   const barSize = barEntries.reduce((sum, e) => sum + e.size, 0);
 
   // The list's end padding grows with the bar. If the list was scrolled to
@@ -269,6 +275,9 @@ export function ExplorerPage() {
     const { entries, permanent } = confirmDelete;
     setConfirmDelete(null);
     setNotice(null);
+    setDeletingLabel(permanent
+      ? `Deleting ${entries.length} item(s)…`
+      : `Moving ${entries.length} item(s) to the trash…`);
     try {
       const res = await deleteMut.mutateAsync({ paths: entries.map(e => e.path), permanent });
       if (reportErrors(res, 'Delete')) {
@@ -282,6 +291,8 @@ export function ExplorerPage() {
       setSelected(new Set());
     } catch (e) {
       setNotice({ kind: 'error', text: (e as Error).message });
+    } finally {
+      setDeletingLabel(null);
     }
   };
 
@@ -553,16 +564,6 @@ export function ExplorerPage() {
             }}
           />
 
-          {deleting && (
-            <div className="flex items-center gap-2 rounded-xl p-3 mb-3 text-sm bg-slate-700/40 border border-slate-600/50 text-slate-300">
-              <Loader2 className="w-4 h-4 animate-spin shrink-0" />
-              <span>
-                {deleteMut.variables?.permanent ? 'Deleting' : 'Moving'} {deleteMut.variables?.paths.length ?? 0} item(s)
-                {deleteMut.variables?.permanent ? '…' : ' to the trash…'}
-              </span>
-            </div>
-          )}
-
           {notice && (
             <div className={`flex items-start gap-2 rounded-xl p-3 mb-3 text-sm ${
               notice.kind === 'error'
@@ -645,7 +646,13 @@ export function ExplorerPage() {
                   barShown ? 'pointer-events-auto opacity-100 translate-y-0 scale-100' : 'opacity-0 translate-y-4 scale-95'
                 }`}
               >
-                {barEntries.length > 0 && (
+                {barDeleting && (
+                  <span className="flex items-center gap-2 text-sm text-slate-300" role="status">
+                    <Loader2 className="w-4 h-4 animate-spin shrink-0 text-cyan-400" />
+                    {barDeleting}
+                  </span>
+                )}
+                {!barDeleting && barEntries.length > 0 && (
                   <>
                     <span className="text-sm text-slate-300">
                       {barEntries.length} selected
@@ -686,7 +693,7 @@ export function ExplorerPage() {
                   </>
                 )}
                 {barClipboard && (
-                  <div className={`flex items-center gap-2 ${barEntries.length > 0 ? 'border-slate-700 max-sm:basis-full max-sm:justify-center max-sm:pt-2 max-sm:border-t sm:pl-2 sm:border-l' : ''}`}>
+                  <div className={`flex items-center gap-2 ${barDeleting || barEntries.length > 0 ? 'border-slate-700 max-sm:basis-full max-sm:justify-center max-sm:pt-2 max-sm:border-t sm:pl-2 sm:border-l' : ''}`}>
                     <span className="text-xs text-slate-500">
                       {barClipboard.paths.length} item(s) ready to {barClipboard.move ? 'move' : 'copy'}
                     </span>

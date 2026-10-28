@@ -577,8 +577,9 @@ a pulled USB drive disappears from the sidebar.
   plain `rmtree` stopped at the first folder Plex or a torrent client owns and left half a
   folder behind with one opaque error, so instead everything removable goes and the
   result comes back `partial` with the count left and the blocking folders named
-  (parents' ENOTEMPTY is a consequence and isn't reported). The page shows a
-  "Deleting…" bar and disables the delete actions while the request runs. The trash path is reported by `/api/files/list` (only once it
+  (parents' ENOTEMPTY is a consequence and isn't reported). While the request runs
+  the floating selection bar shows "Deleting…" / "Moving to the trash…" in place of
+  its buttons, and the delete actions are disabled. The trash path is reported by `/api/files/list` (only once it
   exists) and linked in the sidebar.
 - **Bounded work**: recursive search and folder sizes both stop on a wall-clock
   deadline as well as a result cap, because "search from the root of a 20 TB array"
@@ -765,6 +766,29 @@ calls `logsafe.install(LOG_FILE)`.
 - **JWT auth**: All API routes use `@token_required` (except `/metrics`); media routes use `@media_token_required`, which also accepts a `?token=` media token
 - **CORS**: closed by default to `CORS_ORIGINS` (Vite dev ports); Socket.IO uses a callable origin check so same-origin handshakes always pass (`_socketio_origin_allowed`)
 - **Frontend serves from Flask**: Built `frontend/dist/` served as static files
+
+## UI Patterns
+
+- **Transient status and contextual actions float; they never take a row.**
+  Anything that comes and goes - a selection's actions, a clipboard, an
+  operation in progress ("Deleting…"), a queue's summary - goes in a floating
+  bar or button over the content, not a new row that shoves the list down and
+  leaves an empty band when it disappears. If a floating surface already exists
+  on the page, put the new state *inside* it rather than adding a second one.
+  Examples: the file explorer's selection bar (selection, clipboard and delete
+  progress all share one pill) and the downloads page's queue button (the
+  running/total count, with the details in a modal).
+  - **The content clears it instead of hiding under it.** The scrolling list
+    pads its end by the floating element's measured height (a ResizeObserver
+    into a CSS variable, since it can wrap to two lines on a phone), so the
+    last row can always be scrolled above it.
+  - **It animates both ways** (opacity + a short slide, ~200ms, off under
+    `prefers-reduced-motion`): keep it mounted and `inert` while hidden, and
+    let it show a snapshot of its last content while fading out, so it doesn't
+    go blank mid-fade. Clear the state that drives it in the same render as
+    whatever ends it, or it flashes its previous content for a frame.
+  - Persistent page chrome (search, toolbars, column headers) stays put; only
+    what is transient floats.
 
 ## Tests
 
