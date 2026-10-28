@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
-  FolderOpen, Loader2, AlertTriangle, X, Download, Copy, Scissors, ClipboardPaste,
+  FolderOpen, Loader2, X, Download, Copy, Scissors, ClipboardPaste,
   Pencil, Trash2, Info, Eye, Link as LinkIcon, CheckSquare, HardDrive, Search, Menu,
 } from 'lucide-react';
+import { notify, useErrorToast } from '../lib/notify';
 import { useLayoutContext } from '../components/Layout';
 import { ExplorerSidebar } from '../components/explorer/ExplorerSidebar';
 import { ExplorerToolbar } from '../components/explorer/ExplorerToolbar';
@@ -62,7 +63,8 @@ export function ExplorerPage() {
   const [confirmDelete, setConfirmDelete] = useState<{ entries: FileEntry[]; permanent: boolean } | null>(null);
   const [filter, setFilter] = useState('');
   const [searchQuery, setSearchQuery] = useState<string | null>(null);
-  const [notice, setNotice] = useState<{ kind: 'error' | 'info'; text: string } | null>(null);
+  // Results of actions use the app's toasts (lib/notify), like download
+  // complete/failed, rather than a row above the list.
   const [dragging, setDragging] = useState(false);
   // Below lg the places list is a drawer: on a phone it was eating the top of
   // every folder before you could see a single file.
@@ -92,7 +94,11 @@ export function ExplorerPage() {
   const deleteMut = useDeletePaths();
   // A delete is one request with no progress of its own, so the page says it
   // is running and refuses a second one on top of it.
-  const deleting = deleteMut.isPending;
+  // Shown in the floating bar while a delete runs. Its own state rather than
+  // the mutation's: it is cleared in the same render as the selection, so the
+  // bar fades out from "Deleting…" instead of flashing back to "N selected".
+  const [deletingLabel, setDeletingLabel] = useState<string | null>(null);
+  const deleting = deleteMut.isPending || deletingLabel !== null;
   const transferMut = useTransferPaths();
   const uploadMut = useUploadFiles();
 
@@ -151,7 +157,7 @@ export function ExplorerPage() {
   const barRef = useRef<HTMLDivElement>(null);
   const listBoxRef = useRef<HTMLDivElement>(null);
   const [barHeight, setBarHeight] = useState(0);
-  const barShown = selectedEntries.length > 0 || !!clipboard;
+  const barShown = selectedEntries.length > 0 || !!clipboard || deletingLabel !== null;
   useEffect(() => {
     const el = barRef.current;
     if (!el) return;
@@ -163,13 +169,16 @@ export function ExplorerPage() {
   // The bar stays mounted so it can animate out. While it does, it keeps
   // showing what it last held - otherwise clearing the selection would empty
   // it mid-fade. (State adjusted during render, React's derived-state pattern.)
-  const [barSnapshot, setBarSnapshot] = useState({ entries: selectedEntries, clipboard });
-  if (barShown && (barSnapshot.entries !== selectedEntries || barSnapshot.clipboard !== clipboard)) {
-    setBarSnapshot({ entries: selectedEntries, clipboard });
+  const [barSnapshot, setBarSnapshot] = useState({ entries: selectedEntries, clipboard, deletingLabel });
+  if (barShown && (barSnapshot.entries !== selectedEntries || barSnapshot.clipboard !== clipboard
+      || barSnapshot.deletingLabel !== deletingLabel)) {
+    setBarSnapshot({ entries: selectedEntries, clipboard, deletingLabel });
   }
   const barEntries = barShown ? selectedEntries : barSnapshot.entries;
   const barClipboard = barShown ? clipboard : barSnapshot.clipboard;
+  const barDeleting = barShown ? deletingLabel : barSnapshot.deletingLabel;
   const barSize = barEntries.reduce((sum, e) => sum + e.size, 0);
+  const barRemote = barEntries.length > 0 && barEntries.every(e => e.remote);
 
   // The list's end padding grows with the bar. If the list was scrolled to
   // the bottom, ride the growth so the last rows slide up above the bar
@@ -234,7 +243,7 @@ export function ExplorerPage() {
     // Previewing a remote image/video would stream it off the VPS; only text
     // is cheap enough to fetch on a click.
     if (entry.remote && entry.kind !== 'text') {
-      setNotice({ kind: 'info', text: 'Copy it to a local folder to open it — VPS files are not streamed.' });
+      notify({ type: 'info', title: "VPS files aren't streamed", message: 'Copy it to a local folder to open it.' });
       return;
     }
     setPreview(entry);
@@ -246,10 +255,13 @@ export function ExplorerPage() {
     if (res.errors?.length) {
       const [first, ...rest] = res.errors;
       // A partial delete's message already says what happened to it
-      const text = first.partial
-        ? `${first.path.split('/').pop()}: ${first.error}${rest.length ? ` (${rest.length} more item(s) had errors)` : ''}`
-        : `${verb} failed for ${res.errors.length} item(s): ${first.error}`;
-      setNotice({ kind: 'error', text });
+      notify(first.partial
+        ? {
+            type: 'warning',
+            title: `Partly deleted: ${first.path.split('/').pop()}`,
+            message: `${first.error}${rest.length ? ` (${rest.length} more item(s) had errors)` : ''}`,
+          }
+        : { type: 'error', title: `${verb} failed for ${res.errors.length} item(s)`, message: first.error, duration: 7000 });
     }
     return !res.errors?.length;
   };
@@ -260,7 +272,7 @@ export function ExplorerPage() {
     try {
       await renameMut.mutateAsync({ path: entry.path, name });
     } catch (e) {
-      setNotice({ kind: 'error', text: (e as Error).message });
+      notify({ type: 'error', title: 'Rename failed', message: (e as Error).message, duration: 7000 });
     }
   };
 
@@ -268,20 +280,21 @@ export function ExplorerPage() {
     if (!confirmDelete || deleting) return;
     const { entries, permanent } = confirmDelete;
     setConfirmDelete(null);
-    setNotice(null);
+    setDeletingLabel(permanent
+      ? `Deleting ${entries.length} item(s)…`
+      : `Moving ${entries.length} item(s) to the trash…`);
     try {
       const res = await deleteMut.mutateAsync({ paths: entries.map(e => e.path), permanent });
       if (reportErrors(res, 'Delete')) {
-        setNotice({
-          kind: 'info',
-          text: !permanent && !res.permanent
-            ? `Moved ${entries.length} item(s) to the trash folder on this disk.`
-            : `Deleted ${entries.length} item(s).`,
-        });
+        notify(!permanent && !res.permanent
+          ? { type: 'success', title: 'Moved to trash', message: `${entries.length} item(s), in the trash folder on this disk` }
+          : { type: 'success', title: 'Deleted', message: `${entries.length} item(s)` });
       }
       setSelected(new Set());
     } catch (e) {
-      setNotice({ kind: 'error', text: (e as Error).message });
+      notify({ type: 'error', title: 'Delete failed', message: (e as Error).message, duration: 7000 });
+    } finally {
+      setDeletingLabel(null);
     }
   };
 
@@ -293,14 +306,15 @@ export function ExplorerPage() {
       // Pasting from the VPS hands off to the SFTP downloader: nothing has
       // arrived yet, so say so instead of letting the empty folder look broken.
       if (ok && res.download) {
-        setNotice({
-          kind: 'info',
-          text: `Downloading ${res.results.length} item(s) from the VPS — follow the progress on the downloads page.`,
+        notify({
+          type: 'info',
+          title: 'Download Started',
+          message: `${res.results.length} item(s) from the VPS - progress is on the downloads page`,
         });
       }
       if (clipboard.move) setClipboard(null);
     } catch (e) {
-      setNotice({ kind: 'error', text: (e as Error).message });
+      notify({ type: 'error', title: clipboard.move ? 'Move failed' : 'Copy failed', message: (e as Error).message, duration: 7000 });
     }
   };
 
@@ -316,7 +330,7 @@ export function ExplorerPage() {
         return;
       } catch (e) {
         if (!(e as Error).message.includes('already exists')) {
-          setNotice({ kind: 'error', text: (e as Error).message });
+          notify({ type: 'error', title: "Couldn't create the folder", message: (e as Error).message, duration: 7000 });
           return;
         }
       }
@@ -328,12 +342,12 @@ export function ExplorerPage() {
     try {
       const res = await uploadMut.mutateAsync({ dest: currentPath, files });
       if (res.errors?.length) {
-        setNotice({ kind: 'error', text: `${res.errors.length} upload(s) failed: ${res.errors[0].error}` });
+        notify({ type: 'error', title: `${res.errors.length} upload(s) failed`, message: res.errors[0].error, duration: 7000 });
       } else {
-        setNotice({ kind: 'info', text: `Uploaded ${files.length} file(s).` });
+        notify({ type: 'success', title: 'Uploaded', message: `${files.length} file(s)` });
       }
     } catch (e) {
-      setNotice({ kind: 'error', text: (e as Error).message });
+      notify({ type: 'error', title: 'Upload failed', message: (e as Error).message, duration: 7000 });
     }
   };
 
@@ -468,6 +482,7 @@ export function ExplorerPage() {
   const trashPath = listing.data?.trash ?? null;
   const loading = searchQuery ? search.isLoading : (listing.isLoading && !listing.data);
   const listError = (searchQuery ? search.error : listing.error) as Error | null;
+  useErrorToast(listError, "Couldn't load this folder");
 
   return (
     // Fixed to the viewport below the header, so the page itself never
@@ -553,35 +568,6 @@ export function ExplorerPage() {
             }}
           />
 
-          {deleting && (
-            <div className="flex items-center gap-2 rounded-xl p-3 mb-3 text-sm bg-slate-700/40 border border-slate-600/50 text-slate-300">
-              <Loader2 className="w-4 h-4 animate-spin shrink-0" />
-              <span>
-                {deleteMut.variables?.permanent ? 'Deleting' : 'Moving'} {deleteMut.variables?.paths.length ?? 0} item(s)
-                {deleteMut.variables?.permanent ? '…' : ' to the trash…'}
-              </span>
-            </div>
-          )}
-
-          {notice && (
-            <div className={`flex items-start gap-2 rounded-xl p-3 mb-3 text-sm ${
-              notice.kind === 'error'
-                ? 'bg-red-500/15 border border-red-500/40 text-red-300'
-                : 'bg-cyan-500/10 border border-cyan-500/30 text-cyan-300'
-            }`}>
-              <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
-              <span className="flex-1">{notice.text}</span>
-              <button onClick={() => setNotice(null)} className="text-current opacity-70 hover:opacity-100">
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-          )}
-
-          {listError && (
-            <div className="bg-red-500/15 border border-red-500/40 rounded-xl p-3 mb-3 text-sm text-red-300">
-              {listError.message}
-            </div>
-          )}
 
           {searchQuery && (
             <p className="text-xs text-slate-500 mb-2">
@@ -606,7 +592,8 @@ export function ExplorerPage() {
                   {searchQuery || filter
                     ? <Search className="w-12 h-12 mx-auto mb-4 opacity-40" />
                     : <FolderOpen className="w-12 h-12 mx-auto mb-4 opacity-40" />}
-                  <p>{searchQuery || filter ? 'Nothing matches' : 'This folder is empty'}</p>
+                  {/* A failed load isn't an empty folder; the toast carries the reason */}
+                  <p>{listError ? "Couldn't load this folder" : searchQuery || filter ? 'Nothing matches' : 'This folder is empty'}</p>
                 </div>
               </div>
             ) : (
@@ -645,7 +632,13 @@ export function ExplorerPage() {
                   barShown ? 'pointer-events-auto opacity-100 translate-y-0 scale-100' : 'opacity-0 translate-y-4 scale-95'
                 }`}
               >
-                {barEntries.length > 0 && (
+                {barDeleting && (
+                  <span className="flex items-center gap-2 text-sm text-slate-300" role="status">
+                    <Loader2 className="w-4 h-4 animate-spin shrink-0 text-cyan-400" />
+                    {barDeleting}
+                  </span>
+                )}
+                {!barDeleting && barEntries.length > 0 && (
                   <>
                     <span className="text-sm text-slate-300">
                       {barEntries.length} selected
@@ -677,6 +670,19 @@ export function ExplorerPage() {
                         </button>
                       </>
                     )}
+                    {/* Permanent delete - and the only delete for a VPS selection,
+                        which has no trash (the same rule as the context menu) */}
+                    {(writable || barRemote) && (
+                      <button
+                        onClick={() => setConfirmDelete({ entries: barEntries, permanent: true })}
+                        disabled={deleting}
+                        title={barRemote ? 'Delete on the VPS (permanent)' : 'Delete permanently'}
+                        className="flex items-center gap-1.5 text-xs px-2 py-1 rounded-lg bg-red-600/80 text-white hover:bg-red-500 disabled:opacity-50 disabled:hover:bg-red-600/80 transition-colors"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        {barRemote ? 'Delete on VPS' : 'Delete'}
+                      </button>
+                    )}
                     <button
                       onClick={() => setSelected(new Set())}
                       className="text-xs text-slate-500 hover:text-white transition-colors"
@@ -686,7 +692,7 @@ export function ExplorerPage() {
                   </>
                 )}
                 {barClipboard && (
-                  <div className={`flex items-center gap-2 ${barEntries.length > 0 ? 'border-slate-700 max-sm:basis-full max-sm:justify-center max-sm:pt-2 max-sm:border-t sm:pl-2 sm:border-l' : ''}`}>
+                  <div className={`flex items-center gap-2 ${barDeleting || barEntries.length > 0 ? 'border-slate-700 max-sm:basis-full max-sm:justify-center max-sm:pt-2 max-sm:border-t sm:pl-2 sm:border-l' : ''}`}>
                     <span className="text-xs text-slate-500">
                       {barClipboard.paths.length} item(s) ready to {barClipboard.move ? 'move' : 'copy'}
                     </span>

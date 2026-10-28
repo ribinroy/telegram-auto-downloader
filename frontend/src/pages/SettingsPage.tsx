@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Loader2, AlertCircle, CheckCircle, Key, Globe, Cookie, Wrench, Server, Send, TerminalSquare, Users, Wand2 } from 'lucide-react';
+import { Loader2, CheckCircle, Key, Globe, Cookie, Wrench, Server, Send, TerminalSquare, Users, Wand2 } from 'lucide-react';
 import type { SyncThumbnailsResult } from '../api';
 import {
   useCookies, useSaveCookies, useSyncThumbnails, useYtdlpVersion, useUpgradeYtdlp,
@@ -19,6 +19,7 @@ import { RenameRulesSettings } from '../components/RenameRulesSettings';
 import { SessionsSettings } from '../components/SessionsSettings';
 import { clearToken } from '../api';
 import { formatBytes } from '../utils/format';
+import { useErrorToast, useSuccessToast } from '../lib/notify';
 
 type TabType = 'password' | 'sources' | 'renaming' | 'cookies' | 'jobs' | 'vps' | 'telegram' | 'queries' | 'users';
 const TAB_IDS: TabType[] = ['password', 'sources', 'renaming', 'cookies', 'telegram', 'queries', 'users', 'vps', 'jobs'];
@@ -54,24 +55,33 @@ export function SettingsPage() {
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [passwordError, setPasswordError] = useState<string | null>(null);
+  useErrorToast(passwordError, "Couldn't change the password");
   const [passwordSuccess, setPasswordSuccess] = useState(false);
+  useSuccessToast(passwordSuccess, 'Password updated');
   const passwordLoading = passwordMut.isPending;
 
   // Cookies state (editable; seeded from the query)
   const [cookiesContent, setCookiesContent] = useState('');
   const [cookiesError, setCookiesError] = useState<string | null>(null);
+  useErrorToast(cookiesError, "Couldn't save the cookies");
   const [cookiesSuccess, setCookiesSuccess] = useState(false);
+  useSuccessToast(cookiesSuccess, 'Cookies saved');
   const cookiesLoading = cookiesQuery.isLoading;
   const cookiesSaving = saveCookiesMut.isPending;
 
   // Jobs state
   const [syncResult, setSyncResult] = useState<SyncThumbnailsResult | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
+  useErrorToast(syncError, 'Thumbnail sync failed');
   const syncRunning = syncMut.isPending;
 
   // yt-dlp upgrade state
   const [ytdlpResult, setYtdlpResult] = useState<{ old_version?: string; new_version?: string; upgraded?: boolean } | null>(null);
+  useSuccessToast(ytdlpResult && (ytdlpResult.upgraded
+    ? `${ytdlpResult.old_version} → ${ytdlpResult.new_version}`
+    : `Already up to date (${ytdlpResult.new_version})`), ytdlpResult?.upgraded ? 'yt-dlp upgraded' : 'yt-dlp');
   const [ytdlpError, setYtdlpError] = useState<string | null>(null);
+  useErrorToast(ytdlpError, 'yt-dlp upgrade failed');
   const ytdlpUpgrading = upgradeMut.isPending;
   const ytdlpVersion = ytdlpResult?.new_version ?? ytdlpQuery.data?.version ?? null;
 
@@ -219,20 +229,6 @@ export function SettingsPage() {
           )}
         {activeTab === 'password' && (
           <>
-            {passwordSuccess && (
-              <div className="flex items-center gap-2 bg-green-500/20 border border-green-500/50 rounded-lg p-3 mb-4 text-green-400 text-sm">
-                <CheckCircle className="w-4 h-4 shrink-0" />
-                <span>Password updated successfully</span>
-              </div>
-            )}
-
-            {passwordError && (
-              <div className="flex items-center gap-2 bg-red-500/20 border border-red-500/50 rounded-lg p-3 mb-4 text-red-400 text-sm">
-                <AlertCircle className="w-4 h-4 shrink-0" />
-                <span>{passwordError}</span>
-              </div>
-            )}
-
             <form onSubmit={handlePasswordSubmit} className="space-y-3">
               <div>
                 <label className="block text-sm text-slate-400 mb-1">Current Password</label>
@@ -293,20 +289,6 @@ export function SettingsPage() {
 
         {activeTab === 'cookies' && (
           <>
-            {cookiesSuccess && (
-              <div className="flex items-center gap-2 bg-green-500/20 border border-green-500/50 rounded-lg p-3 mb-4 text-green-400 text-sm">
-                <CheckCircle className="w-4 h-4 shrink-0" />
-                <span>Cookies saved successfully</span>
-              </div>
-            )}
-
-            {cookiesError && (
-              <div className="flex items-center gap-2 bg-red-500/20 border border-red-500/50 rounded-lg p-3 mb-4 text-red-400 text-sm">
-                <AlertCircle className="w-4 h-4 shrink-0" />
-                <span>{cookiesError}</span>
-              </div>
-            )}
-
             <div className="text-sm text-slate-400 mb-4 space-y-2">
               <p>
                 Paste your browser cookies here for sites with Cloudflare protection.
@@ -389,25 +371,6 @@ export function SettingsPage() {
                 )}
               </button>
 
-              {ytdlpError && (
-                <div className="flex items-center gap-2 bg-red-500/20 border border-red-500/50 rounded-lg p-3 mt-3 text-red-400 text-sm">
-                  <AlertCircle className="w-4 h-4 shrink-0" />
-                  <span>{ytdlpError}</span>
-                </div>
-              )}
-
-              {ytdlpResult && (
-                <div className={`flex items-center gap-2 ${ytdlpResult.upgraded ? 'bg-green-500/20 border-green-500/50 text-green-400' : 'bg-slate-600/30 border-slate-500/50 text-slate-400'} border rounded-lg p-3 mt-3 text-sm`}>
-                  <CheckCircle className="w-4 h-4 shrink-0" />
-                  <span>
-                    {ytdlpResult.upgraded
-                      ? `Upgraded: ${ytdlpResult.old_version} → ${ytdlpResult.new_version}`
-                      : `Already up to date (${ytdlpResult.new_version})`
-                    }
-                  </span>
-                </div>
-              )}
-
               <JobSchedule
                 jobId="ytdlp_upgrade"
                 schedule={schedulesQuery.data?.schedules.ytdlp_upgrade}
@@ -440,13 +403,6 @@ export function SettingsPage() {
                   'Run Sync'
                 )}
               </button>
-
-              {syncError && (
-                <div className="flex items-center gap-2 bg-red-500/20 border border-red-500/50 rounded-lg p-3 mt-3 text-red-400 text-sm">
-                  <AlertCircle className="w-4 h-4 shrink-0" />
-                  <span>{syncError}</span>
-                </div>
-              )}
 
               {syncResult && (
                 <div className="mt-3 bg-slate-800/50 rounded-lg p-3 space-y-1.5">

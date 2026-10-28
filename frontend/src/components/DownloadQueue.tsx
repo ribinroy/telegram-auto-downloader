@@ -18,6 +18,7 @@ import {
   useStopAllDownloads, useResumeAllDownloads,
 } from '../hooks/useQueue';
 import { formatBytes, formatSpeed } from '../utils/format';
+import { notify } from '../lib/notify';
 import type { Download, QueueSource, QueueState } from '../types';
 
 const SOURCE_LABEL: Record<QueueSource, string> = {
@@ -189,7 +190,6 @@ function QueueModal({ data, showSecured, onStop, onClose }: {
   const resumeAll = useResumeAllDownloads();
   const [perSourceOpen, setPerSourceOpen] = useState(false);
   const [confirmStop, setConfirmStop] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
 
   const sensors = useSensors(
     // A few pixels of travel before it counts as a drag, so a tap on the
@@ -230,12 +230,11 @@ function QueueModal({ data, showSecured, onStop, onClose }: {
     const from = ids.indexOf(String(dragged.id));
     const to = ids.indexOf(String(over.id));
     if (from < 0 || to < 0) return;
-    setNotice(null);
     reorder.mutate(arrayMove(ids, from, to), {
       onSuccess: (res) => {
-        if (res.errors.length) setNotice(`Couldn't send ${res.errors[0].file} back to wait: ${res.errors[0].error}`);
+        if (res.errors.length) notify({ type: 'error', title: `Couldn't send ${res.errors[0].file} back to wait`, message: res.errors[0].error });
       },
-      onError: (e) => setNotice((e as Error).message),
+      onError: (e) => notify({ type: 'error', title: 'Reorder failed', message: (e as Error).message }),
     });
   };
 
@@ -244,21 +243,22 @@ function QueueModal({ data, showSecured, onStop, onClose }: {
 
   const runStopAll = () => {
     setConfirmStop(false);
-    setNotice(null);
     stopAll.mutate(undefined, {
-      onSuccess: (res) => setNotice(res.errors.length
-        ? `Stopped ${res.stopped}; ${res.errors.length} didn't stop: ${res.errors[0].error}`
-        : `Stopped ${res.stopped} download${res.stopped === 1 ? '' : 's'}.`),
-      onError: (e) => setNotice((e as Error).message),
+      onSuccess: (res) => notify(res.errors.length
+        ? { type: 'warning', title: `Stopped ${res.stopped}; ${res.errors.length} didn't stop`, message: res.errors[0].error }
+        : { type: 'success', title: `Stopped ${res.stopped} download${res.stopped === 1 ? '' : 's'}` }),
+      onError: (e) => notify({ type: 'error', title: 'Stop all failed', message: (e as Error).message }),
     });
   };
 
   const runResumeAll = () => {
-    setNotice(null);
     resumeAll.mutate(undefined, {
-      onSuccess: (res) => setNotice(
-        `Queued ${res.queued} download${res.queued === 1 ? '' : 's'} - up to ${res.limits.global} run at once.`),
-      onError: (e) => setNotice((e as Error).message),
+      onSuccess: (res) => notify({
+        type: 'success',
+        title: `Queued ${res.queued} download${res.queued === 1 ? '' : 's'}`,
+        message: `Up to ${res.limits.global} run at once.`,
+      }),
+      onError: (e) => notify({ type: 'error', title: 'Resume all failed', message: (e as Error).message }),
     });
   };
 
@@ -363,7 +363,6 @@ function QueueModal({ data, showSecured, onStop, onClose }: {
             </div>
           )}
 
-          {notice && <p className="text-xs text-slate-300">{notice}</p>}
         </div>
 
         {/* Lists */}

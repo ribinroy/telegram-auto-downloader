@@ -15,6 +15,7 @@ import { formatBytes, formatSpeed, formatTime } from '../utils/format';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { ROUTES } from '../routes';
 import type { Download } from '../types';
+import { useErrorToast } from '../lib/notify';
 
 function statusIcon(status?: string) {
   switch (status) {
@@ -193,6 +194,7 @@ export function VpsPage() {
   const groups = useMemo(() => filesQuery.data ?? [], [filesQuery.data]);
   const loading = filesQuery.isLoading;
   const error = actionError || (filesQuery.isError ? 'Failed to load VPS files' : null);
+  useErrorToast(error, 'VPS files');
   const torrentConfig = useTorrentConfig().data ?? null;
   const downloadFile = useDownloadVpsFile();
   const deleteRemote = useDeleteVpsRemote();
@@ -367,12 +369,6 @@ export function VpsPage() {
           </button>
         )}
       </div>
-
-      {error && (
-        <div className="bg-red-500/20 border border-red-500/50 rounded-xl p-4 mb-6 text-red-400">
-          {error}
-        </div>
-      )}
 
       {/* Per-folder listing errors */}
       {folderErrors.map(fe => (

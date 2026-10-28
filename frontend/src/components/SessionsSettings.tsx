@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Loader2, LogOut, Monitor, ShieldOff, Trash2 } from 'lucide-react';
 import { fetchSessions, revokeSession, logoutEverywhere, type AuthSession } from '../api';
+import { useErrorToast } from '../lib/notify';
 
 /** Turn a User-Agent string into something a person can recognise. */
 function describeDevice(userAgent: string | null): string {
@@ -36,6 +37,7 @@ function formatWhen(iso: string | null): string {
 export function SessionsSettings({ onSignedOut }: { onSignedOut: () => void }) {
   const [sessions, setSessions] = useState<AuthSession[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  useErrorToast(error, 'Sessions');
   const [busy, setBusy] = useState<number | 'all' | null>(null);
 
   const load = async () => {
@@ -95,12 +97,6 @@ export function SessionsSettings({ onSignedOut }: { onSignedOut: () => void }) {
           Sign out everywhere
         </button>
       </div>
-
-      {error && (
-        <div className="text-sm text-red-400 bg-red-500/10 border border-red-500/40 rounded-lg p-3 mb-3">
-          {error}
-        </div>
-      )}
 
       {sessions === null ? (
         <div className="flex items-center gap-2 text-slate-400 text-sm py-3">

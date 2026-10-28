@@ -3,7 +3,8 @@ import { Outlet, useNavigate, useLocation, useOutletContext } from 'react-router
 import { Wifi, WifiOff, HardDrive, Clock, Zap, LogOut, Settings, BarChart3, RefreshCw, FolderOpen } from 'lucide-react';
 import { formatBytes, formatSpeed } from '../utils/format';
 import { type SortBy, type SortOrder } from '../api';
-import { ToastContainer, useToast } from './Toast';
+import { ToastContainer } from './Toast';
+import { useToast } from '../lib/notify';
 import { ROUTES } from '../routes';
 import type { Download as DownloadType, Stats } from '../types';
 import {

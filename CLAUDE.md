@@ -577,8 +577,11 @@ a pulled USB drive disappears from the sidebar.
   plain `rmtree` stopped at the first folder Plex or a torrent client owns and left half a
   folder behind with one opaque error, so instead everything removable goes and the
   result comes back `partial` with the count left and the blocking folders named
-  (parents' ENOTEMPTY is a consequence and isn't reported). The page shows a
-  "Deleting…" bar and disables the delete actions while the request runs. The trash path is reported by `/api/files/list` (only once it
+  (parents' ENOTEMPTY is a consequence and isn't reported). While the request runs
+  the floating selection bar shows "Deleting…" / "Moving to the trash…" in place of
+  its buttons, and the delete actions are disabled. The bar carries both deletes -
+  Trash and a solid red Delete (permanent; "Delete on VPS" for a VPS selection,
+  which has no trash). The trash path is reported by `/api/files/list` (only once it
   exists) and linked in the sidebar.
 - **Bounded work**: recursive search and folder sizes both stop on a wall-clock
   deadline as well as a result cap, because "search from the root of a 20 TB array"
@@ -765,6 +768,52 @@ calls `logsafe.install(LOG_FILE)`.
 - **JWT auth**: All API routes use `@token_required` (except `/metrics`); media routes use `@media_token_required`, which also accepts a `?token=` media token
 - **CORS**: closed by default to `CORS_ORIGINS` (Vite dev ports); Socket.IO uses a callable origin check so same-origin handshakes always pass (`_socketio_origin_allowed`)
 - **Frontend serves from Flask**: Built `frontend/dist/` served as static files
+
+## UI Patterns
+
+- **Transient status and contextual actions float; they never take a row.**
+  Anything that comes and goes - a selection's actions, a clipboard, an
+  operation in progress ("Deleting…"), a queue's summary - goes in a floating
+  bar or button over the content, not a new row that shoves the list down and
+  leaves an empty band when it disappears. If a floating surface already exists
+  on the page, put the new state *inside* it rather than adding a second one.
+  Examples: the file explorer's selection bar (selection, clipboard and delete
+  progress all share one pill) and the downloads page's queue button (the
+  running/total count, with the details in a modal).
+  - **The content clears it instead of hiding under it.** The scrolling list
+    pads its end by the floating element's measured height (a ResizeObserver
+    into a CSS variable, since it can wrap to two lines on a phone), so the
+    last row can always be scrolled above it.
+  - **It animates both ways** (opacity + a short slide, ~200ms, off under
+    `prefers-reduced-motion`): keep it mounted and `inert` while hidden, and
+    let it show a snapshot of its last content while fading out, so it doesn't
+    go blank mid-fade. Clear the state that drives it in the same render as
+    whatever ends it, or it flashes its previous content for a frame.
+  - **Notifications float too, and there is one kind.** The result of an
+    action is the same toast as "Download Complete" (`components/Toast.tsx`,
+    bottom-right), never a banner row and never a new notification component:
+    call `notify({type, title, message?})` from `lib/notify.ts` - a
+    module-level store, so a page, a mutation callback or a modal in a portal
+    can raise one without a callback threaded down to it. Follow the toast's
+    shape: a short title ("Moved to trash", "Delete failed") and the detail as
+    `message` (the count, the filename, the error), not one long sentence as
+    the title. Layout renders the single `ToastContainer`, stacked above modals
+    (`z-[130]`) so a modal's own action can report back.
+  - **Errors and failed loads are toasts too** ("Failed to fetch" included).
+    A component holding an error/success *state* keeps it and calls
+    `useErrorToast(error, 'Title')` / `useSuccessToast(success, 'Title')`
+    (`lib/notify.ts`) instead of rendering a row: they toast when the value
+    turns truthy or changes message, not on every render or every failed poll
+    repeating the same error, and again after a reset. Where a failed load
+    leaves nothing to show, the content area says so itself ("Couldn't load
+    this folder") - that is the content's own empty state, not an extra row.
+    Left inline on purpose: the login form (outside the app shell), the
+    add-URL dialog's URL validation, the rename-rule editor's regex error, the
+    folder picker's per-folder errors and the thumbnail-sync stats report.
+  - Persistent page chrome (search, toolbars, column headers) stays put; only
+    what is transient floats. A message that belongs to one form field (a
+    validation error, a "Test connection" result next to its button) stays next
+    to that field - it isn't a notification.
 
 ## Tests
 

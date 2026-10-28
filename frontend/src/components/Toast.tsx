@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState } from 'react';
 import { CheckCircle, XCircle, AlertCircle, X, Download } from 'lucide-react';
 
 export type ToastType = 'success' | 'error' | 'warning' | 'info';
@@ -61,7 +61,7 @@ function Toast({ toast, onDismiss }: ToastProps) {
       aria-live="polite"
       className={`flex items-start gap-3 p-4 rounded-xl border-2 shadow-xl transition-all duration-300 ${
         bgColors[toast.type]
-      } ${isExiting ? 'opacity-0 translate-x-full' : 'opacity-100 translate-x-0'}`}
+      } ${isExiting ? 'opacity-0 translate-x-full' : 'opacity-100 translate-x-0 toast-enter'}`}
     >
       {icons[toast.type]}
       <div className="flex-1 min-w-0">
@@ -86,9 +86,11 @@ interface ToastContainerProps {
   onDismiss: (id: string) => void;
 }
 
+// Stacked above modals (z-[130]), so a modal's own action can report its
+// result - the queue modal's stop/resume all, for one.
 export function ToastContainer({ toasts, onDismiss }: ToastContainerProps) {
   return (
-    <div className="fixed bottom-6 right-6 z-50 flex flex-col gap-2 max-w-sm w-full pointer-events-none">
+    <div className="fixed bottom-6 right-6 z-[130] flex flex-col gap-2 max-w-sm w-full pointer-events-none">
       {toasts.map((toast) => (
         <div key={toast.id} className="pointer-events-auto">
           <Toast toast={toast} onDismiss={onDismiss} />
@@ -98,18 +100,3 @@ export function ToastContainer({ toasts, onDismiss }: ToastContainerProps) {
   );
 }
 
-// Hook for managing toasts
-export function useToast() {
-  const [toasts, setToasts] = useState<ToastData[]>([]);
-
-  const addToast = useCallback((toast: Omit<ToastData, 'id'>) => {
-    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
-    setToasts((prev) => [...prev, { ...toast, id }]);
-  }, []);
-
-  const dismissToast = useCallback((id: string) => {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
-  }, []);
-
-  return { toasts, addToast, dismissToast };
-}
