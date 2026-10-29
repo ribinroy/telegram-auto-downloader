@@ -87,87 +87,50 @@ A self-hosted media downloader with Telegram integration and a modern web dashbo
 
 ## Quick Start
 
-### 1. Clone and setup
-
 ```bash
 git clone https://github.com/yourusername/downlee.git
 cd downlee
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
+make up
 ```
 
-### 2. Setup PostgreSQL
+That's it. `make up` checks the system tools, installs the Python dependencies (and yt-dlp) into a virtualenv, writes a `.env` with a generated app secret and database password, creates the PostgreSQL user and database (it asks for your sudo password once), builds the frontend, and starts DownLee.
+
+Open **http://localhost:4444** and log in with `admin` / `admin` — you'll be asked to change it. Then add your Telegram API credentials and channels in **Settings → Telegram**.
+
+`make up` is safe to run again: each step is skipped when it's already done, and an existing `.env` is never overwritten. To choose settings up front, pass them in:
 
 ```bash
+make up DOWNLOAD_DIR=/mnt/media WEB_PORT=8080
+```
+
+### Running it as a service
+
+```bash
+make install env db service
+```
+
+installs a systemd unit for this checkout and your user (named `downlee`; pick another with `SERVICE=name`), enables it on boot and starts it. After that:
+
+| Command | |
+|---|---|
+| `make restart` | Restart (without the Telegram startup greeting) |
+| `make logs` | Follow the log |
+| `make update` | `git pull`, reinstall whatever changed, restart |
+| `make test` | Run the backend and frontend tests |
+| `make dev` | Backend + frontend dev server with hot reload |
+| `make help` | Every target |
+
+### Doing it by hand
+
+If you'd rather not use make, the steps it runs are:
+
+```bash
+python3 -m venv venv && venv/bin/pip install -r requirements.txt yt-dlp
+cp .env.example .env            # then set DATABASE_URL, DOWNLOAD_DIR, JWT_SECRET
 sudo -u postgres psql -c "CREATE USER downlee WITH PASSWORD 'your_password';"
 sudo -u postgres psql -c "CREATE DATABASE downlee OWNER downlee;"
-```
-
-### 3. Configure environment
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env` — the essentials:
-
-```env
-# Paths
-DOWNLOAD_DIR=/path/to/downloads
-
-# Server
-WEB_PORT=4444
-WEB_HOST=0.0.0.0
-
-# Database
-DATABASE_URL=postgresql://downlee:your_password@localhost:5432/downlee
-```
-
-Telegram API credentials and the monitored channels can be set from the web UI (**Settings → Telegram**) instead of `.env`. See [Configuration](#configuration) for everything else.
-
-### 4. Build frontend
-
-```bash
-cd frontend
-npm install
-npm run build
-cd ..
-```
-
-### 5. Run
-
-```bash
-python main.py
-```
-
-Access at **http://localhost:4444** (default login: `admin` / `admin` — you'll be asked to change it)
-
-## Systemd Service
-
-Create `/etc/systemd/system/downlee.service`:
-
-```ini
-[Unit]
-Description=DownLee Media Downloader
-After=network.target postgresql.service
-
-[Service]
-Type=simple
-User=your_user
-WorkingDirectory=/path/to/downlee
-Environment=PATH=/path/to/downlee/venv/bin
-ExecStart=/path/to/downlee/venv/bin/python main.py
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable downlee
-sudo systemctl start downlee
+cd frontend && npm ci && npm run build && cd ..
+venv/bin/python main.py
 ```
 
 ## Configuration
@@ -253,7 +216,7 @@ In **Settings → Jobs**, each maintenance job (thumbnail sync, yt-dlp upgrade) 
 DownLee greets every monitored chat when it starts (`Good Evening, reporting for duty 🫡`). While you're restarting repeatedly that gets noisy. To mute **just the next restart**:
 
 ```bash
-touch .skip-greeting && sudo systemctl restart downlee
+make restart          # or: touch .skip-greeting && sudo systemctl restart downlee
 ```
 
 The file is consumed at startup, so the restart after that greets normally — nothing to remember to undo. Running the app by hand, `python main.py --no-greeting` (or `-n`) does the same thing.
@@ -486,9 +449,8 @@ DownLee exposes metrics at `/metrics` for Prometheus scraping:
 ## Development
 
 ```bash
-./venv/bin/python -m pytest      # backend tests
-cd frontend && npm test          # frontend tests
-cd frontend && npm run dev       # dev server with hot reload
+make test    # backend + frontend tests
+make dev     # backend + Vite dev server with hot reload
 ```
 
 The test suite never touches a real deployment: it runs against a temporary SQLite database and download folder, and stubs out Telegram, the seedbox and both torrent clients.

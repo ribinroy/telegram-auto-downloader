@@ -627,6 +627,73 @@ def torrent_telegram_dirs(client, config=None):
     return TELEGRAM_TORRENT_SUBDIR, TELEGRAM_PROGRESS_SUBDIR
 
 
+def torrent_temp_dirs(client, row=None, config=None):
+    """Every directory `client` may be keeping an unfinished torrent's data in.
+
+    A torrent downloads into a temp dir and moves to its download dir only once
+    the whole torrent completes - so a file that is itself finished can still
+    sit in the temp dir. Which temp dir is not recorded anywhere reliable: the
+    session-wide one (configured, or whatever the client currently has), the
+    Telegram flow's per-torrent progress dir, or qBittorrent's own per-torrent
+    `temp_dir` from the list row. Every candidate is returned; the caller stats
+    them. Lookups that need the client are best-effort."""
+    cfg = _resolve(client, config)
+    dirs = [(row or {}).get("temp_dir"), cfg.get("incomplete_dir")]
+    try:
+        dirs.append(torrent_telegram_dirs(client, cfg)[1])
+    except Exception:
+        pass
+    if client == "transmission":
+        try:
+            session = transmission_rpc("session-get", config=cfg)
+            if session.get("incomplete-dir-enabled"):
+                dirs.append(session.get("incomplete-dir"))
+        except Exception:
+            pass
+    out = []
+    for d in dirs:
+        d = (d or "").rstrip("/")
+        if d and d not in out:
+            out.append(d)
+    return out
+
+
+def torrent_file_candidates(download_dir, rel_path, temp_dirs):
+    """Where a torrent's file can be on the VPS: its final place first, then
+    each temp dir (the same relative path, since the client moves it as is)."""
+    final = posixpath.join((download_dir or "").rstrip("/"), rel_path)
+    return [final] + [posixpath.join(d, rel_path) for d in temp_dirs if d != (download_dir or "").rstrip("/")]
+
+
+def locate_torrent_file(final_path, sftp):
+    """Find a torrent file that is not (yet, or any more) at `final_path`.
+
+    A file pulled from a torrent before the torrent finished is recorded by its
+    final path, but sits in the client's temp dir until the torrent completes.
+    This finds the torrent whose download dir holds `final_path`, and returns
+    the first temp-dir copy that exists - or None. Used on the VPS handler's
+    "no such file", so a resume works on either side of the client's move."""
+    for client in CLIENTS:
+        if not load_torrent_config(client):
+            continue
+        try:
+            rows = torrent_list(client)
+        except Exception:
+            continue
+        for row in rows:
+            base = (row.get("download_dir") or "").rstrip("/")
+            if not base or not final_path.startswith(base + "/"):
+                continue
+            rel = final_path[len(base) + 1:]
+            for cand in torrent_file_candidates(base, rel, torrent_temp_dirs(client, row))[1:]:
+                try:
+                    sftp.stat(cand)
+                    return cand
+                except IOError:
+                    continue
+    return None
+
+
 # Back-compat wrapper.
 def transmission_telegram_dirs(config=None):
     return torrent_telegram_dirs("transmission", config=config)

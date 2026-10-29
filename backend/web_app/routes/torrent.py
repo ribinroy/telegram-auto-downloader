@@ -18,6 +18,7 @@ from backend.web_app.torrent import (
     apply_torrent_session, normalize_transmission_url,
     torrent_test, torrent_add_magnet, torrent_add_file, torrent_list, torrent_control,
     torrent_details, torrent_set_file_priority, torrent_rename,
+    torrent_temp_dirs, torrent_file_candidates,
     stop_on_complete_enabled,
 )
 from backend.web_app.vps import load_vps_credentials, annotate_vps_folders, open_vps_sftp
@@ -38,6 +39,7 @@ class TorrentRoutesMixin:
                 "incomplete_dir": sub.get("incomplete_dir", ""),
                 "local_dir": sub.get("local_dir", ""),
                 "stop_on_complete": stop_on_complete_enabled(sub),
+                "hidden": bool(sub.get("hidden", False)),
             }
 
         @self.app.route("/api/settings/torrent", methods=["GET"])
@@ -90,6 +92,8 @@ class TorrentRoutesMixin:
                 # toggle over rather than silently resetting it to the default.
                 "stop_on_complete": bool(data["stop_on_complete"]) if "stop_on_complete" in data
                                     else stop_on_complete_enabled(prev),
+                "hidden": bool(data["hidden"]) if "hidden" in data
+                          else bool(prev.get("hidden", False)),
             }
             # If this is the only configured client and no Telegram default is
             # set yet, make it the default so Telegram magnets work out of the box.
@@ -130,6 +134,25 @@ class TorrentRoutesMixin:
             if not sub.get("url"):
                 return jsonify({"error": f"{client} is not configured"}), 400
             sub["stop_on_complete"] = bool(data.get("enabled"))
+            settings[client] = sub
+            write_torrent_settings(settings)
+            return jsonify({"status": "saved", **_client_summary(settings, client)})
+
+        @self.app.route("/api/settings/torrent/hidden", methods=["POST"])
+        @token_required
+        def set_torrent_hidden():
+            """Hide one client from the default view: {client, hidden}. A hidden
+            client's VPS tab and add-dialog option only appear while secured
+            items are shown (double-click the Live badge), like secured sources."""
+            data = request.json or {}
+            client = (data.get("client") or "").strip()
+            if client not in CLIENTS:
+                return jsonify({"error": "Unknown torrent client"}), 400
+            settings = read_torrent_settings()
+            sub = settings.get(client) or {}
+            if not sub.get("url"):
+                return jsonify({"error": f"{client} is not configured"}), 400
+            sub["hidden"] = bool(data.get("hidden"))
             settings[client] = sub
             write_torrent_settings(settings)
             return jsonify({"status": "saved", **_client_summary(settings, client)})
@@ -309,7 +332,128 @@ class TorrentRoutesMixin:
                 return jsonify({"error": str(e)}), 502
             if details is None:
                 return jsonify({"error": "That torrent is no longer in the client"}), 404
+            # Each file's own VPS->DownLee pull, if one was started for it.
+            # Exact path only: a basename fallback would light up every
+            # "sample.mkv" across unrelated torrents.
+            by_path = {}
+            for d in get_db().get_all_downloads():
+                if d.get("downloaded_from") == "vps" and d.get("url"):
+                    by_path.setdefault(d["url"], d)
+            dl_dir = details["torrent"].get("download_dir") or ""
+            for f in details["files"]:
+                dl = by_path.get(_file_remote_path(dl_dir, f["path"]))
+                f["downlee"] = {
+                    "id": dl["id"],
+                    "message_id": dl.get("message_id"),
+                    "status": dl.get("status"),
+                    "progress": dl.get("progress") or 0,
+                } if dl else None
             return jsonify(details)
+
+        def _file_remote_path(download_dir, path):
+            """Where one of a torrent's files sits on the VPS. Both clients
+            report file paths relative to the download dir (Transmission's
+            downloadDir, qBittorrent's save_path), torrent folder included."""
+            return posixpath.join((download_dir or "").rstrip("/"), path or "")
+
+        @self.app.route("/api/torrent/files/download", methods=["POST"])
+        @token_required
+        def torrent_file_download():
+            """Pull individual finished files of a torrent to DownLee - the
+            torrent itself need not be finished.
+            Body: {client, hash, indices: [int]}. Each file becomes its own VPS
+            download, placed where a whole-torrent pull would have put it
+            (<base>/<torrent folder>/<sub dirs>/<file>), so pulling the rest
+            later doesn't scatter one torrent across two layouts.
+
+            Until the whole torrent completes, a finished file still sits in the
+            client's temp dir, so each file is looked up over SFTP (final place,
+            then every temp dir). The record keeps the *final* path either way:
+            the client moves the file when the torrent completes, and the VPS
+            handler falls back to the temp dir on "no such file" (via
+            locate_torrent_file), so a resume works on both sides of the move.
+            An SFTP read already open survives the move (the client renames,
+            or copies and unlinks - an open handle keeps the old inode).
+            -> {started: [{index, id, message_id}], errors: [{index, error}]}"""
+            if not self.vps_downloader:
+                return jsonify({"error": "VPS downloader not available"}), 503
+            data = request.json or {}
+            client = (data.get("client") or "transmission").strip()
+            if client not in CLIENTS:
+                return jsonify({"error": "Unknown torrent client"}), 400
+            torrent_hash = (data.get("hash") or "").strip().lower()
+            indices = data.get("indices")
+            if not torrent_hash:
+                return jsonify({"error": "hash is required"}), 400
+            if (not isinstance(indices, list) or not indices
+                    or not all(isinstance(i, int) and not isinstance(i, bool) and i >= 0 for i in indices)):
+                return jsonify({"error": "indices must be a non-empty list of file numbers"}), 400
+            try:
+                details = torrent_details(client, torrent_hash)
+            except ValueError as e:
+                return jsonify({"error": str(e)}), 502
+            if details is None:
+                return jsonify({"error": "That torrent is no longer in the client"}), 404
+            t = details["torrent"]
+
+            from backend.config import DOWNLOAD_DIR
+            from backend.utils import resolve_spec, spec_folder
+            dl_dir = t.get("download_dir") or ""
+            local_dir = ((read_torrent_settings().get(client) or {}).get("local_dir") or "").strip()
+            temp_dirs = torrent_temp_dirs(client, t)
+            files = {f["index"]: f for f in details["files"]}
+            started, errors = [], []
+            try:
+                ssh, sftp = open_vps_sftp()
+            except Exception as e:
+                return jsonify({"error": f"Couldn't reach the VPS: {e}"}), 502
+
+            def on_vps(f):
+                for cand in torrent_file_candidates(dl_dir, f["path"], temp_dirs):
+                    try:
+                        sftp.stat(cand)
+                        return True
+                    except IOError:
+                        continue
+                return False
+
+            try:
+                indices = list(dict.fromkeys(indices))
+                resolved = {}
+                for index in indices:
+                    f = files.get(index)
+                    if f and f.get("path") and ".." not in f["path"].split("/") and not f["path"].startswith("/"):
+                        resolved[index] = f.get("wanted") and (f.get("percent_done") or 0) >= 100 and on_vps(f)
+            finally:
+                ssh.close()
+
+            for index in indices:
+                f = files.get(index)
+                if not f:
+                    errors.append({"index": index, "error": "No such file in this torrent"})
+                    continue
+                parts = (f.get("path") or "").split("/")
+                # The path comes from the torrent's metadata and is joined onto a
+                # local folder - refuse anything that could climb out of it
+                if not f.get("path") or f["path"].startswith("/") or any(p in ("", ".", "..") for p in parts):
+                    errors.append({"index": index, "error": "Unsafe file path"})
+                    continue
+                if not f.get("wanted") or (f.get("percent_done") or 0) < 100:
+                    errors.append({"index": index, "error": "This file isn't downloaded on the VPS"})
+                    continue
+                if not resolved.get(index):
+                    errors.append({"index": index, "error": "File not found on the VPS"})
+                    continue
+                remote = _file_remote_path(dl_dir, f["path"])
+                base = Path(local_dir) if local_dir else spec_folder(
+                    resolve_spec('vps', path=remote), DOWNLOAD_DIR / "VPS")
+                dest = base.joinpath(*parts[:-1])
+                result = self.vps_downloader.start_download(remote, f.get("size") or 0, dest=str(dest))
+                if result.get("error"):
+                    errors.append({"index": index, "error": result["error"]})
+                else:
+                    started.append({"index": index, "id": result.get("id"), "message_id": result.get("message_id")})
+            return jsonify({"started": started, "errors": errors}), 200 if started or not errors else 400
 
         @self.app.route("/api/torrent/rename", methods=["POST"])
         @token_required

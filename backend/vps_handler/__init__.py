@@ -226,7 +226,19 @@ class VpsDownloader:
 
             client, sftp = self._open_sftp()
             self.clients[message_id] = client
-            st = sftp.stat(remote_path)
+            # `src` is where the bytes are read from. A file pulled from a torrent
+            # that hasn't finished is recorded by its final path but still sits
+            # in the client's temp dir - so on "no such file", look there.
+            src = remote_path
+            try:
+                st = sftp.stat(remote_path)
+            except FileNotFoundError:
+                from backend.web_app.torrent import locate_torrent_file
+                src = locate_torrent_file(remote_path, sftp)
+                if not src:
+                    raise
+                st = sftp.stat(src)
+                strip_prefix = posixpath.dirname(src.rstrip("/"))
             is_dir = stat_module.S_ISDIR(st.st_mode)
 
             # The record's name already carries any rewrite from start_download;
@@ -240,9 +252,9 @@ class VpsDownloader:
             # Build the list of files to transfer
             files = []  # (remote_file, size)
             if is_dir:
-                self._walk(sftp, remote_path, files)
+                self._walk(sftp, src, files)
             else:
-                files.append((remote_path, st.st_size or 0))
+                files.append((src, st.st_size or 0))
             total_bytes = sum(s for _, s in files)
 
             # Resume: count bytes already present locally

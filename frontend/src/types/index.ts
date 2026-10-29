@@ -91,6 +91,10 @@ export interface Stats {
   total_size: number;
   pending_bytes: number;
   total_speed: number;
+  /** Bytes left across running + waiting downloads. */
+  remaining_bytes?: number;
+  /** Seconds until the whole queue finishes at the current speed; null when nothing is moving. */
+  eta_seconds?: number | null;
   downloaded_count: number;
   total_count: number;
   all_count: number;

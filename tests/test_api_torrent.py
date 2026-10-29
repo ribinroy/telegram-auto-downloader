@@ -106,6 +106,27 @@ def test_the_toggle_refuses_an_unconfigured_client(client, db, auth):
     assert res.status_code == 400
 
 
+# --- hidden ---------------------------------------------------------------
+
+def test_hidden_defaults_to_off_and_persists(client, db, configured):
+    body = client.get('/api/settings/torrent', headers=configured).get_json()
+    assert body['transmission']['hidden'] is False
+    res = client.post('/api/settings/torrent/hidden', headers=configured,
+                      json={'client': 'transmission', 'hidden': True})
+    assert res.status_code == 200
+    client.post('/api/settings/torrent', headers=configured,
+                json={'client': 'transmission', 'url': 'http://box:9091'})
+    body = client.get('/api/settings/torrent', headers=configured).get_json()
+    assert body['transmission']['hidden'] is True              # survives a full save
+    assert body['qbittorrent']['hidden'] is False
+
+
+def test_hidden_refuses_an_unconfigured_client(client, db, auth):
+    res = client.post('/api/settings/torrent/hidden', headers=auth,
+                      json={'client': 'transmission', 'hidden': True})
+    assert res.status_code == 400
+
+
 # --- actions --------------------------------------------------------------
 
 @pytest.fixture
@@ -219,3 +240,110 @@ def test_listing_annotates_each_torrent_with_its_downlee_transfer(
     by_hash = {t['hash']: t for t in body['torrents']}
     assert by_hash['h1']['downlee']['message_id'] == 'm-1'
     assert by_hash['h2']['downlee'] is None
+
+
+# --- per-file pull to DownLee ---------------------------------------------
+
+def _details(percent=100, status='completed', files=None):
+    return {
+        'torrent': {'hash': 'h1', 'name': 'Show', 'download_dir': '/dl/',
+                    'percent_done': percent, 'status': status},
+        'files': files if files is not None else [
+            {'index': 0, 'path': 'Show/S01/ep01.mkv', 'size': 10, 'percent_done': 100, 'wanted': True},
+            {'index': 1, 'path': 'Show/sample.mkv', 'size': 5, 'percent_done': 0, 'wanted': False},
+            {'index': 2, 'path': 'Show/../escape.mkv', 'size': 5, 'percent_done': 100, 'wanted': True},
+        ],
+        'priorities': [], 'rename_renames_folder': False, 'info': {},
+    }
+
+
+class FakeVps:
+    def __init__(self):
+        self.calls = []
+
+    def start_download(self, remote, size=0, dest=None):
+        self.calls.append((remote, size, dest))
+        return {'id': len(self.calls), 'message_id': f'm-{len(self.calls)}'}
+
+
+# Remote files that "exist" for the route's SFTP lookup
+sftp_tree = {'files': set()}
+
+
+class _StatOnlySftp:
+    def stat(self, path):
+        if path not in sftp_tree['files']:
+            raise IOError(2, 'No such file')
+
+
+class _Ssh:
+    def close(self):
+        pass
+
+
+@pytest.fixture
+def vps(app, monkeypatch):
+    app.vps_downloader = FakeVps()
+    sftp_tree['files'] = {'/dl/Show/S01/ep01.mkv', '/dl/Show/../escape.mkv'}
+    monkeypatch.setattr(troute, 'open_vps_sftp', lambda: (_Ssh(), _StatOnlySftp()))
+    # The Telegram progress dir would ask a live client for its default dir
+    monkeypatch.setattr('backend.web_app.torrent.torrent_telegram_dirs',
+                        lambda c, cfg=None: ('/dl/telegram/downloads', '/dl/telegram/progress'))
+    return app.vps_downloader
+
+
+def test_a_file_pull_keeps_the_torrent_tree_under_the_local_folder(
+        client, db, configured, vps, monkeypatch, tmp_path):
+    from backend.web_app.torrent import read_torrent_settings, write_torrent_settings
+    settings = read_torrent_settings()
+    settings['qbittorrent']['local_dir'] = str(tmp_path / 'tv')
+    write_torrent_settings(settings)
+    monkeypatch.setattr(troute, 'torrent_details', lambda c, h: _details())
+    res = client.post('/api/torrent/files/download', headers=configured,
+                      json={'client': 'qbittorrent', 'hash': 'h1', 'indices': [0]})
+    assert res.status_code == 200
+    assert vps.calls == [('/dl/Show/S01/ep01.mkv', 10, str(tmp_path / 'tv' / 'Show' / 'S01'))]
+    assert res.get_json()['started'] == [{'index': 0, 'id': 1, 'message_id': 'm-1'}]
+
+
+def test_skipped_unknown_and_escaping_files_are_refused(client, db, configured, vps, monkeypatch):
+    monkeypatch.setattr(troute, 'torrent_details', lambda c, h: _details())
+    res = client.post('/api/torrent/files/download', headers=configured,
+                      json={'client': 'qbittorrent', 'hash': 'h1', 'indices': [1, 2, 9]})
+    assert res.status_code == 400
+    assert [e['index'] for e in res.get_json()['errors']] == [1, 2, 9]
+    assert vps.calls == []
+
+
+def test_a_finished_file_of_an_unfinished_torrent_is_found_in_the_temp_dir(
+        client, db, configured, vps, monkeypatch):
+    # Not at /dl yet: still in qBittorrent's per-torrent temp dir
+    sftp_tree['files'] = {'/tmp-dl/Show/S01/ep01.mkv'}
+    details = _details(percent=60, status='downloading')
+    details['torrent']['temp_dir'] = '/tmp-dl'
+    monkeypatch.setattr(troute, 'torrent_details', lambda c, h: details)
+    res = client.post('/api/torrent/files/download', headers=configured,
+                      json={'client': 'qbittorrent', 'hash': 'h1', 'indices': [0]})
+    assert res.status_code == 200
+    # Recorded by its final path, so a resume after the client's move still works
+    assert vps.calls[0][0] == '/dl/Show/S01/ep01.mkv'
+
+
+def test_a_file_missing_from_the_vps_is_refused(client, db, configured, vps, monkeypatch):
+    sftp_tree['files'] = set()
+    monkeypatch.setattr(troute, 'torrent_details', lambda c, h: _details(percent=60, status='downloading'))
+    res = client.post('/api/torrent/files/download', headers=configured,
+                      json={'client': 'qbittorrent', 'hash': 'h1', 'indices': [0]})
+    assert res.status_code == 400
+    assert res.get_json()['errors'][0]['error'] == 'File not found on the VPS'
+    assert vps.calls == []
+
+
+def test_details_annotate_each_file_with_its_own_pull(client, db, configured, monkeypatch):
+    db.add_download(file='ep01.mkv', status='downloading', downloaded_from='vps',
+                    message_id='m-9', url='/dl/Show/S01/ep01.mkv', progress=40)
+    monkeypatch.setattr(troute, 'torrent_details', lambda c, h: _details())
+    files = client.get('/api/torrent/details?client=qbittorrent&hash=h1',
+                       headers=configured).get_json()['files']
+    assert files[0]['downlee']['message_id'] == 'm-9'
+    assert files[1]['downlee'] is None

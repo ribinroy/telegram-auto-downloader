@@ -241,10 +241,13 @@ export function VpsPage() {
   const liveFor = (path: string): Download | undefined =>
     downloads.find(d => d.downloaded_from === 'vps' && d.url === path);
 
-  // A client tab is only "active" when that client is configured; otherwise we
-  // fall back to the Files view (covers stale/bookmarked client URLs).
-  const transmissionConfigured = !!torrentConfig?.transmission?.configured;
-  const qbittorrentConfigured = !!torrentConfig?.qbittorrent?.configured;
+  // A client tab is only "active" when that client is configured (and, if
+  // marked hidden, secured items are shown); otherwise we fall back to the
+  // Files view (covers stale/bookmarked client URLs).
+  const transmissionConfigured = !!torrentConfig?.transmission?.configured
+    && (showSecured || !torrentConfig.transmission.hidden);
+  const qbittorrentConfigured = !!torrentConfig?.qbittorrent?.configured
+    && (showSecured || !torrentConfig.qbittorrent.hidden);
   const torrentTabActive =
     (tab === 'transmission' && transmissionConfigured) ||
     (tab === 'qbittorrent' && qbittorrentConfigured);

@@ -857,6 +857,8 @@ export interface TorrentClientConfig {
   local_dir: string;
   /** Stop a torrent seeding as soon as its download finishes. */
   stop_on_complete: boolean;
+  /** Left out of the VPS tabs and the add dialog unless secured items are shown. */
+  hidden: boolean;
 }
 
 export interface TorrentConfig {
@@ -892,6 +894,19 @@ export async function setStopOnComplete(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ client, enabled }),
+  });
+  if (response.status === 401) { clearToken(); window.location.reload(); }
+  return response.json();
+}
+
+/** Hide/unhide one client from the default view without resaving its config. */
+export async function setTorrentHidden(
+  client: TorrentClient, hidden: boolean
+): Promise<{ status?: string; hidden?: boolean; error?: string }> {
+  const response = await authFetch(`/api/settings/torrent/hidden`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ client, hidden }),
   });
   if (response.status === 401) { clearToken(); window.location.reload(); }
   return response.json();
@@ -967,6 +982,8 @@ export interface TorrentFile {
   percent_done: number;
   wanted: boolean;
   priority: 'skip' | 'low' | 'normal' | 'high' | 'max';
+  /** This file's own VPS->DownLee pull, if one was started for it. */
+  downlee?: TorrentStatus['downlee'];
 }
 
 export type TorrentFilePriority = TorrentFile['priority'];
@@ -1028,6 +1045,20 @@ export async function setTorrentFilePriority(
     const body = await response.json().catch(() => ({}));
     throw new Error(body.error || 'Failed to change the file priority');
   }
+}
+
+/** Pull single files of a finished torrent to DownLee, each as its own VPS download. */
+export async function downloadTorrentFiles(
+  client: TorrentClient, hash: string, indices: number[],
+): Promise<{ started: { index: number; id: number; message_id: string }[]; errors: { index: number; error: string }[] }> {
+  const response = await authFetch('/api/torrent/files/download', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ client, hash, indices }),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok && !body.errors) throw new Error(body.error || 'Failed to start the download to DownLee');
+  return { started: body.started ?? [], errors: body.errors ?? [] };
 }
 
 export async function fetchTorrentList(client: TorrentClient): Promise<{ configured: boolean; torrents?: TorrentStatus[]; error?: string }> {

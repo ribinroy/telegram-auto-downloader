@@ -175,6 +175,8 @@ def _normalize(t):
         # or one whose metadata name never matched its root folder).
         "content_path": t.get("content_path") or (
             f"{(t.get('save_path') or '').rstrip('/')}/{t.get('name')}" if t.get("save_path") and t.get("name") else None),
+        # Its own temp dir (qBittorrent 4.4+), where data sits until it completes
+        "temp_dir": t.get("download_path") or None,
         "error": None,
         "added_date": t.get("added_on") or 0,
         "peers_connected": (t.get("num_seeds") or 0) + (t.get("num_leechs") or 0),

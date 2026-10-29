@@ -1,8 +1,9 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  fetchTorrentConfig, fetchTorrentList, fetchTorrentDetails, setTorrentFilePriority, renameTorrent, saveTorrentConfig, deleteTorrentConfig,
+  fetchTorrentConfig, fetchTorrentList, fetchTorrentDetails, setTorrentFilePriority, renameTorrent, downloadTorrentFiles, saveTorrentConfig, deleteTorrentConfig,
   testTorrentConnection, setTelegramDefault, torrentAction, addTorrent, addTorrentFile,
   setStopOnComplete,
+  setTorrentHidden,
   type TorrentClient, type TorrentActionName, type TorrentDetails, type TorrentFilePriority,
 } from '../api';
 import { qk } from '../api/queryKeys';
@@ -70,6 +71,19 @@ export function useRenameTorrent(client: TorrentClient, hash: string) {
   });
 }
 
+/** Pull single files to DownLee. Refreshes the modal (each file's `downlee`)
+ *  and the list; live progress then comes from the downloads socket. */
+export function useDownloadTorrentFiles(client: TorrentClient, hash: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (indices: number[]) => downloadTorrentFiles(client, hash, indices),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: qk.torrentDetails(client, hash) });
+      qc.invalidateQueries({ queryKey: qk.torrentList(client) });
+    },
+  });
+}
+
 function useInvalidateTorrent() {
   const qc = useQueryClient();
   // Torrent config also drives the per-channel selector in Telegram settings.
@@ -111,6 +125,16 @@ export function useSetStopOnComplete() {
   return useMutation({
     mutationFn: (vars: { client: TorrentClient; enabled: boolean }) =>
       setStopOnComplete(vars.client, vars.enabled),
+    onSuccess: invalidate,
+  });
+}
+
+/** Hide/unhide one client outside secured mode. */
+export function useSetTorrentHidden() {
+  const invalidate = useInvalidateTorrent();
+  return useMutation({
+    mutationFn: (vars: { client: TorrentClient; hidden: boolean }) =>
+      setTorrentHidden(vars.client, vars.hidden),
     onSuccess: invalidate,
   });
 }

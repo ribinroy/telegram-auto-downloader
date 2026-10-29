@@ -263,6 +263,19 @@ class WebApp(
         )
 
         total_speed = sum(d.get("speed", 0) or 0 for d in all_downloads)
+
+        # Time left for the whole queue: everything still to fetch (running +
+        # waiting) over what is moving right now. Speed is KB/s. None when
+        # nothing is moving - an ETA from a zero rate is meaningless.
+        remaining_bytes = sum(
+            max(0, (d.get("total_bytes", 0) or 0) - (d.get("downloaded_bytes", 0) or 0))
+            for d in all_downloads
+            if d.get("status") in ("downloading", "waiting")
+        )
+        live_speed = sum(d.get("speed", 0) or 0 for d in all_downloads
+                         if d.get("status") == "downloading")
+        eta_seconds = (round(remaining_bytes / (live_speed * 1024))
+                       if remaining_bytes and live_speed > 0 else None)
         downloaded_count = sum(1 for d in all_downloads if d.get("status") == "done")
         total_count = len(all_downloads)
         active_count = sum(1 for d in all_downloads if d.get("status") != "done")
@@ -272,6 +285,8 @@ class WebApp(
             "total_size": total_size,
             "pending_bytes": pending_bytes,
             "total_speed": total_speed,
+            "remaining_bytes": remaining_bytes,
+            "eta_seconds": eta_seconds,
             "downloaded_count": downloaded_count,
             "total_count": total_count,
             "all_count": total_count,
