@@ -850,6 +850,17 @@ cd frontend && npm test          # frontend (src/**/*.test.ts)
 
 ## Development Commands
 
+`make up` takes a fresh clone to a running app (check tools -> venv + deps +
+yt-dlp -> `.env` -> PostgreSQL user/db -> frontend build -> run); each step is
+its own target and skips itself when done. `scripts/bootstrap_env.py` writes
+`.env` with generated secrets and **never overwrites an existing one** (a new
+`JWT_SECRET` would log everyone out and make every stored secret
+undecryptable); `scripts/ensure_db.py` creates only what is missing, only on a
+local server, and never changes an existing user's password. yt-dlp is
+installed into the venv because `YtdlpDownloader.YTDLP_PATH` is
+`venv/bin/yt-dlp`. `make service` writes a unit for the current checkout and
+user (`SERVICE=` to name it - this deployment's is `telegram-downloader`).
+
 ```bash
 # Backend
 source venv/bin/activate
