@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Outlet, useNavigate, useLocation, useOutletContext } from 'react-router-dom';
-import { Wifi, WifiOff, HardDrive, Clock, Zap, LogOut, Settings, BarChart3, RefreshCw, FolderOpen } from 'lucide-react';
-import { formatBytes, formatSpeed } from '../utils/format';
+import { Wifi, WifiOff, HardDrive, Hourglass, Clock, Zap, LogOut, Settings, BarChart3, RefreshCw, FolderOpen } from 'lucide-react';
+import { formatBytes, formatSpeed, formatTime } from '../utils/format';
 import { type SortBy, type SortOrder } from '../api';
 import { ToastContainer } from './Toast';
 import { useToast } from '../lib/notify';
@@ -207,12 +207,12 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
               </div>
             </div>
             <div className="flex items-center gap-1.5 sm:gap-3">
-              {/* Total Downloaded - hidden on mobile */}
+              {/* Time left for the whole queue - hidden on mobile */}
               <div className="hidden sm:flex group relative items-center gap-2 px-3 py-1.5 bg-slate-700/50 rounded-lg cursor-default min-w-[100px]">
-                <HardDrive className="w-4 h-4 text-green-400" />
-                <span className="text-sm text-green-400 tabular-nums">{formatBytes(stats.total_downloaded)}</span>
+                <Hourglass className="w-4 h-4 text-green-400" />
+                <span className="text-sm text-green-400 tabular-nums">{formatTime(stats.eta_seconds ?? null)}</span>
                 <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
-                  Downloaded
+                  {stats.remaining_bytes ? `Time left · ${formatBytes(stats.remaining_bytes)} to go` : 'Time left'}
                 </div>
               </div>
               {/* Pending */}
