@@ -308,12 +308,11 @@ export function TorrentDetailsModal({ client, hash, name, pulled = false, onClos
   };
   const skippedCount = data?.files.filter(f => !f.wanted).length ?? 0;
   const active = t ? t.status === 'downloading' || t.status === 'seeding' : false;
-  // Until the torrent completes, the client keeps even finished files in its
-  // temp dir and moves them at the end - so files are pullable only after that
-  const complete = !!t && t.percent_done >= 100 && t.status !== 'checking' && t.status !== 'check-wait';
+  // A finished file can be pulled before the torrent is: the server finds it
+  // in the client's temp dir until the torrent completes and moves it
   const pullState = (f: TorrentFile) => filePullState(f, downloads, requested.has(f.index));
   const isPullable = (f: TorrentFile) => {
-    if (!complete || !f.wanted || f.percent_done < 100) return false;
+    if (!f.wanted || f.percent_done < 100) return false;
     const st = pullState(f);
     return !st.done && !st.running && !st.retryable && !(pulled && !st.transfer);
   };

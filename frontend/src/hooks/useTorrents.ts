@@ -3,6 +3,7 @@ import {
   fetchTorrentConfig, fetchTorrentList, fetchTorrentDetails, setTorrentFilePriority, renameTorrent, downloadTorrentFiles, saveTorrentConfig, deleteTorrentConfig,
   testTorrentConnection, setTelegramDefault, torrentAction, addTorrent, addTorrentFile,
   setStopOnComplete,
+  setTorrentHidden,
   type TorrentClient, type TorrentActionName, type TorrentDetails, type TorrentFilePriority,
 } from '../api';
 import { qk } from '../api/queryKeys';
@@ -124,6 +125,16 @@ export function useSetStopOnComplete() {
   return useMutation({
     mutationFn: (vars: { client: TorrentClient; enabled: boolean }) =>
       setStopOnComplete(vars.client, vars.enabled),
+    onSuccess: invalidate,
+  });
+}
+
+/** Hide/unhide one client outside secured mode. */
+export function useSetTorrentHidden() {
+  const invalidate = useInvalidateTorrent();
+  return useMutation({
+    mutationFn: (vars: { client: TorrentClient; hidden: boolean }) =>
+      setTorrentHidden(vars.client, vars.hidden),
     onSuccess: invalidate,
   });
 }

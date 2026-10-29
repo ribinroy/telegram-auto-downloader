@@ -106,6 +106,27 @@ def test_the_toggle_refuses_an_unconfigured_client(client, db, auth):
     assert res.status_code == 400
 
 
+# --- hidden ---------------------------------------------------------------
+
+def test_hidden_defaults_to_off_and_persists(client, db, configured):
+    body = client.get('/api/settings/torrent', headers=configured).get_json()
+    assert body['transmission']['hidden'] is False
+    res = client.post('/api/settings/torrent/hidden', headers=configured,
+                      json={'client': 'transmission', 'hidden': True})
+    assert res.status_code == 200
+    client.post('/api/settings/torrent', headers=configured,
+                json={'client': 'transmission', 'url': 'http://box:9091'})
+    body = client.get('/api/settings/torrent', headers=configured).get_json()
+    assert body['transmission']['hidden'] is True              # survives a full save
+    assert body['qbittorrent']['hidden'] is False
+
+
+def test_hidden_refuses_an_unconfigured_client(client, db, auth):
+    res = client.post('/api/settings/torrent/hidden', headers=auth,
+                      json={'client': 'transmission', 'hidden': True})
+    assert res.status_code == 400
+
+
 # --- actions --------------------------------------------------------------
 
 @pytest.fixture
@@ -245,9 +266,29 @@ class FakeVps:
         return {'id': len(self.calls), 'message_id': f'm-{len(self.calls)}'}
 
 
+# Remote files that "exist" for the route's SFTP lookup
+sftp_tree = {'files': set()}
+
+
+class _StatOnlySftp:
+    def stat(self, path):
+        if path not in sftp_tree['files']:
+            raise IOError(2, 'No such file')
+
+
+class _Ssh:
+    def close(self):
+        pass
+
+
 @pytest.fixture
-def vps(app):
+def vps(app, monkeypatch):
     app.vps_downloader = FakeVps()
+    sftp_tree['files'] = {'/dl/Show/S01/ep01.mkv', '/dl/Show/../escape.mkv'}
+    monkeypatch.setattr(troute, 'open_vps_sftp', lambda: (_Ssh(), _StatOnlySftp()))
+    # The Telegram progress dir would ask a live client for its default dir
+    monkeypatch.setattr('backend.web_app.torrent.torrent_telegram_dirs',
+                        lambda c, cfg=None: ('/dl/telegram/downloads', '/dl/telegram/progress'))
     return app.vps_downloader
 
 
@@ -274,11 +315,27 @@ def test_skipped_unknown_and_escaping_files_are_refused(client, db, configured, 
     assert vps.calls == []
 
 
-def test_an_unfinished_torrent_cannot_be_pulled_from(client, db, configured, vps, monkeypatch):
+def test_a_finished_file_of_an_unfinished_torrent_is_found_in_the_temp_dir(
+        client, db, configured, vps, monkeypatch):
+    # Not at /dl yet: still in qBittorrent's per-torrent temp dir
+    sftp_tree['files'] = {'/tmp-dl/Show/S01/ep01.mkv'}
+    details = _details(percent=60, status='downloading')
+    details['torrent']['temp_dir'] = '/tmp-dl'
+    monkeypatch.setattr(troute, 'torrent_details', lambda c, h: details)
+    res = client.post('/api/torrent/files/download', headers=configured,
+                      json={'client': 'qbittorrent', 'hash': 'h1', 'indices': [0]})
+    assert res.status_code == 200
+    # Recorded by its final path, so a resume after the client's move still works
+    assert vps.calls[0][0] == '/dl/Show/S01/ep01.mkv'
+
+
+def test_a_file_missing_from_the_vps_is_refused(client, db, configured, vps, monkeypatch):
+    sftp_tree['files'] = set()
     monkeypatch.setattr(troute, 'torrent_details', lambda c, h: _details(percent=60, status='downloading'))
     res = client.post('/api/torrent/files/download', headers=configured,
                       json={'client': 'qbittorrent', 'hash': 'h1', 'indices': [0]})
-    assert res.status_code == 409
+    assert res.status_code == 400
+    assert res.get_json()['errors'][0]['error'] == 'File not found on the VPS'
     assert vps.calls == []
 
 

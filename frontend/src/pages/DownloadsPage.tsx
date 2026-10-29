@@ -320,6 +320,7 @@ export function DownloadsPage() {
         onClose={() => { setAddUrlOpen(false); setPastedUrl(null); setDroppedTorrents(null); }}
         initialUrl={pastedUrl}
         initialFiles={droppedTorrents}
+        showSecured={showSecured}
       />
 
       {/* Drag-and-drop overlay - above the modal, so a torrent can be dropped

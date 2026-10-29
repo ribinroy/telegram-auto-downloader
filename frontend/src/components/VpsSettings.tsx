@@ -10,7 +10,7 @@ import {
 } from '../hooks/useVps';
 import {
   useTorrentConfig, useSaveTorrentConfig, useTestTorrentConnection, useDeleteTorrentConfig,
-  useSetTelegramDefault, useSetStopOnComplete,
+  useSetTelegramDefault, useSetStopOnComplete, useSetTorrentHidden,
 } from '../hooks/useTorrents';
 import { FolderBrowser } from './FolderBrowser';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -580,6 +580,7 @@ function TorrentClientCard({
   const testMut = useTestTorrentConnection();
   const removeMut = useDeleteTorrentConfig();
   const seedMut = useSetStopOnComplete();
+  const hiddenMut = useSetTorrentHidden();
 
   const [url, setUrl] = useState('');
   const [username, setUsername] = useState('');
@@ -786,6 +787,29 @@ function TorrentClientCard({
               <span className="block text-xs text-slate-500 mt-0.5">
                 DownLee checks this client every {TORRENT_WATCH_SECONDS}s and pauses a torrent once it
                 finishes downloading. Turn it off if the tracker needs you to seed.
+              </span>
+            </span>
+          </label>
+        )}
+
+        {configured && (
+          <label className="flex items-start gap-2.5 p-2.5 bg-slate-900/40 border border-slate-700/60 rounded-lg cursor-pointer">
+            <input
+              type="checkbox"
+              checked={data?.hidden ?? false}
+              disabled={hiddenMut.isPending}
+              onChange={(e) => hiddenMut.mutate({ client, hidden: e.target.checked })}
+              className="mt-0.5 w-4 h-4 accent-purple-500 shrink-0"
+            />
+            <span className="min-w-0">
+              <span className="flex items-center gap-1.5 text-sm text-white">
+                <EyeOff className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+                Hidden
+                {hiddenMut.isPending && <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-400" />}
+              </span>
+              <span className="block text-xs text-slate-500 mt-0.5">
+                Leave this client out of the VPS tabs and the add dialog until secured items are
+                shown (double-click Live).
               </span>
             </span>
           </label>

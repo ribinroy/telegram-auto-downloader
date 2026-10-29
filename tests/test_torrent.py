@@ -381,3 +381,22 @@ def test_a_pulled_torrent_is_matched_by_its_folder_on_disk(client, db, auth, mon
     }])
     body = client.get('/api/torrent/list?client=qbittorrent', headers=auth).get_json()
     assert body['torrents'][0]['downlee']['status'] == 'done'
+
+
+def test_a_file_not_at_its_final_path_is_found_in_its_torrents_temp_dir(monkeypatch):
+    from backend.web_app import torrent as tmod
+    monkeypatch.setattr(tmod, 'load_torrent_config',
+                        lambda c: {'client': c, 'incomplete_dir': '/inc'} if c == 'qbittorrent' else None)
+    monkeypatch.setattr(tmod, 'torrent_list', lambda c: [
+        {'download_dir': '/other'},
+        {'download_dir': '/dl/', 'temp_dir': '/qtemp'},
+    ])
+    monkeypatch.setattr(tmod, 'torrent_telegram_dirs', lambda c, cfg=None: ('/x', '/inc'))
+
+    class Sftp:
+        def stat(self, path):
+            if path != '/qtemp/Show/ep01.mkv':
+                raise IOError(2, 'No such file')
+
+    assert tmod.locate_torrent_file('/dl/Show/ep01.mkv', Sftp()) == '/qtemp/Show/ep01.mkv'
+    assert tmod.locate_torrent_file('/elsewhere/ep01.mkv', Sftp()) is None

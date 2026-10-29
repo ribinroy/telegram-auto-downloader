@@ -49,6 +49,8 @@ interface AddUrlModalProps {
   /** A .torrent dropped onto the page - loaded straight into torrent mode. */
   /** .torrent files dropped on the page - loaded straight into torrent mode. */
   initialFiles?: File[] | null;
+  /** Secured items shown - offers torrent clients marked hidden too. */
+  showSecured?: boolean;
 }
 
 /** One queued .torrent and how its upload went. */
@@ -59,7 +61,7 @@ interface TorrentUpload {
   error?: string;
 }
 
-export function AddUrlModal({ isOpen, onClose, initialUrl, initialFiles }: AddUrlModalProps) {
+export function AddUrlModal({ isOpen, onClose, initialUrl, initialFiles, showSecured = false }: AddUrlModalProps) {
   const [url, setUrl] = useState('');
   const [checkResult, setCheckResult] = useState<UrlCheckResult | null>(null);
   const [selectedFormat, setSelectedFormat] = useState<VideoFormat | null>(null);
@@ -94,10 +96,12 @@ export function AddUrlModal({ isOpen, onClose, initialUrl, initialFiles }: AddUr
 
   const torrentClients = useMemo<TorrentClient[]>(() => {
     const c: TorrentClient[] = [];
-    if (torrentConfig?.transmission?.configured) c.push('transmission');
-    if (torrentConfig?.qbittorrent?.configured) c.push('qbittorrent');
+    for (const name of ['transmission', 'qbittorrent'] as const) {
+      const cfg = torrentConfig?.[name];
+      if (cfg?.configured && (showSecured || !cfg.hidden)) c.push(name);
+    }
     return c;
-  }, [torrentConfig]);
+  }, [torrentConfig, showSecured]);
   const vpsFolders = useMemo(() => (allFolders ?? []).filter(f => f.active), [allFolders]);
 
   // Files (uploaded torrent) and magnets share the same submit UI.
