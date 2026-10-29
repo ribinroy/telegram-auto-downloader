@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Loader2, AlertCircle, CheckCircle, Check, Plug, FolderPlus, Folder, FolderOpen, Eye, EyeOff, Trash2, Unplug, Server, Magnet, Send, Upload } from 'lucide-react';
+import { Loader2, AlertCircle, CheckCircle, Check, Plug, FolderPlus, Folder, FolderOpen, Eye, EyeOff, Trash2, Unplug, Server, Magnet, Send, Upload, ChevronDown } from 'lucide-react';
 import {
   browseLocal, fetchVpsFolderDeleteImpact,
   type VpsWatchFolder, type VpsFolderUnhideImpact, type TorrentClient, type TorrentClientConfig,
@@ -596,6 +596,8 @@ function TorrentClientCard({
   // Which folder field is currently picking a path (local_dir browses the home server).
   const [picking, setPicking] = useState<null | 'download_dir' | 'incomplete_dir' | 'local_dir'>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
+  // Collapsed by default: the form is only needed when (re)configuring.
+  const [open, setOpen] = useState(false);
 
   const saving = saveMut.isPending;
   const testing = testMut.isPending;
@@ -700,16 +702,31 @@ function TorrentClientCard({
 
   return (
     <div className="rounded-xl border border-slate-700/60 bg-slate-800/30 p-3 sm:p-4">
-      <div className="flex items-center justify-between mb-3">
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        aria-expanded={open}
+        className={`w-full flex items-center justify-between gap-2 text-left ${open ? 'mb-3' : ''}`}
+      >
         <h4 className="text-sm font-semibold text-white">{label}</h4>
-        {configured && (
-          <span className="flex items-center gap-1.5 text-xs bg-green-500/15 text-green-400 border border-green-500/30 rounded-full px-2.5 py-1 shrink-0">
-            <span className="w-1.5 h-1.5 rounded-full bg-green-400" />
-            Configured
-          </span>
-        )}
-      </div>
+        <span className="flex items-center gap-2 shrink-0">
+          {configured && data?.hidden && (
+            <span className="flex items-center gap-1 text-xs bg-slate-700/50 text-slate-400 border border-slate-600 rounded-full px-2.5 py-1">
+              <EyeOff className="w-3 h-3" />
+              Hidden
+            </span>
+          )}
+          {configured && (
+            <span className="flex items-center gap-1.5 text-xs bg-green-500/15 text-green-400 border border-green-500/30 rounded-full px-2.5 py-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-green-400" />
+              Configured
+            </span>
+          )}
+          <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform ${open ? 'rotate-180' : ''}`} />
+        </span>
+      </button>
 
+      {open && (
       <div className="space-y-3">
         <div>
           <label className="block text-sm text-slate-400 mb-1">{isTransmission ? 'Web/RPC URL' : 'WebUI URL'}</label>
@@ -858,6 +875,7 @@ function TorrentClientCard({
           )}
         </div>
       </div>
+      )}
 
       <FolderBrowser
         isOpen={picking !== null}
