@@ -309,7 +309,98 @@ class TorrentRoutesMixin:
                 return jsonify({"error": str(e)}), 502
             if details is None:
                 return jsonify({"error": "That torrent is no longer in the client"}), 404
+            # Each file's own VPS->DownLee pull, if one was started for it.
+            # Exact path only: a basename fallback would light up every
+            # "sample.mkv" across unrelated torrents.
+            by_path = {}
+            for d in get_db().get_all_downloads():
+                if d.get("downloaded_from") == "vps" and d.get("url"):
+                    by_path.setdefault(d["url"], d)
+            dl_dir = details["torrent"].get("download_dir") or ""
+            for f in details["files"]:
+                dl = by_path.get(_file_remote_path(dl_dir, f["path"]))
+                f["downlee"] = {
+                    "id": dl["id"],
+                    "message_id": dl.get("message_id"),
+                    "status": dl.get("status"),
+                    "progress": dl.get("progress") or 0,
+                } if dl else None
             return jsonify(details)
+
+        def _file_remote_path(download_dir, path):
+            """Where one of a torrent's files sits on the VPS. Both clients
+            report file paths relative to the download dir (Transmission's
+            downloadDir, qBittorrent's save_path), torrent folder included."""
+            return posixpath.join((download_dir or "").rstrip("/"), path or "")
+
+        @self.app.route("/api/torrent/files/download", methods=["POST"])
+        @token_required
+        def torrent_file_download():
+            """Pull individual files of a finished torrent to DownLee.
+            Body: {client, hash, indices: [int]}. Each file becomes its own VPS
+            download, placed where a whole-torrent pull would have put it
+            (<base>/<torrent folder>/<sub dirs>/<file>), so pulling the rest
+            later doesn't scatter one torrent across two layouts.
+
+            Only once the torrent is complete: until then the client keeps even
+            finished files in its temp dir and moves them all at the end, so a
+            pull would chase a file mid-move. Skipping the other files is how
+            to get one early - a torrent completes when its wanted files do.
+            -> {started: [{index, id, message_id}], errors: [{index, error}]}"""
+            if not self.vps_downloader:
+                return jsonify({"error": "VPS downloader not available"}), 503
+            data = request.json or {}
+            client = (data.get("client") or "transmission").strip()
+            if client not in CLIENTS:
+                return jsonify({"error": "Unknown torrent client"}), 400
+            torrent_hash = (data.get("hash") or "").strip().lower()
+            indices = data.get("indices")
+            if not torrent_hash:
+                return jsonify({"error": "hash is required"}), 400
+            if (not isinstance(indices, list) or not indices
+                    or not all(isinstance(i, int) and not isinstance(i, bool) and i >= 0 for i in indices)):
+                return jsonify({"error": "indices must be a non-empty list of file numbers"}), 400
+            try:
+                details = torrent_details(client, torrent_hash)
+            except ValueError as e:
+                return jsonify({"error": str(e)}), 502
+            if details is None:
+                return jsonify({"error": "That torrent is no longer in the client"}), 404
+            t = details["torrent"]
+            if (t.get("percent_done") or 0) < 100 or t.get("status") in ("checking", "check-wait"):
+                return jsonify({"error": "The torrent is still downloading - its files sit in the "
+                                         "temp folder until it completes. Skip the other files to finish sooner."}), 409
+
+            from backend.config import DOWNLOAD_DIR
+            from backend.utils import resolve_spec, spec_folder
+            dl_dir = t.get("download_dir") or ""
+            local_dir = ((read_torrent_settings().get(client) or {}).get("local_dir") or "").strip()
+            files = {f["index"]: f for f in details["files"]}
+            started, errors = [], []
+            for index in dict.fromkeys(indices):
+                f = files.get(index)
+                if not f:
+                    errors.append({"index": index, "error": "No such file in this torrent"})
+                    continue
+                parts = (f.get("path") or "").split("/")
+                # The path comes from the torrent's metadata and is joined onto a
+                # local folder - refuse anything that could climb out of it
+                if not f.get("path") or f["path"].startswith("/") or any(p in ("", ".", "..") for p in parts):
+                    errors.append({"index": index, "error": "Unsafe file path"})
+                    continue
+                if not f.get("wanted") or (f.get("percent_done") or 0) < 100:
+                    errors.append({"index": index, "error": "This file isn't downloaded on the VPS"})
+                    continue
+                remote = _file_remote_path(dl_dir, f["path"])
+                base = Path(local_dir) if local_dir else spec_folder(
+                    resolve_spec('vps', path=remote), DOWNLOAD_DIR / "VPS")
+                dest = base.joinpath(*parts[:-1])
+                result = self.vps_downloader.start_download(remote, f.get("size") or 0, dest=str(dest))
+                if result.get("error"):
+                    errors.append({"index": index, "error": result["error"]})
+                else:
+                    started.append({"index": index, "id": result.get("id"), "message_id": result.get("message_id")})
+            return jsonify({"started": started, "errors": errors}), 200 if started or not errors else 400
 
         @self.app.route("/api/torrent/rename", methods=["POST"])
         @token_required

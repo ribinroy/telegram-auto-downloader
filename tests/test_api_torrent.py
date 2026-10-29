@@ -219,3 +219,74 @@ def test_listing_annotates_each_torrent_with_its_downlee_transfer(
     by_hash = {t['hash']: t for t in body['torrents']}
     assert by_hash['h1']['downlee']['message_id'] == 'm-1'
     assert by_hash['h2']['downlee'] is None
+
+
+# --- per-file pull to DownLee ---------------------------------------------
+
+def _details(percent=100, status='completed', files=None):
+    return {
+        'torrent': {'hash': 'h1', 'name': 'Show', 'download_dir': '/dl/',
+                    'percent_done': percent, 'status': status},
+        'files': files if files is not None else [
+            {'index': 0, 'path': 'Show/S01/ep01.mkv', 'size': 10, 'percent_done': 100, 'wanted': True},
+            {'index': 1, 'path': 'Show/sample.mkv', 'size': 5, 'percent_done': 0, 'wanted': False},
+            {'index': 2, 'path': 'Show/../escape.mkv', 'size': 5, 'percent_done': 100, 'wanted': True},
+        ],
+        'priorities': [], 'rename_renames_folder': False, 'info': {},
+    }
+
+
+class FakeVps:
+    def __init__(self):
+        self.calls = []
+
+    def start_download(self, remote, size=0, dest=None):
+        self.calls.append((remote, size, dest))
+        return {'id': len(self.calls), 'message_id': f'm-{len(self.calls)}'}
+
+
+@pytest.fixture
+def vps(app):
+    app.vps_downloader = FakeVps()
+    return app.vps_downloader
+
+
+def test_a_file_pull_keeps_the_torrent_tree_under_the_local_folder(
+        client, db, configured, vps, monkeypatch, tmp_path):
+    from backend.web_app.torrent import read_torrent_settings, write_torrent_settings
+    settings = read_torrent_settings()
+    settings['qbittorrent']['local_dir'] = str(tmp_path / 'tv')
+    write_torrent_settings(settings)
+    monkeypatch.setattr(troute, 'torrent_details', lambda c, h: _details())
+    res = client.post('/api/torrent/files/download', headers=configured,
+                      json={'client': 'qbittorrent', 'hash': 'h1', 'indices': [0]})
+    assert res.status_code == 200
+    assert vps.calls == [('/dl/Show/S01/ep01.mkv', 10, str(tmp_path / 'tv' / 'Show' / 'S01'))]
+    assert res.get_json()['started'] == [{'index': 0, 'id': 1, 'message_id': 'm-1'}]
+
+
+def test_skipped_unknown_and_escaping_files_are_refused(client, db, configured, vps, monkeypatch):
+    monkeypatch.setattr(troute, 'torrent_details', lambda c, h: _details())
+    res = client.post('/api/torrent/files/download', headers=configured,
+                      json={'client': 'qbittorrent', 'hash': 'h1', 'indices': [1, 2, 9]})
+    assert res.status_code == 400
+    assert [e['index'] for e in res.get_json()['errors']] == [1, 2, 9]
+    assert vps.calls == []
+
+
+def test_an_unfinished_torrent_cannot_be_pulled_from(client, db, configured, vps, monkeypatch):
+    monkeypatch.setattr(troute, 'torrent_details', lambda c, h: _details(percent=60, status='downloading'))
+    res = client.post('/api/torrent/files/download', headers=configured,
+                      json={'client': 'qbittorrent', 'hash': 'h1', 'indices': [0]})
+    assert res.status_code == 409
+    assert vps.calls == []
+
+
+def test_details_annotate_each_file_with_its_own_pull(client, db, configured, monkeypatch):
+    db.add_download(file='ep01.mkv', status='downloading', downloaded_from='vps',
+                    message_id='m-9', url='/dl/Show/S01/ep01.mkv', progress=40)
+    monkeypatch.setattr(troute, 'torrent_details', lambda c, h: _details())
+    files = client.get('/api/torrent/details?client=qbittorrent&hash=h1',
+                       headers=configured).get_json()['files']
+    assert files[0]['downlee']['message_id'] == 'm-9'
+    assert files[1]['downlee'] is None

@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { Magnet, X, Loader2, Search, File, Lock, ArrowDown, ArrowUp, Check, Minus, Pencil, AlertTriangle } from 'lucide-react';
-import { useTorrentDetails, useSetTorrentFilePriority, useRenameTorrent } from '../hooks/useTorrents';
+import { Magnet, X, Loader2, Search, File, Lock, ArrowDown, ArrowUp, Check, CheckCircle, Minus, Pencil, AlertTriangle, RotateCw } from 'lucide-react';
+import { useTorrentDetails, useSetTorrentFilePriority, useRenameTorrent, useDownloadTorrentFiles } from '../hooks/useTorrents';
+import { useLayoutContext } from './Layout';
+import type { Download } from '../types';
 import { notify, useErrorToast } from '../lib/notify';
 import { formatBytes, formatTime } from '../utils/format';
 import { commonRoot } from '../utils/torrent';
@@ -36,6 +38,63 @@ function Checkbox({ state, onClick, label }: { state: boolean | 'some'; onClick:
     >
       {state === true && <Check className="w-3 h-3 text-white" />}
       {state === 'some' && <Minus className="w-3 h-3 text-white" />}
+    </button>
+  );
+}
+
+/** One file's pull to DownLee: the server's match, overridden by the
+ *  WebSocket-fed downloads list while it runs (same idea as downleeState). */
+function filePullState(file: TorrentFile, downloads: Download[], requested: boolean) {
+  const transfer = file.downlee ?? null;
+  const live = transfer?.message_id ? downloads.find(d => d.message_id === transfer.message_id) : undefined;
+  const status = live?.status ?? transfer?.status ?? null;
+  return {
+    transfer,
+    progress: live?.progress ?? transfer?.progress ?? 0,
+    done: status === 'done',
+    // `requested` bridges "accepted" -> the refetch that first reports it
+    running: status === 'downloading' || status === 'waiting' || (!status && requested),
+    retryable: (status === 'failed' || status === 'stopped') && !!transfer,
+  };
+}
+
+/** The per-file DownLee control: pulled, in flight, retryable, or offered. */
+function PullButton({ state, canPull, pulledWhole, onPull, onRetry }: {
+  state: ReturnType<typeof filePullState>;
+  canPull: boolean;
+  pulledWhole: boolean;
+  onPull: () => void;
+  onRetry: () => void;
+}) {
+  if (state.done || (pulledWhole && !state.transfer)) {
+    return (
+      <span title={state.done ? 'On DownLee' : 'Pulled with the whole torrent'} className="shrink-0 p-1 text-green-400">
+        <CheckCircle className="w-4 h-4" />
+      </span>
+    );
+  }
+  if (state.running) {
+    return (
+      <span title="Downloading to DownLee" className="shrink-0 flex items-center gap-1 px-1 text-cyan-400">
+        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+        <span className="text-[11px] tabular-nums">{Math.round(state.progress)}%</span>
+      </span>
+    );
+  }
+  if (state.retryable) {
+    return (
+      <button onClick={onRetry} title="Transfer to DownLee stopped - retry" aria-label="Retry the download to DownLee"
+        className="shrink-0 p-1 rounded text-amber-300 hover:bg-amber-500/20">
+        <RotateCw className="w-4 h-4" />
+      </button>
+    );
+  }
+  if (!canPull) return null;
+  return (
+    <button onClick={onPull} title="Download this file to DownLee" aria-label="Download this file to DownLee"
+      className="shrink-0 flex items-center p-1 rounded border border-purple-400/40 bg-gradient-to-r from-purple-500/25 to-cyan-500/25 hover:from-purple-500/45 hover:to-cyan-500/45 transition-colors">
+      <img src="/logo.png" alt="" className="w-3.5 h-3.5" />
+      <ArrowDown className="w-3 h-3 text-white" />
     </button>
   );
 }
@@ -86,8 +145,9 @@ function InlineRename({ initial, onSubmit, onCancel, label, className = '' }: {
   );
 }
 
-function FileRow({ file, root, priorities, selected, onToggle, onPriority, renaming, onRenameStart, onRename, onRenameCancel }: {
+function FileRow({ file, root, priorities, selected, onToggle, onPriority, renaming, onRenameStart, onRename, onRenameCancel, pull }: {
   file: TorrentFile;
+  pull: ReactNode;
   root: string | null;
   priorities: TorrentFilePriority[];
   selected: boolean;
@@ -132,6 +192,7 @@ function FileRow({ file, root, priorities, selected, onToggle, onPriority, renam
             </button>
           </>
         )}
+        {pull}
         <span className="hidden sm:inline shrink-0 w-20 whitespace-nowrap text-right text-xs tabular-nums text-slate-400">
           {formatBytes(file.size)}
         </span>
@@ -182,6 +243,25 @@ export function TorrentDetailsModal({ client, hash, name, pulled = false, onClos
   useErrorToast(setPriority.error, "Couldn't change the file priority");
   const rename = useRenameTorrent(client, hash);
   useErrorToast(rename.error, 'Rename failed');
+  const { downloads, onRetry } = useLayoutContext();
+  const pullFiles = useDownloadTorrentFiles(client, hash);
+  // Files whose pull was accepted but isn't in a refetched `downlee` yet
+  const [requested, setRequested] = useState<Set<number>>(new Set());
+  const runPull = (indices: number[]) => {
+    if (indices.length === 0) return;
+    pullFiles.mutate(indices, {
+      onSuccess: ({ started, errors }) => {
+        setRequested(prev => new Set([...prev, ...started.map(s => s.index)]));
+        if (started.length) {
+          notify({ type: 'success', title: 'Downloading to DownLee', message: `${started.length} file${started.length !== 1 ? 's' : ''}` });
+        }
+        if (errors.length) {
+          notify({ type: 'error', title: "Couldn't start the download", message: errors.length === 1 ? errors[0].error : `${errors.length} files: ${errors[0].error}` });
+        }
+      },
+      onError: e => notify({ type: 'error', title: "Couldn't start the download", message: e.message }),
+    });
+  };
   // What is being renamed: a file's index, the torrent itself, or nothing
   const [renaming, setRenaming] = useState<number | 'torrent' | null>(null);
   const runRename = (newName: string, path?: string) => {
@@ -228,6 +308,16 @@ export function TorrentDetailsModal({ client, hash, name, pulled = false, onClos
   };
   const skippedCount = data?.files.filter(f => !f.wanted).length ?? 0;
   const active = t ? t.status === 'downloading' || t.status === 'seeding' : false;
+  // Until the torrent completes, the client keeps even finished files in its
+  // temp dir and moves them at the end - so files are pullable only after that
+  const complete = !!t && t.percent_done >= 100 && t.status !== 'checking' && t.status !== 'check-wait';
+  const pullState = (f: TorrentFile) => filePullState(f, downloads, requested.has(f.index));
+  const isPullable = (f: TorrentFile) => {
+    if (!complete || !f.wanted || f.percent_done < 100) return false;
+    const st = pullState(f);
+    return !st.done && !st.running && !st.retryable && !(pulled && !st.transfer);
+  };
+  const pullableSelected = (data?.files ?? []).filter(f => selected.has(f.index) && isPullable(f));
 
   return createPortal(
     <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm p-0 sm:p-4" onClick={onClose}>
@@ -384,6 +474,15 @@ export function TorrentDetailsModal({ client, hash, name, pulled = false, onClos
                         onRenameStart={() => setRenaming(f.index)}
                         onRename={n => runRename(n, f.path)}
                         onRenameCancel={() => setRenaming(null)}
+                        pull={
+                          <PullButton
+                            state={pullState(f)}
+                            canPull={isPullable(f)}
+                            pulledWhole={pulled}
+                            onPull={() => runPull([f.index])}
+                            onRetry={() => { const id = f.downlee?.id; if (id != null) onRetry(id); }}
+                          />
+                        }
                       />
                     ))}
                   </ul>
@@ -410,6 +509,16 @@ export function TorrentDetailsModal({ client, hash, name, pulled = false, onClos
                       {PRIORITY_LABEL[p]}
                     </button>
                   ))}
+                  {pullableSelected.length > 0 && (
+                    <button
+                      onClick={() => { runPull(pullableSelected.map(f => f.index)); setSelected(new Set()); }}
+                      disabled={pullFiles.isPending}
+                      className="flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg border border-purple-400/40 text-white bg-gradient-to-r from-purple-500/30 to-cyan-500/30 hover:from-purple-500/45 hover:to-cyan-500/45 transition-colors disabled:opacity-50"
+                    >
+                      <img src="/logo.png" alt="" className="w-3.5 h-3.5" />
+                      To DownLee{pullableSelected.length < selected.size ? ` (${pullableSelected.length})` : ''}
+                    </button>
+                  )}
                   <button onClick={() => setSelected(new Set())} className="text-xs px-1.5 text-slate-500 hover:text-white">Clear</button>
                 </div>
               </div>
