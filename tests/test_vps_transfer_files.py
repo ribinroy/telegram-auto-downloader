@@ -154,7 +154,7 @@ def _run(handler, pull, sftp):
 
 
 def test_a_paused_file_is_skipped_and_the_pull_ends_paused_not_done(db, handler, pull):
-    db.update_download_by_message_id('p-1', paused_files='["Extras/sample.mkv"]')
+    db.update_download_by_message_id('p-1', file_status='{"Extras/sample.mkv": "paused"}')
     sftp = _ReadableSFTP(TREE)
     _run(handler, pull, sftp)
     assert [path for path, _n in sftp.reads] == [REMOTE + '/ep02.mkv']
@@ -207,7 +207,7 @@ def test_a_file_resumed_after_its_turn_is_fetched_by_a_later_pass(db, handler, p
 
 
 def test_the_listing_shows_paused_files(db, handler, remote, pull):
-    db.update_download_by_message_id('p-1', paused_files='["Extras/sample.mkv"]')
+    db.update_download_by_message_id('p-1', file_status='{"Extras/sample.mkv": "paused"}')
     pull = db.get_download_by_message_id('p-1')
     files = _by_path(handler.file_listing(pull))
     assert files['Extras/sample.mkv']['state'] == 'paused'
