@@ -1357,6 +1357,28 @@ export interface SyncThumbnailsResult {
   explorer_freed: number;
 }
 
+export interface CheckFilesResult {
+  checked: number;
+  present: number;
+  missing: number;
+  /** Flipped to deleted: the flag said present, the disk said gone. */
+  marked_missing: number;
+  /** Flipped back: flagged deleted, but the file is there. */
+  restored: number;
+  error?: string;
+}
+
+export async function checkFiles(): Promise<CheckFilesResult> {
+  const response = await authFetch(`/api/jobs/check-files`, { method: 'POST' });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok || body.error) throw new Error(body.error || 'Failed to check files');
+  return body;
+}
+
 /** Monday = 0 ... Sunday = 6, matching the backend's datetime.weekday(). */
 export interface JobSchedule {
   enabled: boolean;

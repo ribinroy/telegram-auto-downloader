@@ -152,6 +152,40 @@ def run_ytdlp_upgrade():
     return {'old_version': old_ver, 'new_version': new_ver, 'upgraded': old_ver != new_ver}
 
 
+def run_check_files():
+    """Look on disk for every finished download's file (or folder) and set
+    `file_deleted` to match. The flag otherwise only moves when something
+    happens to look - opening the viewer, the "On disk" filter - so a file
+    deleted over SMB or in the explorer stays "present" until then.
+
+    Only finished downloads are checked: an unfinished one has nothing to be
+    deleted yet. -> {checked, present, missing, marked_missing, restored}"""
+    from backend.web_app.helpers import local_copy_exists
+    db = get_db()
+    stats = {'checked': 0, 'present': 0, 'missing': 0, 'marked_missing': 0, 'restored': 0}
+    for d in db.get_all_downloads():
+        if d.get('status') != 'done':
+            continue
+        stats['checked'] += 1
+        exists = local_copy_exists(d)
+        stats['present' if exists else 'missing'] += 1
+        was_deleted = bool(d.get('file_deleted'))
+        if was_deleted == exists:
+            db.update_download_by_id(d['id'], file_deleted=not exists)
+            stats['restored' if exists else 'marked_missing'] += 1
+    return stats
+
+
+def _summarize_check_files(stats):
+    changes = []
+    if stats.get('marked_missing'):
+        changes.append(f"{stats['marked_missing']} marked missing")
+    if stats.get('restored'):
+        changes.append(f"{stats['restored']} found again")
+    head = f"{stats.get('present', 0)} of {stats.get('checked', 0)} on disk"
+    return f"{head}; {', '.join(changes)}" if changes else f"{head}; no changes"
+
+
 def _summarize_sync(stats):
     parts = []
     for key, label in (('generated', 'generated'), ('orphan_deleted', 'orphans removed'),
@@ -177,6 +211,11 @@ JOBS = {
         'label': 'Upgrade yt-dlp',
         'run': run_ytdlp_upgrade,
         'summarize': _summarize_ytdlp,
+    },
+    'check_files': {
+        'label': 'Check files on disk',
+        'run': run_check_files,
+        'summarize': _summarize_check_files,
     },
 }
 

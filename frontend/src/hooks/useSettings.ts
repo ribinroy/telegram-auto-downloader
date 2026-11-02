@@ -2,7 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   fetchMappings, createMapping, updateMapping, deleteMapping,
   fetchCookies, saveCookies,
-  getYtdlpVersion, upgradeYtdlp, syncThumbnails, fetchJobSchedules, saveJobSchedule,
+  getYtdlpVersion, upgradeYtdlp, syncThumbnails, checkFiles, fetchJobSchedules, saveJobSchedule,
   fetchUsers, syncUsers, updateUserRole,
   fetchBotQueries, saveBotQuery, deleteBotQuery, testBotQuery,
   fetchRenameRules, createRenameRule, updateRenameRule, deleteRenameRule,
@@ -65,6 +65,19 @@ export function useUpgradeYtdlp() {
 
 export function useSyncThumbnails() {
   return useMutation({ mutationFn: () => syncThumbnails() });
+}
+
+/** Flips downloads' "file deleted" flags, so every downloads list (and the
+ *  job's own last-run line) is stale afterwards. */
+export function useCheckFiles() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => checkFiles(),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ['downloads'] });
+      qc.invalidateQueries({ queryKey: qk.jobSchedules() });
+    },
+  });
 }
 
 // --- Users ---

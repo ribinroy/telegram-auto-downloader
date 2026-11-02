@@ -330,6 +330,7 @@ Live filesystem access - every call reads the disk, nothing is indexed or cached
 ### Settings
 - `GET/POST /api/settings/cookies` - yt-dlp cookies
 - `POST /api/jobs/sync-thumbnails` - Regenerate download thumbnails, clean orphans, and prune the file explorer's thumbnail cache
+- `POST /api/jobs/check-files` - Look on disk for every finished download's file/folder (`local_copy_exists`) and set `file_deleted` to match, both ways -> `{checked, present, missing, marked_missing, restored}` (job `check_files`, schedulable)
 - `GET /api/jobs/schedules` - Every job with its schedule, last outcome and next fire time (plus the server's `tz`)
 - `PUT /api/jobs/schedules/<job_id>` - `{enabled?, time? 'HH:MM', days?: [0-6]}` (Monday = 0)
 

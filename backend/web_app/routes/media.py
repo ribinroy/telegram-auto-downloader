@@ -163,6 +163,16 @@ class MediaRoutesMixin:
             except Exception as e:
                 return jsonify({"error": str(e)}), 500
 
+        @self.app.route("/api/jobs/check-files", methods=["POST"])
+        @token_required
+        def api_check_files():
+            """Re-check every finished download's file on disk and correct
+            `file_deleted` - same body the scheduler runs."""
+            try:
+                return jsonify(run_job('check_files'))
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
+
         # --- Job schedules ---------------------------------------------
 
         @self.app.route("/api/jobs/schedules", methods=["GET"])
