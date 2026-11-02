@@ -12,7 +12,7 @@ import { FileList, type SortKey, type ViewMode } from '../components/explorer/Fi
 import { FileContextMenu, type MenuItem } from '../components/explorer/FileContextMenu';
 import { FilePreviewModal } from '../components/explorer/FilePreviewModal';
 import { PropertiesModal } from '../components/explorer/PropertiesModal';
-import { TransfersModal, transferTitle } from '../components/explorer/TransfersModal';
+import { TransfersModal } from '../components/explorer/TransfersModal';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import {
   useFileRoots, useFileList, useFileSearch, useCreateFolder, useRenamePath,
@@ -20,7 +20,7 @@ import {
 } from '../hooks/useFiles';
 import {
   getFileDownloadUrl, type FileEntry, type FileOpResponse, type FileTransfer, isRemotePath,
-  isTransferActive, transferPercent,
+  isTransferActive, transferPercent, transferTitle,
 } from '../api/files';
 import { useQueryClient } from '@tanstack/react-query';
 import { formatBytes } from '../utils/format';
@@ -333,8 +333,6 @@ export function ExplorerPage() {
       }
     }
     if (finished) qc.invalidateQueries({ queryKey: ['files', 'list'] });
-    // reportTransfer only calls notify(); it has no state of its own
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [transfers, qc]);
 
   const reportTransfer = (t: FileTransfer) => {

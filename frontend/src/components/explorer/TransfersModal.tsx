@@ -4,17 +4,9 @@ import {
 } from 'lucide-react';
 import { formatBytes, formatTime } from '../../utils/format';
 import { useCancelTransfer, useDismissTransfer } from '../../hooks/useFiles';
-import { isTransferActive, transferPercent, type FileTransfer } from '../../api/files';
-
-const baseName = (p: string | null) => (p ? p.split('/').filter(Boolean).pop() ?? p : '');
-
-/** "Copying 3 items to Movies" / "Moved notes.txt to Docs". */
-export function transferTitle(t: FileTransfer): string {
-  const active = isTransferActive(t);
-  const verb = t.move ? (active ? 'Moving' : 'Moved') : (active ? 'Copying' : 'Copied');
-  const what = t.paths.length === 1 ? baseName(t.paths[0]) : `${t.paths.length} items`;
-  return `${verb} ${what} to ${baseName(t.dest) || t.dest}`;
-}
+import {
+  isTransferActive, transferPercent, transferTitle, pathBaseName as baseName, type FileTransfer,
+} from '../../api/files';
 
 const STATUS: Record<FileTransfer['status'], { label: string; cls: string; icon: React.ReactNode }> = {
   preparing: { label: 'Preparing', cls: 'text-cyan-300', icon: <Loader2 className="w-4 h-4 animate-spin text-cyan-400" /> },
@@ -32,7 +24,8 @@ function TransferCard({ t, onOpenDest }: { t: FileTransfer; onOpenDest: (path: s
   const pct = transferPercent(t);
   const status = STATUS[t.status];
   const filePct = t.current_file_size ? (t.current_file_done / t.current_file_size) * 100 : 0;
-  const elapsed = (t.finished_at ?? Date.now() / 1000) - t.started_at;
+  // Only shown once finished, so finished_at is set
+  const elapsed = (t.finished_at ?? t.started_at) - t.started_at;
 
   return (
     <div className="rounded-xl border border-slate-700/70 bg-slate-800/40 p-3">

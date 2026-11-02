@@ -175,6 +175,16 @@ export const deletePaths = (paths: string[], permanent = false) =>
 export const transferPaths = (paths: string[], dest: string, move: boolean) =>
   filesRequest<FileOpResponse>('/transfer', { paths, dest, move });
 
+export const pathBaseName = (p: string | null) => (p ? p.split('/').filter(Boolean).pop() ?? p : '');
+
+/** "Copying 3 items to Movies" / "Moved notes.txt to Docs". */
+export function transferTitle(t: FileTransfer): string {
+  const active = isTransferActive(t);
+  const verb = t.move ? (active ? 'Moving' : 'Moved') : (active ? 'Copying' : 'Copied');
+  const what = t.paths.length === 1 ? pathBaseName(t.paths[0]) : `${t.paths.length} items`;
+  return `${verb} ${what} to ${pathBaseName(t.dest) || t.dest}`;
+}
+
 export const fetchTransfers = () =>
   filesRequest<{ transfers: FileTransfer[] }>('/transfers');
 
