@@ -2,6 +2,8 @@
 download). No seedbox here: the remote side is FakeSFTP."""
 from contextlib import contextmanager
 
+from pathlib import Path
+
 import pytest
 
 from backend.vps_handler import VpsDownloader
