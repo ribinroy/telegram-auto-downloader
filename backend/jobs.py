@@ -173,7 +173,25 @@ def run_check_files():
         if was_deleted == exists:
             db.update_download_by_id(d['id'], file_deleted=not exists)
             stats['restored' if exists else 'marked_missing'] += 1
+        # Folder pulls finished before file counts were recorded: count them
+        # now, so the downloads list offers their per-file view.
+        if exists and d.get('downloaded_from') == 'vps' and d.get('file_count') is None:
+            count = _local_file_count(d)
+            if count:
+                db.update_download_by_id(d['id'], file_count=count)
     return stats
+
+
+def _local_file_count(download):
+    """Files under a download's local folder; None when it is a single file."""
+    import os
+    from backend.web_app.helpers import candidate_file_paths
+    for p in candidate_file_paths(download, download.get('file') or ''):
+        if p.is_dir():
+            return sum(len(names) for _root, _dirs, names in os.walk(p))
+        if p.exists():
+            return None
+    return None
 
 
 def _summarize_check_files(stats):

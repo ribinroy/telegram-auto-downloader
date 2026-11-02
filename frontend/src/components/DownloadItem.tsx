@@ -19,7 +19,8 @@ import {
   FolderOpen,
   Clock,
   Zap,
-  X
+  X,
+  Files,
 } from 'lucide-react';
 import ReactTimeAgo from 'react-time-ago';
 import { useNavigate } from 'react-router-dom';
@@ -29,6 +30,7 @@ import { ROUTES } from '../routes';
 import { formatBytes, formatTime, formatSpeed } from '../utils/format';
 import { ConfirmDialog } from './ConfirmDialog';
 import { VideoPlayerModal } from './VideoPlayerModal';
+import { TransferFilesModal } from './TransferFilesModal';
 import { Tooltip } from './Tooltip';
 import { checkVideoFile, getVideoStreamUrl, getThumbUrl } from '../api';
 
@@ -229,6 +231,9 @@ function parseAuthor(author: string | null): { displayName: string; tooltip: str
 
 export function DownloadItem({ download, onRetry, onStop, onPause, onResume, onDelete }: DownloadItemProps) {
   const [confirmAction, setConfirmAction] = useState<'stop' | 'delete' | null>(null);
+  // A VPS folder pull (multi-file torrent): its files open in a modal
+  const multiFile = download.downloaded_from === 'vps' && (download.file_count ?? 0) > 1;
+  const [filesOpen, setFilesOpen] = useState(false);
   const [videoPlayerOpen, setVideoPlayerOpen] = useState(false);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [checkingVideo, setCheckingVideo] = useState(false);
@@ -820,6 +825,17 @@ export function DownloadItem({ download, onRetry, onStop, onPause, onResume, onD
                 </a>
               </Tooltip>
             )}
+            {multiFile && (
+              <Tooltip content="See the files in this transfer">
+                <button
+                  onClick={() => setFilesOpen(true)}
+                  className="flex items-center gap-1 text-cyan-400 hover:text-cyan-300 transition-colors"
+                >
+                  <Files className="w-3 h-3" />
+                  <span>{download.file_count} files</span>
+                </button>
+              </Tooltip>
+            )}
             {download.author && (() => {
               const { displayName, tooltip } = parseAuthor(download.author);
               return (
@@ -873,6 +889,12 @@ export function DownloadItem({ download, onRetry, onStop, onPause, onResume, onD
                 </Tooltip>
               );
             })()}
+            {multiFile && (
+              <button onClick={() => setFilesOpen(true)} className="flex items-center gap-1 text-cyan-400">
+                <Files className="w-3 h-3" />
+                <span>{download.file_count}</span>
+              </button>
+            )}
             <span>#{download.id}</span>
             {download.created_at && (
               <div className="flex items-center gap-1">
@@ -1043,6 +1065,8 @@ export function DownloadItem({ download, onRetry, onStop, onPause, onResume, onD
         onCancel={() => setConfirmAction(null)}
         onExtraAction={handleDeleteWithFile}
       />
+
+      {filesOpen && <TransferFilesModal download={download} onClose={() => setFilesOpen(false)} />}
 
       {/* Video Player Modal */}
       {videoUrl && (

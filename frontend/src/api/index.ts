@@ -212,6 +212,24 @@ export async function revokeSession(sessionId: number): Promise<void> {
 
 export type DownloadFilter = 'all' | 'active' | 'on_disk';
 
+export type TransferFileState = 'done' | 'downloading' | 'partial' | 'pending' | 'on_disk';
+
+export interface TransferFiles {
+  /** live: the running transfer's own plan; vps: rebuilt over SFTP;
+   *  local: VPS unreachable, so only what is on the home server. */
+  source: 'live' | 'vps' | 'local';
+  error: string | null;
+  is_dir: boolean;
+  files: { path: string; size: number; local_size: number; state: TransferFileState }[];
+}
+
+export async function fetchTransferFiles(downloadId: number): Promise<TransferFiles> {
+  const response = await authFetch(`/api/downloads/${downloadId}/files`);
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.error || 'Failed to load the file list');
+  return body;
+}
+
 export interface FetchDownloadsOptions {
   search?: string;
   /** 'on_disk': finished downloads whose file is still on the home server */

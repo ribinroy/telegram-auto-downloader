@@ -1,6 +1,6 @@
 import { useInfiniteQuery, useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  fetchDownloads, fetchStats, fetchAuthors,
+  fetchDownloads, fetchStats, fetchAuthors, fetchTransferFiles,
   retryDownload, stopDownload, pauseDownload, resumeDownload, deleteDownload, downloadUrl,
   type FetchDownloadsOptions, type DownloadOptions,
 } from '../api';
@@ -9,6 +9,16 @@ import { qk } from '../api/queryKeys';
 const PAGE_SIZE = 30;
 
 export type DownloadFilters = Omit<FetchDownloadsOptions, 'offset' | 'limit'>;
+
+/** The files inside a VPS folder pull. Polled while it is still moving. */
+export function useTransferFiles(downloadId: number, live: boolean) {
+  return useQuery({
+    queryKey: qk.transferFiles(downloadId),
+    queryFn: () => fetchTransferFiles(downloadId),
+    staleTime: 0,
+    refetchInterval: live ? 3000 : false,
+  });
+}
 
 /** Paginated, infinite-scroll downloads list. Pages are flattened by the caller. */
 export function useDownloads(filters: DownloadFilters) {

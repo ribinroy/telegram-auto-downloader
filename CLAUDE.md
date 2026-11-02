@@ -141,6 +141,7 @@ Main Thread
 - `thumb_count`, `status_msg_id`
 - `dest_base` (destination folder a VPS transfer was started with, when it isn't derivable from the source spec - e.g. a torrent client's `local_dir`; a resume reads it back so it can't restart into the wrong folder)
 - `deleted_at` (soft delete), `file_deleted` (physical file removed)
+- `file_count` (files in a VPS folder pull - e.g. a multi-file torrent - set when the transfer plans its work, backfilled by the `check_files` job for older pulls; NULL for a single file)
 - `queue_position` (rank in the download queue while `waiting` *or* `downloading` - running ones keep a rank so a reorder can put a waiting one ahead of them; cleared when it leaves both), `format_id` (the yt-dlp format picked, so a queued or resumed download fetches that quality)
 - `created_at`, `updated_at`
 
@@ -199,6 +200,7 @@ Access/refresh token pair. Access tokens are short (`ACCESS_TOKEN_MINUTES`, defa
 - `GET /api/stats` - Aggregate statistics
 - `GET /api/authors` - Distinct author list
 - `GET /api/analytics` - Time-series & breakdown analytics
+- `GET /api/downloads/<id>/files` - The files inside a VPS pull and how far each is locally: `{source: live|vps|local, is_dir, error, files: [{path, size, local_size, state: done|downloading|partial|pending|on_disk}]}` (`VpsDownloader.file_listing()`). A running transfer answers from its own plan (`self.plans`, which knows the file being written); otherwise the plan is rebuilt over the pooled SFTP session; with the VPS unreachable only the local side is listed (`on_disk`). `_plan()` is shared with the transfer itself, so the view and the pull can't disagree about where a file lands. UI: a "N files" link on a VPS row with `file_count > 1` opens `TransferFilesModal` (unfinished files first, filter box past 8, polled every 3s while downloading); `download:files` `{message_id, file_count}` tells the list as soon as a pull has counted its files
 - `POST /api/retry` - Restart a failed/stopped download from the bytes on disk (via `backend/resume.py`; 400/404/500 carry the reason)
 - `POST /api/stop` - Stop active download
 - `POST /api/pause` / `POST /api/resume` - Telegram only
@@ -822,6 +824,13 @@ calls `logsafe.install(LOG_FILE)`.
     to that field - it isn't a notification.
 
 ## Tests
+
+**Workflow for every change** (the user's standing instruction):
+1. Build the **whole feature** - backend, frontend, realtime, docs - not a slice of it.
+2. Then run both suites (`pytest`, `npm test`, plus `tsc -b --noEmit`).
+3. For each failure, decide whether the change explains it. If it does, update the test to the new behaviour. If it doesn't, the logic is wrong: fix the code, not the test, so tests never start failing for no clear reason.
+4. Only then add or extend tests for the new behaviour, and run everything again.
+5. Update this file.
 
 ```bash
 ./venv/bin/python -m pytest      # backend  (tests/)

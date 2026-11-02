@@ -84,6 +84,7 @@ export function useRealtime(cb: RealtimeCallbacks = {}) {
         onStatusChange?.(s, dl);
       },
       onMeta: (m) => mergeById(m.message_id, { file_meta: m.file_meta }),
+      onFileCount: (f) => mergeById(f.message_id, { file_count: f.file_count }),
       onStats: (stats) => qc.setQueryData(qk.stats(), stats),
       onQueueChanged: refreshQueue,
       onConnect: () => {

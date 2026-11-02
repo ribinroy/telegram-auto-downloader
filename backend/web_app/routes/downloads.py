@@ -130,6 +130,20 @@ class DownloadRoutesMixin:
             self._update_prometheus_metrics()
             return Response(metrics.get_metrics(), mimetype=metrics.get_content_type())
 
+        @self.app.route("/api/downloads/<int:download_id>/files", methods=["GET"])
+        @token_required
+        def download_files(download_id):
+            """The files inside a VPS pull and how far each one is - the
+            per-file view of a multi-file (torrent folder) transfer."""
+            download = get_db().get_download_by_id(download_id)
+            if not download:
+                return jsonify({"error": "Download not found"}), 404
+            if download.get("downloaded_from") != "vps":
+                return jsonify({"error": "Only VPS transfers have a file list"}), 400
+            if not self.vps_downloader:
+                return jsonify({"error": "VPS downloader not available"}), 503
+            return jsonify(self.vps_downloader.file_listing(download))
+
         @self.app.route("/api/retry", methods=["POST"])
         @token_required
         def api_retry():

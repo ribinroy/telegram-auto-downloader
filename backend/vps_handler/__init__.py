@@ -51,6 +51,7 @@ class VpsDownloader:
         # pull can reach a file that a per-file pull of the same torrent is
         # still fetching; two writers appending to one partial would corrupt it.
         self.writing = {}
+        self.plans = {}  # message_id -> running transfer's _plan() + 'current' file
         self.writing_lock = threading.Lock()
         # autoSync baseline: folder path -> set of filenames already accounted for
         self._seen = {}
@@ -90,6 +91,14 @@ class VpsDownloader:
             web_app = get_web_app()
             if web_app:
                 web_app.emit_stats()
+
+    def emit_file_count(self, message_id, file_count):
+        """A folder pull now knows how many files it holds - the list shows
+        its per-file view from this, without waiting for a refetch."""
+        from backend.web_app import get_socketio
+        socketio = get_socketio()
+        if socketio:
+            socketio.emit('download:files', {'message_id': message_id, 'file_count': file_count})
 
     def emit_new_download(self, download):
         from backend.web_app import get_socketio, get_web_app
@@ -222,65 +231,156 @@ class VpsDownloader:
             else:
                 out.append((full, attr.st_size or 0))
 
-    def _download(self, remote_path: str, message_id: str, dest: str = None):
+    def _plan(self, sftp, remote_path: str, message_id: str, dest: str = None) -> dict:
+        """Work out what a pull of `remote_path` consists of: every remote file
+        with its size and the local path it lands at. Shared by the transfer
+        itself and the per-file view, so the two can't disagree about where a
+        file goes. -> {files: [(remote, size, local)], is_dir, src}"""
         from backend.utils import resolve_spec, spec_folder
+        db = get_db()
+        # Destination base: an explicit `dest` (e.g. a torrent client's
+        # configured local folder), else the watched folder's destination
+        # (or the 'vps' source mapping), else DOWNLOAD_DIR/VPS
+        if dest:
+            base = Path(dest)
+        else:
+            spec = resolve_spec('vps', path=remote_path)
+            base = spec_folder(spec, DOWNLOAD_DIR / "VPS")
+
+        # Place files relative to the requested item's parent dir, so a file
+        # /home/user/xyz lands at <base>/xyz and a folder /home/user/dir at
+        # <base>/dir/... — not under the full remote path.
+        strip_prefix = posixpath.dirname(remote_path.rstrip("/"))
+
+        # `src` is where the bytes are read from. A file pulled from a torrent
+        # that hasn't finished is recorded by its final path but still sits
+        # in the client's temp dir - so on "no such file", look there.
+        src = remote_path
+        try:
+            st = sftp.stat(remote_path)
+        except FileNotFoundError:
+            from backend.web_app.torrent import locate_torrent_file
+            src = locate_torrent_file(remote_path, sftp)
+            if not src:
+                raise
+            st = sftp.stat(src)
+            strip_prefix = posixpath.dirname(src.rstrip("/"))
+        is_dir = stat_module.S_ISDIR(st.st_mode)
+
+        # The record's name already carries any rewrite from start_download;
+        # honour it for single files (a directory pull keeps its tree, and
+        # the rule applies to the top-level folder name).
+        record = db.get_download_by_message_id(message_id) or {}
+        local_name = record.get('file') or None
+        if local_name == posixpath.basename(remote_path.rstrip('/')):
+            local_name = None
+
+        remote_files = []  # (remote_file, size)
+        if is_dir:
+            self._walk(sftp, src, remote_files)
+        else:
+            remote_files.append((src, st.st_size or 0))
+        files = [(rfile, rsize, self._local_destination(rfile, base, strip_prefix, local_name))
+                 for rfile, rsize in remote_files]
+        root = self._local_destination(src, base, strip_prefix, local_name)
+        return {'files': files, 'is_dir': is_dir, 'src': src, 'local_name': local_name, 'root': root}
+
+    def file_listing(self, download: dict) -> dict:
+        """Every file of a VPS pull with how far along it is locally - the
+        per-file view of a folder (multi-file torrent) transfer.
+
+        A running transfer answers from its own plan (no SFTP round trip, and
+        it knows which file it is on). Otherwise the plan is rebuilt over the
+        pooled SFTP session, so a stopped or failed pull still shows what is
+        left. With the VPS unreachable - or the files gone from it - only the
+        local side can be listed, and every file there reads as `on_disk`.
+
+        -> {source: live|vps|local, is_dir, error?, files: [{path, size,
+            local_size, state: done|downloading|partial|pending|on_disk}]}"""
+        message_id = download.get('message_id')
+        plan = self.plans.get(message_id)
+        source, error = 'live', None
+        if plan is None:
+            source = 'vps'
+            try:
+                from backend.web_app.vps import vps_session
+                with vps_session() as (_client, sftp):
+                    plan = self._plan(sftp, download.get('url') or '', message_id, download.get('dest_base'))
+                if plan['is_dir'] and download.get('file_count') != len(plan['files']):
+                    get_db().update_download_by_message_id(message_id, file_count=len(plan['files']))
+            except Exception as e:
+                plan, error = None, str(e) or e.__class__.__name__
+        if plan is None:
+            return {'source': 'local', 'error': error, **self._local_listing(download)}
+
+        running = source == 'live'
+        current = plan.get('current') if running else None
+        root = plan['root']
+        out = []
+        for _rfile, size, lp in plan['files']:
+            try:
+                local_size = lp.stat().st_size if lp.exists() else 0
+            except OSError:
+                local_size = 0
+            if lp.exists() and local_size >= size:
+                state = 'done'
+            elif current is not None and lp == current:
+                state = 'downloading'
+            elif local_size > 0:
+                state = 'partial'
+            else:
+                state = 'pending'
+            rel = lp.relative_to(root).as_posix() if plan['is_dir'] else lp.name
+            out.append({'path': rel, 'size': size, 'local_size': local_size, 'state': state})
+        return {'source': source, 'error': None, 'is_dir': plan['is_dir'], 'files': out}
+
+    def _local_listing(self, download: dict) -> dict:
+        """What of a pull is on the home server, without the VPS to compare
+        against: sizes are local, so nothing can be called partial."""
+        from backend.web_app.helpers import candidate_file_paths
+        name = download.get('file') or ''
+        root = next((p for p in candidate_file_paths(download, name) if p.exists()), None) if name else None
+        if root is None:
+            return {'is_dir': bool(download.get('file_count')), 'files': []}
+        if root.is_file():
+            size = root.stat().st_size
+            return {'is_dir': False, 'files': [
+                {'path': root.name, 'size': size, 'local_size': size, 'state': 'on_disk'}]}
+        files = []
+        for dirpath, _dirs, names in os.walk(root):
+            for n in sorted(names):
+                p = Path(dirpath) / n
+                try:
+                    size = p.stat().st_size
+                except OSError:
+                    continue
+                files.append({'path': p.relative_to(root).as_posix(), 'size': size,
+                              'local_size': size, 'state': 'on_disk'})
+        files.sort(key=lambda f: f['path'])
+        return {'is_dir': True, 'files': files}
+
+    def _download(self, remote_path: str, message_id: str, dest: str = None):
         db = get_db()
         start_time = datetime.now()
         client = None
         try:
-            # Destination base: an explicit `dest` (e.g. a torrent client's
-            # configured local folder), else the watched folder's destination
-            # (or the 'vps' source mapping), else DOWNLOAD_DIR/VPS
-            if dest:
-                base = Path(dest)
-            else:
-                spec = resolve_spec('vps', path=remote_path)
-                base = spec_folder(spec, DOWNLOAD_DIR / "VPS")
-
-            # Place files relative to the requested item's parent dir, so a file
-            # /home/user/xyz lands at <base>/xyz and a folder /home/user/dir at
-            # <base>/dir/... — not under the full remote path.
-            strip_prefix = posixpath.dirname(remote_path.rstrip("/"))
-
             client, sftp = self._open_sftp()
             self.clients[message_id] = client
-            # `src` is where the bytes are read from. A file pulled from a torrent
-            # that hasn't finished is recorded by its final path but still sits
-            # in the client's temp dir - so on "no such file", look there.
-            src = remote_path
-            try:
-                st = sftp.stat(remote_path)
-            except FileNotFoundError:
-                from backend.web_app.torrent import locate_torrent_file
-                src = locate_torrent_file(remote_path, sftp)
-                if not src:
-                    raise
-                st = sftp.stat(src)
-                strip_prefix = posixpath.dirname(src.rstrip("/"))
-            is_dir = stat_module.S_ISDIR(st.st_mode)
-
-            # The record's name already carries any rewrite from start_download;
-            # honour it for single files (a directory pull keeps its tree, and
-            # the rule applies to the top-level folder name).
-            record = db.get_download_by_message_id(message_id) or {}
-            local_name = record.get('file') or None
-            if local_name == posixpath.basename(remote_path.rstrip('/')):
-                local_name = None
-
-            # Build the list of files to transfer
-            files = []  # (remote_file, size)
+            plan = self._plan(sftp, remote_path, message_id, dest)
+            is_dir, local_name = plan['is_dir'], plan['local_name']
+            files = plan['files']  # (remote_file, size, local_path)
+            total_bytes = sum(size for _, size, _ in files)
+            plan['current'] = None
+            self.plans[message_id] = plan
             if is_dir:
-                self._walk(sftp, src, files)
-            else:
-                files.append((src, st.st_size or 0))
-            total_bytes = sum(s for _, s in files)
+                db.update_download_by_message_id(message_id, file_count=len(files))
+                self.emit_file_count(message_id, len(files))
 
             # Resume: count bytes already present locally. Files already whole
             # are skipped by _transfer_file; partial ones continue from their size.
             transferred = [0]
             counted = {}  # local path -> bytes of it already in `transferred`
-            for rfile, rsize in files:
-                lp = self._local_destination(rfile, base, strip_prefix, local_name)
+            for rfile, rsize, lp in files:
                 if lp.exists():
                     ls = lp.stat().st_size
                     counted[lp] = min(ls, rsize) if rsize else ls
@@ -308,10 +408,10 @@ class VpsDownloader:
                 )
                 self.emit_progress(message_id, progress, transferred[0], total_bytes, speed, pending_time)
 
-            for rfile, rsize in files:
+            for rfile, rsize, lp in files:
                 if message_id in self.cancelled:
                     raise _Cancelled()
-                lp = self._local_destination(rfile, base, strip_prefix, local_name)
+                plan['current'] = lp
                 lp.parent.mkdir(parents=True, exist_ok=True)
                 if self._claim(lp, message_id):
                     # Another transfer finished (or advanced) this file while we
@@ -365,6 +465,7 @@ class VpsDownloader:
                 except Exception:
                     pass
             self.clients.pop(message_id, None)
+            self.plans.pop(message_id, None)
             self.cancelled.discard(message_id)
             self.threads.pop(message_id, None)
             self.download_tasks.pop(message_id, None)

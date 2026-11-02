@@ -62,6 +62,10 @@ class Download(Base):
     # yt-dlp format the user picked, so a queued or resumed download fetches
     # the same quality instead of falling back to the default.
     format_id = Column(String(200), nullable=True)
+    # Files in a VPS folder pull (e.g. a multi-file torrent), set when the
+    # transfer plans its work; NULL for a single file or when not yet known.
+    # The downloads list offers the per-file view on this.
+    file_count = Column(Integer, nullable=True)
 
     def to_dict(self):
         """Convert model to dictionary"""
@@ -90,6 +94,7 @@ class Download(Base):
             'dest_base': self.dest_base,
             'queue_position': self.queue_position,
             'format_id': self.format_id,
+            'file_count': self.file_count,
         }
 
 
@@ -439,6 +444,9 @@ class DatabaseManager:
                 conn.commit()
             if 'format_id' not in columns:
                 conn.execute(text('ALTER TABLE downloads ADD COLUMN format_id VARCHAR(200)'))
+                conn.commit()
+            if 'file_count' not in columns:
+                conn.execute(text('ALTER TABLE downloads ADD COLUMN file_count INTEGER'))
                 conn.commit()
 
             # Users: roles + Telegram identity (bot interaction tracking)
