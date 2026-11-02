@@ -106,8 +106,21 @@ class VpsDownloader:
         remote_path = (remote_path or "").strip()
         if not remote_path:
             return {"error": "remote path is required"}
-        if db.vps_download_exists(remote_path):
-            return {"error": "This item is already downloaded"}
+        existing = db.get_vps_downloads_for_path(remote_path)
+        if existing:
+            from backend.web_app.helpers import local_copy_exists
+            if any(d.get("status") != "done" or local_copy_exists(d) for d in existing):
+                return {"error": "This item is already downloaded"}
+            # Pulled before, but the local copy has been deleted since: retire
+            # the stale record(s) so the new pull is the only row for this path.
+            # (autoSync never gets here - it skips any path with a live record,
+            # so deleting a file locally doesn't make it come back on its own.)
+            from backend.web_app import get_web_app
+            web_app = get_web_app()
+            for d in existing:
+                db.delete_download_by_id(d["id"])
+                if web_app:
+                    web_app.emit_deleted(d.get("message_id"))
 
         message_id = generate_uuid()
         filename = posixpath.basename(remote_path.rstrip("/")) or remote_path

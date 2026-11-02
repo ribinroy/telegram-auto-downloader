@@ -227,6 +227,8 @@ def test_listing_an_unconfigured_client_is_not_an_error(client, db, auth):
 
 def test_listing_annotates_each_torrent_with_its_downlee_transfer(
         client, db, configured, monkeypatch):
+    from backend.config import DOWNLOAD_DIR
+    (DOWNLOAD_DIR / 'VPS' / 'Show.S01').mkdir(parents=True, exist_ok=True)
     db.add_download(file='Show.S01', status='done', downloaded_from='vps',
                     message_id='m-1', url='/dl/Show.S01', progress=100)
     monkeypatch.setattr(troute, 'torrent_list', lambda c: [
@@ -347,3 +349,51 @@ def test_details_annotate_each_file_with_its_own_pull(client, db, configured, mo
                        headers=configured).get_json()['files']
     assert files[0]['downlee']['message_id'] == 'm-9'
     assert files[1]['downlee'] is None
+
+
+def test_a_pull_whose_local_copy_was_deleted_reads_as_not_pulled(
+        client, db, configured, monkeypatch, tmp_path):
+    kept = tmp_path / 'kept'
+    (kept / 'Show' / 'S01').mkdir(parents=True)
+    (kept / 'Show' / 'S01' / 'ep01.mkv').write_bytes(b'x')
+    db.add_download(file='ep01.mkv', status='done', downloaded_from='vps', message_id='m-1',
+                    url='/dl/Show/S01/ep01.mkv', progress=100, dest_base=str(kept / 'Show' / 'S01'))
+    # Pulled, then deleted locally
+    db.add_download(file='sample.mkv', status='done', downloaded_from='vps', message_id='m-2',
+                    url='/dl/Show/sample.mkv', progress=100, dest_base=str(tmp_path / 'gone'))
+    monkeypatch.setattr(troute, 'torrent_details', lambda c, h: _details())
+    files = client.get('/api/torrent/details?client=qbittorrent&hash=h1',
+                       headers=configured).get_json()['files']
+    assert files[0]['downlee']['message_id'] == 'm-1'
+    assert files[1]['downlee'] is None
+
+
+def test_a_deleted_local_copy_can_be_pulled_again(db, tmp_path, monkeypatch):
+    from backend.vps_handler import VpsDownloader
+    old = db.add_download(file='ep01.mkv', status='done', downloaded_from='vps', message_id='m-old',
+                          url='/dl/ep01.mkv', progress=100, dest_base=str(tmp_path))
+    vps = VpsDownloader({})
+    spawned = []
+    monkeypatch.setattr(vps, '_spawn', lambda *a: spawned.append(a))
+
+    # Still on disk: refused, as before
+    (tmp_path / 'ep01.mkv').write_bytes(b'x')
+    assert vps.start_download('/dl/ep01.mkv', dest=str(tmp_path))['error']
+
+    # Deleted locally: the stale record is retired and a fresh pull starts
+    (tmp_path / 'ep01.mkv').unlink()
+    res = vps.start_download('/dl/ep01.mkv', dest=str(tmp_path))
+    assert not res.get('error')
+    assert spawned
+    live = db.get_vps_downloads_for_path('/dl/ep01.mkv')
+    assert [d['message_id'] for d in live] == [res['message_id']]
+    assert old['message_id'] not in [d['message_id'] for d in live]
+
+
+def test_an_unfinished_pull_still_blocks_a_second_one(db, tmp_path, monkeypatch):
+    from backend.vps_handler import VpsDownloader
+    db.add_download(file='ep01.mkv', status='failed', downloaded_from='vps', message_id='m-old',
+                    url='/dl/ep01.mkv', progress=30, dest_base=str(tmp_path))
+    vps = VpsDownloader({})
+    monkeypatch.setattr(vps, '_spawn', lambda *a: None)
+    assert vps.start_download('/dl/ep01.mkv', dest=str(tmp_path))['error']
