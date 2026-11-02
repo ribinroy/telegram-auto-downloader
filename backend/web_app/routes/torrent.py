@@ -266,7 +266,41 @@ class TorrentRoutesMixin:
                 "download_dir": download_dir or None,
             })
 
-        def _annotate_downlee_transfers(torrents):
+        def _local_base(client, remote):
+            """The home-server folder a pull of `remote` lands under: the
+            client's `local_dir`, else the 'vps' spec for that path - the same
+            choice the VPS handler and the per-file pull make."""
+            from backend.config import DOWNLOAD_DIR
+            from backend.utils import resolve_spec, spec_folder
+            local_dir = ((read_torrent_settings().get(client) or {}).get("local_dir") or "").strip()
+            if local_dir:
+                return Path(local_dir)
+            return spec_folder(resolve_spec('vps', path=remote), DOWNLOAD_DIR / "VPS")
+
+        def _local_size(path):
+            """Bytes on the home server at `path` (a file, or a folder summed)."""
+            try:
+                if path.is_file():
+                    return path.stat().st_size
+                if path.is_dir():
+                    total = 0
+                    for root, _dirs, names in os.walk(path):
+                        for n in names:
+                            try:
+                                total += os.path.getsize(os.path.join(root, n))
+                            except OSError:
+                                pass
+                    return total
+            except OSError:
+                pass
+            return 0
+
+        # Already on the home server, though no transfer record says so - pulled
+        # as part of the whole torrent, or a pull whose record is gone. Shaped
+        # like a finished transfer so the UI shows it as downloaded.
+        ON_DISK = {"id": None, "message_id": None, "status": "done", "progress": 100, "on_disk": True}
+
+        def _annotate_downlee_transfers(torrents, client):
             """Tag each torrent with the VPS->DownLee transfer that already pulled it.
 
             The UI reads this to show "Downloaded" instead of offering the pull
@@ -291,6 +325,12 @@ class TorrentRoutesMixin:
                 on_disk = posixpath.basename(path.rstrip("/"))
                 dl = by_path.get(path) or by_name.get(on_disk) or by_name.get(name)
                 t["downlee"] = _downlee_block(dl)
+                # No transfer for the whole torrent, but every byte may already
+                # be here - its files pulled one by one, say.
+                size = t.get("total_size") or 0
+                if (t["downlee"] is None and (t.get("percent_done") or 0) >= 100 and size
+                        and on_disk and _local_size(_local_base(client, path) / on_disk) >= size):
+                    t["downlee"] = dict(ON_DISK)
             return torrents
 
         def _downlee_block(dl):
@@ -321,7 +361,7 @@ class TorrentRoutesMixin:
                 torrents = torrent_list(client)
             except ValueError as e:
                 return jsonify({"configured": True, "error": str(e)}), 502
-            return jsonify({"configured": True, "torrents": _annotate_downlee_transfers(torrents)})
+            return jsonify({"configured": True, "torrents": _annotate_downlee_transfers(torrents, client)})
 
         @self.app.route("/api/torrent/details", methods=["GET"])
         @token_required
@@ -349,8 +389,30 @@ class TorrentRoutesMixin:
                     by_path.setdefault(d["url"], d)
             dl_dir = details["torrent"].get("download_dir") or ""
             for f in details["files"]:
-                f["downlee"] = _downlee_block(by_path.get(_file_remote_path(dl_dir, f["path"])))
+                remote = _file_remote_path(dl_dir, f["path"])
+                f["downlee"] = _downlee_block(by_path.get(remote))
+                if f["downlee"] is None and _file_on_disk(client, remote, f):
+                    f["downlee"] = dict(ON_DISK)
             return jsonify(details)
+
+        def _file_local_path(client, remote, f):
+            """Where a torrent file lands locally: <base>/<torrent folder>/<sub
+            dirs>/<file> - the same place for a per-file and a whole-torrent
+            pull. None for a path that would climb out of the base."""
+            parts = (f.get("path") or "").split("/")
+            if not f.get("path") or f["path"].startswith("/") or any(p in ("", ".", "..") for p in parts):
+                return None
+            return _local_base(client, remote).joinpath(*parts)
+
+        def _file_on_disk(client, remote, f):
+            """The whole file is already on the home server (a shorter one is a
+            partial, which a pull resumes)."""
+            size = f.get("size") or 0
+            local = _file_local_path(client, remote, f)
+            try:
+                return bool(size and local and local.is_file() and local.stat().st_size >= size)
+            except OSError:
+                return False
 
         def _file_remote_path(download_dir, path):
             """Where one of a torrent's files sits on the VPS. Both clients
@@ -376,7 +438,11 @@ class TorrentRoutesMixin:
             locate_torrent_file), so a resume works on both sides of the move.
             An SFTP read already open survives the move (the client renames,
             or copies and unlinks - an open handle keeps the old inode).
-            -> {started: [{index, id, message_id}], errors: [{index, error}]}"""
+            A file already complete on the home server is not pulled again: it
+            comes back in `skipped` (and reads as downloaded in details). A
+            partial one is pulled, which resumes from the bytes already there.
+            -> {started: [{index, id, message_id}], skipped: [{index}],
+                errors: [{index, error}]}"""
             if not self.vps_downloader:
                 return jsonify({"error": "VPS downloader not available"}), 503
             data = request.json or {}
@@ -404,7 +470,7 @@ class TorrentRoutesMixin:
             local_dir = ((read_torrent_settings().get(client) or {}).get("local_dir") or "").strip()
             temp_dirs = torrent_temp_dirs(client, t)
             files = {f["index"]: f for f in details["files"]}
-            started, errors = [], []
+            started, skipped, errors = [], [], []
             try:
                 ssh, sftp = open_vps_sftp()
             except Exception as e:
@@ -440,6 +506,11 @@ class TorrentRoutesMixin:
                 if not f.get("path") or f["path"].startswith("/") or any(p in ("", ".", "..") for p in parts):
                     errors.append({"index": index, "error": "Unsafe file path"})
                     continue
+                # Already whole on the home server: nothing to fetch, whatever
+                # the VPS side looks like now
+                if _file_on_disk(client, _file_remote_path(dl_dir, f["path"]), f):
+                    skipped.append({"index": index})
+                    continue
                 if not f.get("wanted") or (f.get("percent_done") or 0) < 100:
                     errors.append({"index": index, "error": "This file isn't downloaded on the VPS"})
                     continue
@@ -455,7 +526,8 @@ class TorrentRoutesMixin:
                     errors.append({"index": index, "error": result["error"]})
                 else:
                     started.append({"index": index, "id": result.get("id"), "message_id": result.get("message_id")})
-            return jsonify({"started": started, "errors": errors}), 200 if started or not errors else 400
+            return jsonify({"started": started, "skipped": skipped, "errors": errors}), \
+                200 if started or skipped or not errors else 400
 
         @self.app.route("/api/torrent/rename", methods=["POST"])
         @token_required

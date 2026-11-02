@@ -389,7 +389,7 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
           <>
           {/* DownLee transfer: already pulled, in flight, retryable, or offered. */}
           {done && dlDone && (
-            <Tooltip content="Already downloaded to DownLee" position="top">
+            <Tooltip content={transfer?.on_disk ? "Already on DownLee (files found on disk)" : "Already downloaded to DownLee"} position="top">
               <span className="flex items-center gap-1.5 py-1.5 px-2.5 rounded-lg bg-green-500/15 text-green-400 border border-green-500/30 cursor-default">
                 <CheckCircle className="w-4 h-4" />
               </span>
@@ -406,7 +406,7 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
           {done && !dlDone && !dlRunning && dlRetryable && (
             <Tooltip content={`Transfer to DownLee ${dlStatus} — retry`} position="top">
               <button
-                onClick={() => onRetry(transfer!.id)}
+                onClick={() => { if (transfer?.id != null) onRetry(transfer.id); }}
                 className="flex items-center gap-1.5 py-1.5 px-2.5 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 transition-colors"
               >
                 <RotateCw className="w-4 h-4" />

@@ -250,10 +250,13 @@ export function TorrentDetailsModal({ client, hash, name, pulled = false, onClos
   const runPull = (indices: number[]) => {
     if (indices.length === 0) return;
     pullFiles.mutate(indices, {
-      onSuccess: ({ started, errors }) => {
+      onSuccess: ({ started, skipped, errors }) => {
         setRequested(prev => new Set([...prev, ...started.map(s => s.index)]));
         if (started.length) {
           notify({ type: 'success', title: 'Downloading to DownLee', message: `${started.length} file${started.length !== 1 ? 's' : ''}` });
+        }
+        if (skipped.length) {
+          notify({ type: 'info', title: 'Already on DownLee', message: `${skipped.length} file${skipped.length !== 1 ? 's' : ''} skipped` });
         }
         if (errors.length) {
           notify({ type: 'error', title: "Couldn't start the download", message: errors.length === 1 ? errors[0].error : `${errors.length} files: ${errors[0].error}` });

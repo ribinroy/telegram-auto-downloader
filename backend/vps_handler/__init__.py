@@ -47,6 +47,11 @@ class VpsDownloader:
         self.threads = {}      # message_id -> threading.Thread
         self.clients = {}      # message_id -> active transfer's SSHClient (for forced abort)
         self.cancelled = set()  # message_ids requested to stop
+        # local file -> message_id of the transfer writing it. A whole-torrent
+        # pull can reach a file that a per-file pull of the same torrent is
+        # still fetching; two writers appending to one partial would corrupt it.
+        self.writing = {}
+        self.writing_lock = threading.Lock()
         # autoSync baseline: folder path -> set of filenames already accounted for
         self._seen = {}
         self._seen_lock = threading.Lock()
@@ -270,13 +275,16 @@ class VpsDownloader:
                 files.append((src, st.st_size or 0))
             total_bytes = sum(s for _, s in files)
 
-            # Resume: count bytes already present locally
+            # Resume: count bytes already present locally. Files already whole
+            # are skipped by _transfer_file; partial ones continue from their size.
             transferred = [0]
+            counted = {}  # local path -> bytes of it already in `transferred`
             for rfile, rsize in files:
                 lp = self._local_destination(rfile, base, strip_prefix, local_name)
                 if lp.exists():
                     ls = lp.stat().st_size
-                    transferred[0] += min(ls, rsize) if rsize else ls
+                    counted[lp] = min(ls, rsize) if rsize else ls
+                    transferred[0] += counted[lp]
 
             state = {'last_update': 0.0, 'last_bytes': transferred[0], 'last_time': start_time.timestamp()}
 
@@ -305,7 +313,17 @@ class VpsDownloader:
                     raise _Cancelled()
                 lp = self._local_destination(rfile, base, strip_prefix, local_name)
                 lp.parent.mkdir(parents=True, exist_ok=True)
-                self._transfer_file(sftp, rfile, lp, rsize, bump)
+                if self._claim(lp, message_id):
+                    # Another transfer finished (or advanced) this file while we
+                    # waited: count what it wrote, then fetch only what's left.
+                    now_ls = lp.stat().st_size if lp.exists() else 0
+                    now_ls = min(now_ls, rsize) if rsize else now_ls
+                    if now_ls > counted.get(lp, 0):
+                        bump(now_ls - counted.get(lp, 0))
+                try:
+                    self._transfer_file(sftp, rfile, lp, rsize, bump)
+                finally:
+                    self._release(lp, message_id)
 
             sftp.close()
 
@@ -350,6 +368,28 @@ class VpsDownloader:
             self.cancelled.discard(message_id)
             self.threads.pop(message_id, None)
             self.download_tasks.pop(message_id, None)
+
+    def _claim(self, local: Path, message_id: str) -> bool:
+        """Take the right to write `local`, waiting while another transfer
+        holds it. Returns whether it had to wait. Raises _Cancelled if this
+        download is stopped meanwhile."""
+        key = str(local)
+        waited = False
+        while True:
+            with self.writing_lock:
+                owner = self.writing.get(key)
+                if owner is None or owner == message_id or owner not in self.threads:
+                    self.writing[key] = message_id
+                    return waited
+            if message_id in self.cancelled:
+                raise _Cancelled()
+            waited = True
+            time.sleep(1)
+
+    def _release(self, local: Path, message_id: str):
+        with self.writing_lock:
+            if self.writing.get(str(local)) == message_id:
+                self.writing.pop(str(local), None)
 
     def _transfer_file(self, sftp, remote, local: Path, rsize: int, bump):
         """Copy a remote file to local, resuming from the local file's size.

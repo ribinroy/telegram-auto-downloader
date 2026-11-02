@@ -969,8 +969,10 @@ export interface TorrentStatus {
   /** Running ahead of the client's queue. null = Transmission, which has no
    *  persistent forced flag, so "not forced" can't be claimed either way. */
   force_start: boolean | null;
-  /** The VPS->DownLee transfer that already pulled this torrent, if any. */
-  downlee: { id: number; message_id: string | null; status: string | null; progress: number } | null;
+  /** The VPS->DownLee transfer that already pulled this torrent, if any.
+   *  `on_disk` (id null): no transfer record, but every byte is already on the
+   *  home server - e.g. its files were pulled one by one. */
+  downlee: { id: number | null; message_id: string | null; status: string | null; progress: number; on_disk?: boolean } | null;
 }
 
 export interface TorrentFile {
@@ -1050,7 +1052,12 @@ export async function setTorrentFilePriority(
 /** Pull single files of a finished torrent to DownLee, each as its own VPS download. */
 export async function downloadTorrentFiles(
   client: TorrentClient, hash: string, indices: number[],
-): Promise<{ started: { index: number; id: number; message_id: string }[]; errors: { index: number; error: string }[] }> {
+): Promise<{
+  started: { index: number; id: number; message_id: string }[];
+  /** Already whole on the home server - not pulled again. */
+  skipped: { index: number }[];
+  errors: { index: number; error: string }[];
+}> {
   const response = await authFetch('/api/torrent/files/download', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1058,7 +1065,7 @@ export async function downloadTorrentFiles(
   });
   const body = await response.json().catch(() => ({}));
   if (!response.ok && !body.errors) throw new Error(body.error || 'Failed to start the download to DownLee');
-  return { started: body.started ?? [], errors: body.errors ?? [] };
+  return { started: body.started ?? [], skipped: body.skipped ?? [], errors: body.errors ?? [] };
 }
 
 export async function fetchTorrentList(client: TorrentClient): Promise<{ configured: boolean; torrents?: TorrentStatus[]; error?: string }> {
