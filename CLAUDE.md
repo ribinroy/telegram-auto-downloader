@@ -81,6 +81,7 @@ Main Thread
 |  |- utils/__init__.py             # Helpers (resolve_spec, encryption, MIME types)
 |  |- files.py                      # Filesystem service for the file explorer (mounts, listing, ops, thumbs)
 |  |- remote_files.py               # The VPS as a second explorer drive, over SFTP (`vps:` paths)
+|  |- file_transfers.py             # Background copy/move jobs for the explorer (progress, cancel)
 |  |- jobs.py                       # Maintenance job bodies + schedule store + JobScheduler thread
 |  |- logsafe.py                    # Log redaction filter + rotating, owner-only log handler
 |  |- netwatch.py                   # Connectivity probe + stall sweep -> resumes interrupted downloads
@@ -320,6 +321,7 @@ Live filesystem access - every call reads the disk, nothing is indexed or cached
 - `GET /api/files/roots` - Sidebar places, grouped `drive` / `folder` / `configured`: every real mount from `/proc/mounts` with live capacity, then Home + `DOWNLOAD_DIR`, then DownLee's own destination folders (source mappings, VPS watch-folder destinations, torrent `local_dir`); `?include_hidden=true` includes secured ones
 - `POST /api/files/list` - `{path?, show_hidden?}` -> entries + `writable`, `usage`, `mount`, `trash`
 - `POST /api/files/mkdir` / `rename` / `delete` (`{paths, permanent?}`) / `transfer` (`{paths, dest, move}`) / `upload` (multipart)
+- `GET /api/files/transfers` - local copy/move jobs (running + finished in the last 10 min); `POST /api/files/transfers/<id>/cancel`; `POST /api/files/transfers/ack` (`{ids}`); `DELETE /api/files/transfers/<id>` (finished only, else 409)
 - `POST /api/files/search` (recursive, capped by results **and** a wall-clock deadline), `POST /api/files/size` (on-demand `du`), `POST /api/files/text` (preview head)
 - `POST /api/files/thumb/warm` - `{paths}`; queue a page of previews on the generation pool and return at once
 - `POST /api/files/thumb/status` - `{paths}` -> `{states}` (`ready`/`quick`/`pending`/`waiting`/`none`); the open grid's poll, and the "folder is still open" signal for the idle sheet upgrade
@@ -593,6 +595,33 @@ a pulled USB drive disappears from the sidebar.
   Trash and a solid red Delete (permanent; "Delete on VPS" for a VPS selection,
   which has no trash). The trash path is reported by `/api/files/list` (only once it
   exists) and linked in the sidebar.
+- **Copy/move are background jobs** (`backend/file_transfers.py`). A local
+  `transfer` starts a `TransferJob` on its own daemon thread and the route waits
+  `TRANSFER_INLINE_WAIT` (1s) - a small paste still answers finished in one round
+  trip (`{results, errors, job, running: false}`); a big one answers
+  `running: true` and carries on. The job first walks the sources to plan
+  bytes/files (`status: 'preparing'`), then copies every file through
+  `job.copy_file` (4 MB chunks: byte counter, current file, cancel check), passed
+  to `shutil.copytree`/`shutil.move` as `copy_function`. A same-disk move is a
+  rename and plans zero bytes, so its progress goes by items. Cancel raises
+  `TransferCancelled` (not an `OSError`, so copytree doesn't swallow it) and the
+  partial target - always a fresh `unique_name` - is removed; the source is
+  untouched. End states: `done` / `partial` / `failed` / `cancelled`.
+  - **Jobs are the server's, not the tab's**, kept in memory (a restart kills
+    the copying thread anyway). `GET /api/files/transfers` is the source of
+    truth, so a reload, another tab or another device sees the same jobs and
+    progress. Finished jobs are listed for 10 minutes. `acknowledged` records
+    that some page showed the outcome: the explorer acks when it toasts a
+    finish, gets a finished job back inline, or opens the details modal - so a
+    copy that ended while no tab was watching still shows up on the next load.
+  - UI: `useFileTransfers()` polls every 1s while a job runs. Running jobs and
+    unacknowledged finished ones sit in the explorer's floating bar as one
+    pill (spinner, title, aggregate bar, %); clicking it opens
+    `TransfersModal` - per job: bytes done/total, files, speed, time left, the
+    file being written with its own bar, per-item errors, Cancel / dismiss, and
+    a link to the destination. A job seen running that finishes is toasted and
+    the listing refreshed; the toast is clickable (`ToastData.onClick`) and
+    opens the same modal.
 - **Bounded work**: recursive search and folder sizes both stop on a wall-clock
   deadline as well as a result cap, because "search from the root of a 20 TB array"
   is a reasonable thing to ask a web request to do exactly once.
