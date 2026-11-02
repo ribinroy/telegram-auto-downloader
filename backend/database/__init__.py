@@ -1568,6 +1568,17 @@ class DatabaseManager:
         finally:
             self.close_session()
 
+    def get_vps_downloads_for_path(self, remote_path: str) -> list:
+        """Every non-deleted VPS download for this remote path, newest first."""
+        session = self.get_session()
+        try:
+            rows = session.query(Download).filter_by(
+                downloaded_from='vps', url=remote_path, deleted_at=None
+            ).order_by(Download.updated_at.desc()).all()
+            return [d.to_dict() for d in rows]
+        finally:
+            self.close_session()
+
 
 # Global database manager instance (initialized in config)
 db_manager = None

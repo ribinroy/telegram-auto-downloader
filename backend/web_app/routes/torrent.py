@@ -22,7 +22,7 @@ from backend.web_app.torrent import (
     stop_on_complete_enabled,
 )
 from backend.web_app.vps import load_vps_credentials, annotate_vps_folders, open_vps_sftp
-from backend.web_app.helpers import candidate_file_paths
+from backend.web_app.helpers import candidate_file_paths, local_copy_exists
 
 
 class TorrentRoutesMixin:
@@ -290,13 +290,21 @@ class TorrentRoutesMixin:
                 path = t.get("content_path") or posixpath.join((t.get("download_dir") or "").rstrip("/"), name)
                 on_disk = posixpath.basename(path.rstrip("/"))
                 dl = by_path.get(path) or by_name.get(on_disk) or by_name.get(name)
-                t["downlee"] = {
-                    "id": dl["id"],
-                    "message_id": dl.get("message_id"),
-                    "status": dl.get("status"),
-                    "progress": dl.get("progress") or 0,
-                } if dl else None
+                t["downlee"] = _downlee_block(dl)
             return torrents
+
+        def _downlee_block(dl):
+            """The `downlee` annotation for a matched transfer. A finished pull
+            whose local copy has been deleted since reads as never pulled, so
+            the UI offers the download again instead of claiming it's here."""
+            if not dl or (dl.get("status") == "done" and not local_copy_exists(dl)):
+                return None
+            return {
+                "id": dl["id"],
+                "message_id": dl.get("message_id"),
+                "status": dl.get("status"),
+                "progress": dl.get("progress") or 0,
+            }
 
         @self.app.route("/api/torrent/list", methods=["GET"])
         @token_required
@@ -341,13 +349,7 @@ class TorrentRoutesMixin:
                     by_path.setdefault(d["url"], d)
             dl_dir = details["torrent"].get("download_dir") or ""
             for f in details["files"]:
-                dl = by_path.get(_file_remote_path(dl_dir, f["path"]))
-                f["downlee"] = {
-                    "id": dl["id"],
-                    "message_id": dl.get("message_id"),
-                    "status": dl.get("status"),
-                    "progress": dl.get("progress") or 0,
-                } if dl else None
+                f["downlee"] = _downlee_block(by_path.get(_file_remote_path(dl_dir, f["path"])))
             return jsonify(details)
 
         def _file_remote_path(download_dir, path):

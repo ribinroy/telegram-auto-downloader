@@ -24,6 +24,14 @@ def candidate_file_paths(download, file_name):
     return paths
 
 
+def local_copy_exists(download):
+    """Whether a download's file (or folder) is still on the home server.
+    A finished pull whose local copy was deleted since is no longer "already
+    downloaded" - it can be pulled again."""
+    file_name = download.get("file")
+    return bool(file_name) and any(p.exists() for p in candidate_file_paths(download, file_name))
+
+
 def range_response(file_path, mime_type=None, download_name=None):
     """Serve a file with HTTP range support, streamed in 1 MB chunks.
 

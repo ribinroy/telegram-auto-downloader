@@ -371,7 +371,9 @@ def test_transmission_content_path_is_dir_plus_name():
 
 
 def test_a_pulled_torrent_is_matched_by_its_folder_on_disk(client, db, auth, monkeypatch):
+    from backend.config import DOWNLOAD_DIR
     from backend.web_app.routes import torrent as route
+    (DOWNLOAD_DIR / 'VPS' / 'savr-859').mkdir(parents=True, exist_ok=True)
     db.add_download(file='savr-859', status='done', downloaded_from='vps',
                     url='/home/u/Done/savr-859')
     monkeypatch.setattr(route, 'load_torrent_config', lambda c: {'url': 'x'})
