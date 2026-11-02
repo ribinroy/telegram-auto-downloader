@@ -4,7 +4,7 @@ import { Loader2, CheckCircle, Key, Globe, Cookie, Wrench, Server, Send, Termina
 import type { SyncThumbnailsResult } from '../api';
 import {
   useCookies, useSaveCookies, useSyncThumbnails, useYtdlpVersion, useUpgradeYtdlp,
-  useJobSchedules,
+  useJobSchedules, useCheckFiles,
 } from '../hooks/useSettings';
 import { JobSchedule } from '../components/JobSchedule';
 import { useUpdatePassword } from '../hooks/useMisc';
@@ -19,7 +19,7 @@ import { RenameRulesSettings } from '../components/RenameRulesSettings';
 import { SessionsSettings } from '../components/SessionsSettings';
 import { clearToken } from '../api';
 import { formatBytes } from '../utils/format';
-import { useErrorToast, useSuccessToast } from '../lib/notify';
+import { useErrorToast, useSuccessToast, notify } from '../lib/notify';
 
 type TabType = 'password' | 'sources' | 'renaming' | 'cookies' | 'jobs' | 'vps' | 'telegram' | 'queries' | 'users';
 const TAB_IDS: TabType[] = ['password', 'sources', 'renaming', 'cookies', 'telegram', 'queries', 'users', 'vps', 'jobs'];
@@ -74,6 +74,21 @@ export function SettingsPage() {
   const [syncError, setSyncError] = useState<string | null>(null);
   useErrorToast(syncError, 'Thumbnail sync failed');
   const syncRunning = syncMut.isPending;
+  const checkFilesMut = useCheckFiles();
+  const handleCheckFiles = () => checkFilesMut.mutate(undefined, {
+    onSuccess: r => {
+      const changes = [
+        r.marked_missing ? `${r.marked_missing} marked missing` : '',
+        r.restored ? `${r.restored} found again` : '',
+      ].filter(Boolean).join(', ');
+      notify({
+        type: 'success',
+        title: 'Files checked',
+        message: `${r.present} of ${r.checked} on disk · ${changes || 'no changes'}`,
+      });
+    },
+    onError: e => notify({ type: 'error', title: 'File check failed', message: e.message }),
+  });
 
   // yt-dlp upgrade state
   const [ytdlpResult, setYtdlpResult] = useState<{ old_version?: string; new_version?: string; upgraded?: boolean } | null>(null);
@@ -379,7 +394,7 @@ export function SettingsPage() {
             </div>
 
             {/* Sync Thumbnails */}
-            <div className="bg-slate-700/30 rounded-lg p-4">
+            <div className="bg-slate-700/30 rounded-lg p-4 mb-4">
               <div className="flex items-center justify-between mb-2">
                 <div>
                   <h3 className="text-white font-medium text-sm">Sync Thumbnails</h3>
@@ -451,6 +466,37 @@ export function SettingsPage() {
               <JobSchedule
                 jobId="sync_thumbnails"
                 schedule={schedulesQuery.data?.schedules.sync_thumbnails}
+                tz={schedulesQuery.data?.tz ?? null}
+              />
+            </div>
+
+            {/* Check files on disk */}
+            <div className="bg-slate-700/30 rounded-lg p-4">
+              <div>
+                <h3 className="text-white font-medium text-sm">Check Files on Disk</h3>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Look for every finished download's file and mark it present or deleted to match.
+                </p>
+              </div>
+
+              <button
+                onClick={handleCheckFiles}
+                disabled={checkFilesMut.isPending}
+                className="w-full bg-cyan-600 hover:bg-cyan-700 text-white font-medium py-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 mt-3"
+              >
+                {checkFilesMut.isPending ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Checking...
+                  </>
+                ) : (
+                  'Run Check'
+                )}
+              </button>
+
+              <JobSchedule
+                jobId="check_files"
+                schedule={schedulesQuery.data?.schedules.check_files}
                 tz={schedulesQuery.data?.tz ?? null}
               />
             </div>

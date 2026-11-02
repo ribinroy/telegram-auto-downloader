@@ -397,3 +397,87 @@ def test_an_unfinished_pull_still_blocks_a_second_one(db, tmp_path, monkeypatch)
     vps = VpsDownloader({})
     monkeypatch.setattr(vps, '_spawn', lambda *a: None)
     assert vps.start_download('/dl/ep01.mkv', dest=str(tmp_path))['error']
+
+
+# --- files already on the home server -------------------------------------
+
+def _local_dir(tmp_path):
+    from backend.web_app.torrent import read_torrent_settings, write_torrent_settings
+    settings = read_torrent_settings()
+    settings['qbittorrent']['local_dir'] = str(tmp_path / 'tv')
+    write_torrent_settings(settings)
+    return tmp_path / 'tv'
+
+
+def test_a_file_already_whole_locally_is_skipped_not_pulled(
+        client, db, configured, vps, monkeypatch, tmp_path):
+    local = _local_dir(tmp_path) / 'Show' / 'S01' / 'ep01.mkv'
+    local.parent.mkdir(parents=True)
+    local.write_bytes(b'x' * 10)
+    monkeypatch.setattr(troute, 'torrent_details', lambda c, h: _details())
+    res = client.post('/api/torrent/files/download', headers=configured,
+                      json={'client': 'qbittorrent', 'hash': 'h1', 'indices': [0]})
+    assert res.status_code == 200
+    assert res.get_json()['skipped'] == [{'index': 0}]
+    assert vps.calls == []
+
+
+def test_a_partial_local_file_is_pulled_so_it_resumes(
+        client, db, configured, vps, monkeypatch, tmp_path):
+    local = _local_dir(tmp_path) / 'Show' / 'S01' / 'ep01.mkv'
+    local.parent.mkdir(parents=True)
+    local.write_bytes(b'x' * 4)
+    monkeypatch.setattr(troute, 'torrent_details', lambda c, h: _details())
+    res = client.post('/api/torrent/files/download', headers=configured,
+                      json={'client': 'qbittorrent', 'hash': 'h1', 'indices': [0]})
+    assert res.get_json()['skipped'] == []
+    assert [c[0] for c in vps.calls] == ['/dl/Show/S01/ep01.mkv']
+
+
+def test_details_mark_a_file_found_on_disk_as_downloaded(
+        client, db, configured, monkeypatch, tmp_path):
+    local = _local_dir(tmp_path) / 'Show' / 'S01' / 'ep01.mkv'
+    local.parent.mkdir(parents=True)
+    local.write_bytes(b'x' * 10)
+    monkeypatch.setattr(troute, 'torrent_details', lambda c, h: _details())
+    body = client.get('/api/torrent/details?client=qbittorrent&hash=h1', headers=configured).get_json()
+    by_index = {f['index']: f for f in body['files']}
+    assert by_index[0]['downlee']['status'] == 'done'
+    assert by_index[0]['downlee']['on_disk'] is True
+    assert by_index[1]['downlee'] is None
+
+
+def test_a_torrent_whose_bytes_are_all_local_lists_as_downloaded(
+        client, db, configured, monkeypatch, tmp_path):
+    folder = _local_dir(tmp_path) / 'Show'
+    (folder / 'S01').mkdir(parents=True)
+    (folder / 'S01' / 'ep01.mkv').write_bytes(b'x' * 10)
+    monkeypatch.setattr(troute, 'torrent_list', lambda c: [
+        {'hash': 'h1', 'name': 'Show', 'download_dir': '/dl', 'total_size': 10,
+         'percent_done': 100, 'status': 'completed'},
+        {'hash': 'h2', 'name': 'Show', 'download_dir': '/dl', 'total_size': 20,
+         'percent_done': 100, 'status': 'completed'},
+    ])
+    body = client.get('/api/torrent/list?client=qbittorrent', headers=configured).get_json()
+    by_hash = {t['hash']: t for t in body['torrents']}
+    assert by_hash['h1']['downlee']['on_disk'] is True
+    assert by_hash['h2']['downlee'] is None  # only half of it is here
+
+
+def test_details_recognise_a_file_saved_under_its_renamed_name(
+        client, db, configured, monkeypatch, tmp_path):
+    from backend.rename import invalidate_rules_cache
+    db.add_rename_rule(r'(?<=\w)[._](?=\w)', ' ', name='dots to spaces')
+    invalidate_rules_cache()
+    try:
+        local = _local_dir(tmp_path) / 'Show' / 'S01' / 'ep 01.mkv'
+        local.parent.mkdir(parents=True)
+        local.write_bytes(b'x' * 10)
+        details = _details(files=[
+            {'index': 0, 'path': 'Show/S01/ep.01.mkv', 'size': 10, 'percent_done': 100, 'wanted': True},
+        ])
+        monkeypatch.setattr(troute, 'torrent_details', lambda c, h: details)
+        body = client.get('/api/torrent/details?client=qbittorrent&hash=h1', headers=configured).get_json()
+        assert body['files'][0]['downlee']['on_disk'] is True
+    finally:
+        invalidate_rules_cache()

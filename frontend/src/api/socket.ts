@@ -24,6 +24,11 @@ export interface DeletedUpdate {
   message_id: string;  // String to avoid JS precision loss
 }
 
+export interface FileCountUpdate {
+  message_id: string;
+  file_count: number;
+}
+
 export interface MetaUpdate {
   message_id: string;
   file_meta: Download['file_meta'];
@@ -35,6 +40,8 @@ export interface SocketHandlers {
   onNew: (data: Download) => void;
   onDeleted: (data: DeletedUpdate) => void;
   onMeta: (data: MetaUpdate) => void;
+  /** A VPS folder pull counted its files. */
+  onFileCount?: (data: FileCountUpdate) => void;
   onStats: (data: Stats) => void;
   /** The download queue changed (limits, order, or who is waiting). */
   onQueueChanged?: () => void;
@@ -70,6 +77,7 @@ export function connectSocket(handlers: SocketHandlers): Socket {
   socket.on('download:new', handlers.onNew);
   socket.on('download:deleted', handlers.onDeleted);
   socket.on('download:meta', handlers.onMeta);
+  if (handlers.onFileCount) socket.on('download:files', handlers.onFileCount);
   socket.on('stats', handlers.onStats);
   if (handlers.onQueueChanged) socket.on('queue:changed', handlers.onQueueChanged);
 

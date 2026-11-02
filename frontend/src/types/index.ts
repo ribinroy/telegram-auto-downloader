@@ -35,6 +35,8 @@ export interface Download {
   file_deleted: boolean;  // True if physical file was deleted from disk
   author: string | null;  // username:id for telegram, username for downlee
   file_meta: FileMeta | null;  // Video/audio metadata for video files
+  /** Files in a VPS folder pull (a multi-file torrent); null for a single file. */
+  file_count?: number | null;
   thumb_count: number;  // Number of thumbnail images available
   hidden?: boolean;  // Computed: source/watchfolder is secured
   dest_folder?: string | null;  // Computed: configured destination folder

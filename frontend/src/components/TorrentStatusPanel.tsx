@@ -384,6 +384,88 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
         const dl = downleeState(t, downloads, dlStarted);
         const { transfer, status: dlStatus, progress: dlProgress,
                 done: dlDone, running: dlRunning, retryable: dlRetryable } = dl;
+        // Rendered beside the name on desktop and in the details row on a phone
+        const actions = (
+          <>
+          {/* DownLee transfer: already pulled, in flight, retryable, or offered. */}
+          {done && dlDone && (
+            <Tooltip content={transfer?.on_disk ? "Already on DownLee (files found on disk)" : "Already downloaded to DownLee"} position="top">
+              <span className="flex items-center gap-1.5 py-1.5 px-2.5 rounded-lg bg-green-500/15 text-green-400 border border-green-500/30 cursor-default">
+                <CheckCircle className="w-4 h-4" />
+              </span>
+            </Tooltip>
+          )}
+          {done && !dlDone && dlRunning && (
+            <Tooltip content="Downloading to DownLee" position="top">
+              <span className="flex items-center gap-1.5 py-1.5 px-2.5 rounded-lg bg-cyan-500/15 text-cyan-400 border border-cyan-500/30 cursor-default">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                <span className="text-xs">{Math.round(dlProgress)}%</span>
+              </span>
+            </Tooltip>
+          )}
+          {done && !dlDone && !dlRunning && dlRetryable && (
+            <Tooltip content={`Transfer to DownLee ${dlStatus} — retry`} position="top">
+              <button
+                onClick={() => { if (transfer?.id != null) onRetry(transfer.id); }}
+                className="flex items-center gap-1.5 py-1.5 px-2.5 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 transition-colors"
+              >
+                <RotateCw className="w-4 h-4" />
+                <ArrowDown className="w-3.5 h-3.5" />
+              </button>
+            </Tooltip>
+          )}
+          {done && !dlDone && !dlRunning && !dlRetryable && (
+            <Tooltip content="Download to DownLee" position="top">
+              <button
+                onClick={() => downloadToDownlee(t)}
+                disabled={dlInFlight}
+                className="flex items-center gap-1.5 py-1.5 px-2.5 rounded-lg font-medium text-white bg-gradient-to-r from-purple-500/30 to-cyan-500/30 border border-purple-400/40 hover:from-purple-500/45 hover:to-cyan-500/45 transition-colors disabled:opacity-50"
+              >
+                {dlInFlight
+                  ? <Loader2 className="w-4 h-4 animate-spin" />
+                  : <img src="/logo.png" alt="" className="w-4 h-4" />}
+                <ArrowDown className="w-3.5 h-3.5" />
+              </button>
+            </Tooltip>
+          )}
+          <button
+            onClick={() => runAction(paused ? 'start' : 'stop', t)}
+            disabled={isBusy}
+            title={paused ? 'Resume' : 'Pause'}
+            className="p-2 bg-slate-700/50 hover:bg-slate-600/50 text-slate-300 rounded-lg transition-colors disabled:opacity-50"
+          >
+            {isBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : paused ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
+          </button>
+          {/* Force start: only worth offering while the torrent still has
+              data to fetch - on a finished one it would just force seeding. */}
+          {!done && (
+            <button
+              // Already forced? The same button turns it back off - a
+              // plain start is exactly what clears the flag.
+              onClick={() => runAction(forced ? 'start' : 'force-start', t)}
+              disabled={isBusy}
+              title={forced
+                ? 'Force started - running ahead of the queue. Click to return it to the queue.'
+                : "Force start - jump the client's download queue"}
+              className={`p-2 rounded-lg transition-colors disabled:opacity-50 ${
+                forced
+                  ? 'bg-amber-400/30 text-amber-200 ring-1 ring-amber-300/60'
+                  : 'bg-amber-500/15 hover:bg-amber-500/30 text-amber-300'
+              }`}
+            >
+              <Zap className={`w-4 h-4 ${forced ? 'fill-current' : ''}`} />
+            </button>
+          )}
+          <button
+            onClick={() => setRemoveTarget(t)}
+            disabled={isBusy}
+            title="Remove torrent"
+            className="p-2 border border-red-500/40 bg-red-500/10 hover:bg-red-500/25 text-red-400 rounded-lg transition-colors disabled:opacity-50"
+          >
+            <Trash2 className="w-4 h-4" />
+          </button>
+          </>
+        );
         return (
           <div
             key={t.hash}
@@ -417,112 +499,51 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
                 {t.name}
               </button>
               <div className="flex items-center gap-2 shrink-0">
-                <span className={`text-xs border rounded-full px-2 py-0.5 ${style.cls}`}>{style.label}</span>
-                {/* DownLee transfer: already pulled, in flight, retryable, or offered. */}
-                {done && dlDone && (
-                  <Tooltip content="Already downloaded to DownLee" position="top">
-                    <span className="flex items-center gap-1.5 py-1.5 px-2.5 rounded-lg bg-green-500/15 text-green-400 border border-green-500/30 cursor-default">
-                      <CheckCircle className="w-4 h-4" />
-                    </span>
-                  </Tooltip>
+                {/* "Completed" is the normal end state - the hidden bar already says it */}
+                {t.status !== 'completed' && (
+                  <span className={`text-xs border rounded-full px-2 py-0.5 ${style.cls}`}>{style.label}</span>
                 )}
-                {done && !dlDone && dlRunning && (
-                  <Tooltip content="Downloading to DownLee" position="top">
-                    <span className="flex items-center gap-1.5 py-1.5 px-2.5 rounded-lg bg-cyan-500/15 text-cyan-400 border border-cyan-500/30 cursor-default">
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      <span className="text-xs">{Math.round(dlProgress)}%</span>
-                    </span>
-                  </Tooltip>
-                )}
-                {done && !dlDone && !dlRunning && dlRetryable && (
-                  <Tooltip content={`Transfer to DownLee ${dlStatus} — retry`} position="top">
-                    <button
-                      onClick={() => onRetry(transfer!.id)}
-                      className="flex items-center gap-1.5 py-1.5 px-2.5 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 transition-colors"
-                    >
-                      <RotateCw className="w-4 h-4" />
-                      <ArrowDown className="w-3.5 h-3.5" />
-                    </button>
-                  </Tooltip>
-                )}
-                {done && !dlDone && !dlRunning && !dlRetryable && (
-                  <Tooltip content="Download to DownLee" position="top">
-                    <button
-                      onClick={() => downloadToDownlee(t)}
-                      disabled={dlInFlight}
-                      className="flex items-center gap-1.5 py-1.5 px-2.5 rounded-lg font-medium text-white bg-gradient-to-r from-purple-500/30 to-cyan-500/30 border border-purple-400/40 hover:from-purple-500/45 hover:to-cyan-500/45 transition-colors disabled:opacity-50"
-                    >
-                      {dlInFlight
-                        ? <Loader2 className="w-4 h-4 animate-spin" />
-                        : <img src="/logo.png" alt="" className="w-4 h-4" />}
-                      <ArrowDown className="w-3.5 h-3.5" />
-                    </button>
-                  </Tooltip>
-                )}
-                <button
-                  onClick={() => runAction(paused ? 'start' : 'stop', t)}
-                  disabled={isBusy}
-                  title={paused ? 'Resume' : 'Pause'}
-                  className="p-2 bg-slate-700/50 hover:bg-slate-600/50 text-slate-300 rounded-lg transition-colors disabled:opacity-50"
-                >
-                  {isBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : paused ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
-                </button>
-                {/* Force start: only worth offering while the torrent still has
-                    data to fetch - on a finished one it would just force seeding. */}
-                {!done && (
-                  <button
-                    // Already forced? The same button turns it back off - a
-                    // plain start is exactly what clears the flag.
-                    onClick={() => runAction(forced ? 'start' : 'force-start', t)}
-                    disabled={isBusy}
-                    title={forced
-                      ? 'Force started - running ahead of the queue. Click to return it to the queue.'
-                      : "Force start - jump the client's download queue"}
-                    className={`p-2 rounded-lg transition-colors disabled:opacity-50 ${
-                      forced
-                        ? 'bg-amber-400/30 text-amber-200 ring-1 ring-amber-300/60'
-                        : 'bg-amber-500/15 hover:bg-amber-500/30 text-amber-300'
-                    }`}
-                  >
-                    <Zap className={`w-4 h-4 ${forced ? 'fill-current' : ''}`} />
-                  </button>
-                )}
-                <button
-                  onClick={() => setRemoveTarget(t)}
-                  disabled={isBusy}
-                  title="Remove torrent"
-                  className="p-2 border border-red-500/40 bg-red-500/10 hover:bg-red-500/25 text-red-400 rounded-lg transition-colors disabled:opacity-50"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
+                {/* Desktop: buttons beside the name. Phone: in the details row below. */}
+                <div className="hidden sm:flex items-center gap-2">{actions}</div>
               </div>
             </div>
 
-            <div className="mt-2 h-1.5 bg-slate-700 rounded-full overflow-hidden">
-              <div
-                className={`h-full transition-all duration-300 ${active ? 'progress-shimmer' : 'bg-slate-500'}`}
-                style={{ width: `${t.percent_done}%` }}
-              />
-            </div>
+            {/* A finished torrent's bar is just a full line - drop it */}
+            {!done && (
+              <div className="mt-2 h-1.5 bg-slate-700 rounded-full overflow-hidden">
+                <div
+                  className={`h-full transition-all duration-300 ${active ? 'progress-shimmer' : 'bg-slate-500'}`}
+                  style={{ width: `${t.percent_done}%` }}
+                />
+              </div>
+            )}
 
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-400 mt-1.5">
-              <span>{t.percent_done}% of {formatBytes(t.total_size)}</span>
+            <div className="flex items-center justify-between gap-3 mt-1.5">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-400 min-w-0">
+              <span>{done ? formatBytes(t.total_size) : `${t.percent_done}% of ${formatBytes(t.total_size)}`}</span>
               {t.rate_download > 0 && (
                 <span className="flex items-center gap-1"><ArrowDown className="w-3 h-3 text-cyan-400" />{formatBytes(t.rate_download)}/s</span>
               )}
               {t.rate_upload > 0 && (
                 <span className="flex items-center gap-1"><ArrowUp className="w-3 h-3 text-green-400" />{formatBytes(t.rate_upload)}/s</span>
               )}
-              <span className="flex items-center gap-1" title="Seeds: connected / available in the swarm">
-                <Sprout className="w-3 h-3 text-green-400" />
-                {t.seeds_connected}{t.seeds_total != null ? `/${t.seeds_total}` : ''}
-              </span>
-              <span className="flex items-center gap-1" title="Leeches: connected / in the swarm">
-                <Users className="w-3 h-3 text-amber-400" />
-                {t.leeches_connected}{t.leeches_total != null ? `/${t.leeches_total}` : ''}
-              </span>
+              {/* Swarm counts only matter while there is still data to fetch */}
+              {!done && (
+                <>
+                  <span className="flex items-center gap-1" title="Seeds: connected / available in the swarm">
+                    <Sprout className="w-3 h-3 text-green-400" />
+                    {t.seeds_connected}{t.seeds_total != null ? `/${t.seeds_total}` : ''}
+                  </span>
+                  <span className="flex items-center gap-1" title="Leeches: connected / in the swarm">
+                    <Users className="w-3 h-3 text-amber-400" />
+                    {t.leeches_connected}{t.leeches_total != null ? `/${t.leeches_total}` : ''}
+                  </span>
+                </>
+              )}
               {active && t.eta != null && <span>ETA {formatTime(t.eta)}</span>}
               <span className="truncate max-w-[220px]" title={t.download_dir}>{t.download_dir}</span>
+            </div>
+            <div className="flex sm:hidden items-center gap-2 shrink-0">{actions}</div>
             </div>
 
             {t.error && (

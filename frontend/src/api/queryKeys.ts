@@ -8,6 +8,9 @@ export const qk = {
   authors: () => ['authors'] as const,
   stats: () => ['stats'] as const,
   queue: () => ['queue'] as const,
+  // Not under ['downloads']: the realtime layer patches every key there as
+  // an infinite-query list.
+  transferFiles: (downloadId: number) => ['transfer-files', downloadId] as const,
   analytics: (days: number, groupBy: 'day' | 'hour', includeDeleted: boolean) =>
     ['analytics', days, groupBy, includeDeleted] as const,
   mappings: () => ['mappings'] as const,

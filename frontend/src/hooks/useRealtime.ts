@@ -25,8 +25,13 @@ export function useRealtime(cb: RealtimeCallbacks = {}) {
   const { onConnectedChange, onNewDownload, onStatusChange } = cb;
 
   useEffect(() => {
-    const patchDownloads = (fn: (downloads: Download[]) => Download[]) => {
-      qc.setQueriesData<DownloadsCache>({ queryKey: ['downloads'] }, (old) => {
+    const patchDownloads = (fn: (downloads: Download[]) => Download[], arriving = false) => {
+      qc.setQueriesData<DownloadsCache>({
+        queryKey: ['downloads'],
+        // A download that just arrived isn't on disk yet - keep it out of
+        // the "On disk" list rather than prepending it there.
+        predicate: q => !arriving || (q.queryKey[1] as { filter?: string } | undefined)?.filter !== 'on_disk',
+      }, (old) => {
         if (!old) return old;
         return { ...old, pages: old.pages.map(page => ({ ...page, downloads: fn(page.downloads) })) };
       });
@@ -50,7 +55,7 @@ export function useRealtime(cb: RealtimeCallbacks = {}) {
     connectSocket({
       onNew: (download) => {
         refreshQueue();
-        patchDownloads(list => (list.some(d => d.message_id === download.message_id) ? list : [download, ...list]));
+        patchDownloads(list => (list.some(d => d.message_id === download.message_id) ? list : [download, ...list]), true);
         onNewDownload?.(download);
       },
       onDeleted: ({ message_id }) => {
@@ -79,6 +84,7 @@ export function useRealtime(cb: RealtimeCallbacks = {}) {
         onStatusChange?.(s, dl);
       },
       onMeta: (m) => mergeById(m.message_id, { file_meta: m.file_meta }),
+      onFileCount: (f) => mergeById(f.message_id, { file_count: f.file_count }),
       onStats: (stats) => qc.setQueryData(qk.stats(), stats),
       onQueueChanged: refreshQueue,
       onConnect: () => {

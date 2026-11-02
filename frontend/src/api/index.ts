@@ -210,9 +210,58 @@ export async function revokeSession(sessionId: number): Promise<void> {
   if (!response.ok) throw new Error('Failed to revoke session');
 }
 
+export type DownloadFilter = 'all' | 'active' | 'on_disk';
+
+export type TransferFileState = 'done' | 'downloading' | 'partial' | 'pending' | 'paused' | 'skipped' | 'on_disk';
+/** A per-file decision in a folder pull; null = fetch it normally. */
+export type FileDecision = 'paused' | 'skipped' | null;
+
+export interface TransferFiles {
+  /** live: the running transfer's own plan; vps: rebuilt over SFTP;
+   *  local: VPS unreachable, so only what is on the home server. */
+  source: 'live' | 'vps' | 'local';
+  error: string | null;
+  is_dir: boolean;
+  files: {
+    path: string;
+    size: number;
+    local_size: number;
+    state: TransferFileState;
+    /** On the home server, once the file is whole - what the view button plays. */
+    local_path: string | null;
+  }[];
+}
+
+/** Pause, skip or clear files of a folder pull. Clearing one of a pull that
+ *  isn't running restarts it (or queues it, with no free slot). */
+export async function setTransferFilesStatus(
+  downloadId: number, paths: string[], status: FileDecision,
+): Promise<{
+  file_status: Record<string, 'paused' | 'skipped'>;
+  status: string;
+  restarted: 'started' | 'waiting' | null;
+}> {
+  const response = await authFetch(`/api/downloads/${downloadId}/files/status`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ paths, status }),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.error || 'Failed to update the file');
+  return body;
+}
+
+export async function fetchTransferFiles(downloadId: number): Promise<TransferFiles> {
+  const response = await authFetch(`/api/downloads/${downloadId}/files`);
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.error || 'Failed to load the file list');
+  return body;
+}
+
 export interface FetchDownloadsOptions {
   search?: string;
-  filter?: 'all' | 'active';
+  /** 'on_disk': finished downloads whose file is still on the home server */
+  filter?: DownloadFilter;
   sortBy?: SortBy;
   sortOrder?: SortOrder;
   limit?: number;
@@ -969,8 +1018,10 @@ export interface TorrentStatus {
   /** Running ahead of the client's queue. null = Transmission, which has no
    *  persistent forced flag, so "not forced" can't be claimed either way. */
   force_start: boolean | null;
-  /** The VPS->DownLee transfer that already pulled this torrent, if any. */
-  downlee: { id: number; message_id: string | null; status: string | null; progress: number } | null;
+  /** The VPS->DownLee transfer that already pulled this torrent, if any.
+   *  `on_disk` (id null): no transfer record, but every byte is already on the
+   *  home server - e.g. its files were pulled one by one. */
+  downlee: { id: number | null; message_id: string | null; status: string | null; progress: number; on_disk?: boolean } | null;
 }
 
 export interface TorrentFile {
@@ -1050,7 +1101,12 @@ export async function setTorrentFilePriority(
 /** Pull single files of a finished torrent to DownLee, each as its own VPS download. */
 export async function downloadTorrentFiles(
   client: TorrentClient, hash: string, indices: number[],
-): Promise<{ started: { index: number; id: number; message_id: string }[]; errors: { index: number; error: string }[] }> {
+): Promise<{
+  started: { index: number; id: number; message_id: string }[];
+  /** Already whole on the home server - not pulled again. */
+  skipped: { index: number }[];
+  errors: { index: number; error: string }[];
+}> {
   const response = await authFetch('/api/torrent/files/download', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1058,7 +1114,7 @@ export async function downloadTorrentFiles(
   });
   const body = await response.json().catch(() => ({}));
   if (!response.ok && !body.errors) throw new Error(body.error || 'Failed to start the download to DownLee');
-  return { started: body.started ?? [], errors: body.errors ?? [] };
+  return { started: body.started ?? [], skipped: body.skipped ?? [], errors: body.errors ?? [] };
 }
 
 export async function fetchTorrentList(client: TorrentClient): Promise<{ configured: boolean; torrents?: TorrentStatus[]; error?: string }> {
@@ -1345,6 +1401,28 @@ export interface SyncThumbnailsResult {
   explorer_pruned: number;
   explorer_kept: number;
   explorer_freed: number;
+}
+
+export interface CheckFilesResult {
+  checked: number;
+  present: number;
+  missing: number;
+  /** Flipped to deleted: the flag said present, the disk said gone. */
+  marked_missing: number;
+  /** Flipped back: flagged deleted, but the file is there. */
+  restored: number;
+  error?: string;
+}
+
+export async function checkFiles(): Promise<CheckFilesResult> {
+  const response = await authFetch(`/api/jobs/check-files`, { method: 'POST' });
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok || body.error) throw new Error(body.error || 'Failed to check files');
+  return body;
 }
 
 /** Monday = 0 ... Sunday = 6, matching the backend's datetime.weekday(). */
