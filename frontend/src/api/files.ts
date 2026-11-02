@@ -90,7 +90,8 @@ export interface FileOpResponse {
   running?: boolean;
 }
 
-export type FileTransferStatus = 'preparing' | 'running' | 'done' | 'partial' | 'failed' | 'cancelled';
+/** `paused`: only paused files are left, and the job is waiting on them. */
+export type FileTransferStatus = 'preparing' | 'running' | 'paused' | 'done' | 'partial' | 'failed' | 'cancelled';
 
 /** A local copy/move running (or recently finished) on the server. */
 export interface FileTransfer {
@@ -123,7 +124,7 @@ export interface FileTransfer {
   acknowledged: boolean;
 }
 
-export type TransferFileState = 'pending' | 'copying' | 'done' | 'failed' | 'skipped' | 'cancelled';
+export type TransferFileState = 'pending' | 'copying' | 'paused' | 'done' | 'failed' | 'skipped' | 'cancelled';
 
 export interface TransferFile {
   path: string;
@@ -150,7 +151,7 @@ export interface TransferFileListing {
 /** What needs attention first: the file being written, then failures, then
  *  what's still to come, then what's settled. Plan order within each. */
 const FILE_ORDER: Record<TransferFileState, number> = {
-  copying: 0, failed: 1, pending: 2, done: 3, skipped: 4, cancelled: 5,
+  copying: 0, failed: 1, paused: 2, pending: 3, done: 4, skipped: 5, cancelled: 6,
 };
 export function sortTransferFiles(files: TransferFile[]): TransferFile[] {
   return files
@@ -159,7 +160,12 @@ export function sortTransferFiles(files: TransferFile[]): TransferFile[] {
     .map(([f]) => f);
 }
 
-export const isTransferActive = (t: FileTransfer) => t.status === 'preparing' || t.status === 'running';
+export const isTransferActive = (t: FileTransfer) =>
+  t.status === 'preparing' || t.status === 'running' || t.status === 'paused';
+
+/** Files a pause/resume button can act on. Renames are instant; settled files are done. */
+export const canPauseFile = (f: TransferFile) => !f.rename && (f.state === 'pending' || f.state === 'copying');
+export const canResumeFile = (f: TransferFile) => !f.rename && f.state === 'paused';
 
 /** 0-100. A same-disk move copies nothing (it's a rename), so it goes by items. */
 export function transferPercent(t: FileTransfer): number {
@@ -229,6 +235,9 @@ export const fetchTransfers = () =>
 
 export const fetchTransferFiles = (id: string) =>
   filesRequest<TransferFileListing>(`/transfers/${id}/files`);
+
+export const pauseTransferFiles = (id: string, paths: string[], paused: boolean) =>
+  filesRequest<TransferFileListing & { changed: number }>(`/transfers/${id}/files/pause`, { paths, paused });
 
 export const cancelTransfer = (id: string) =>
   filesRequest<{ job: FileTransfer }>(`/transfers/${id}/cancel`, {});

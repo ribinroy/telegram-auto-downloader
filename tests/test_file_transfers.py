@@ -234,3 +234,149 @@ def test_the_files_route(client, db, auth, tmp_tree):
     assert res.status_code == 200
     assert [f['rel'] for f in res.get_json()['files']] == ['notes.txt']
     assert client.get('/api/files/transfers/nope/files', headers=auth).status_code == 404
+
+
+# --- per-file pause / resume ------------------------------------------------
+
+class Gate:
+    """Hold the copy after each chunk until released, so a test can act
+    while a file is part-way."""
+
+    def __init__(self, monkeypatch):
+        self.chunk = threading.Event()
+        self.go = threading.Event()
+        self.go.set()
+        real_add = transfers.TransferJob._add_bytes
+        gate = self
+
+        def add(job, n):
+            real_add(job, n)
+            gate.chunk.set()
+            assert gate.go.wait(5)
+
+        monkeypatch.setattr(transfers, 'CHUNK', 1024)
+        monkeypatch.setattr(transfers.TransferJob, '_add_bytes', add)
+
+    def hold(self):
+        self.go.clear()
+        self.chunk.clear()
+
+    def release(self):
+        self.go.set()
+
+
+def _wait_for(pred, timeout=5):
+    import time
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        if pred():
+            return True
+        time.sleep(0.01)
+    return False
+
+
+def _big(tmp_tree, name='big.bin', size=32 * 1024):
+    p = tmp_tree / name
+    p.write_bytes(bytes(range(256)) * (size // 256))
+    return p
+
+
+def test_pausing_mid_file_keeps_its_bytes_and_resume_finishes_it(tmp_tree, monkeypatch):
+    big = _big(tmp_tree)
+    dest = tmp_tree / 'dest'
+    dest.mkdir()
+    gate = Gate(monkeypatch)
+    gate.hold()
+    job = transfers.start([str(big), str(tmp_tree / 'notes.txt')], str(dest))
+    assert gate.chunk.wait(5)
+    assert job.set_paused([str(big)], True) == 1
+    gate.release()
+
+    # The rest goes ahead; then the job waits on the paused file alone.
+    assert _wait_for(lambda: job.snapshot()['status'] == 'paused')
+    assert _states(job) == {'big.bin': 'paused', 'notes.txt': 'done'}
+    kept = (dest / 'big.bin').stat().st_size
+    assert 0 < kept < big.stat().st_size
+    assert not job.finished
+
+    assert job.set_paused([str(big)], False) == 1
+    assert job.wait(5)
+    assert job.snapshot()['status'] == 'done'
+    assert (dest / 'big.bin').read_bytes() == big.read_bytes()
+    assert job.snapshot()['done_bytes'] == job.snapshot()['total_bytes']
+
+
+def test_a_file_paused_before_its_turn_is_set_aside(tmp_tree, monkeypatch):
+    dest = tmp_tree / 'dest'
+    dest.mkdir()
+    gate = Gate(monkeypatch)
+    gate.hold()
+    job = transfers.start([str(tmp_tree / 'Movies')], str(dest))
+    assert gate.chunk.wait(5)
+    # copytree goes in directory order, so pause whichever file isn't the one
+    # being written
+    files = {str(tmp_tree / 'Movies' / 'a.mkv'): 'Movies/a.mkv',
+             str(tmp_tree / 'Movies' / 'nested' / 'b.mp4'): 'Movies/nested/b.mp4'}
+    current = job.snapshot()['current_file']
+    [(later, rel)] = [(p, r) for p, r in files.items() if p != current]
+    assert job.set_paused([later], True) == 1
+    assert _states(job)[rel] == 'paused'
+    gate.release()
+    assert _wait_for(lambda: job.snapshot()['status'] == 'paused')
+    assert not (dest / rel).exists()
+    job.set_paused([later], False)
+    assert job.wait(5) and job.snapshot()['status'] == 'done'
+    assert (dest / 'Movies' / 'nested' / 'b.mp4').read_bytes() == b'y' * 20
+    assert (dest / 'Movies' / 'a.mkv').read_bytes() == b'x' * 10
+
+
+def test_cancelling_a_paused_job_discards_the_partial_file(tmp_tree, monkeypatch):
+    big = _big(tmp_tree)
+    dest = tmp_tree / 'dest'
+    dest.mkdir()
+    gate = Gate(monkeypatch)
+    gate.hold()
+    job = transfers.start([str(tmp_tree / 'notes.txt'), str(big)], str(dest))
+    assert gate.chunk.wait(5)          # notes.txt
+    job.set_paused([str(big)], True)
+    gate.release()
+    assert _wait_for(lambda: job.snapshot()['status'] == 'paused')
+    job.cancel()
+    assert job.wait(5)
+    assert job.snapshot()['status'] == 'cancelled'
+    assert _states(job)['big.bin'] == 'cancelled'
+    assert not (dest / 'big.bin').exists()
+    assert (dest / 'notes.txt').exists()    # an item that finished stays
+    assert big.exists()
+
+
+def test_a_cross_disk_move_keeps_its_source_until_the_paused_file_is_in(tmp_tree, monkeypatch):
+    monkeypatch.setattr(fs, '_same_device', lambda *_: False)
+    dest = tmp_tree / 'dest'
+    dest.mkdir()
+    gate = Gate(monkeypatch)
+    gate.hold()
+    job = transfers.start([str(tmp_tree / 'Movies')], str(dest), move=True)
+    assert gate.chunk.wait(5)
+    nested = str(tmp_tree / 'Movies' / 'nested' / 'b.mp4')
+    job.set_paused([nested], True)
+    gate.release()
+    assert _wait_for(lambda: job.snapshot()['status'] == 'paused')
+    assert (tmp_tree / 'Movies' / 'nested' / 'b.mp4').exists()     # not rmtree'd under it
+    job.set_paused([nested], False)
+    assert job.wait(5) and job.snapshot()['status'] == 'done'
+    assert not (tmp_tree / 'Movies').exists()
+    assert (dest / 'Movies' / 'nested' / 'b.mp4').read_bytes() == b'y' * 20
+
+
+def test_the_pause_route(client, db, auth, tmp_tree):
+    dest = tmp_tree / 'dest'
+    dest.mkdir()
+    body = client.post('/api/files/transfer', headers=auth,
+                       json={'paths': [str(tmp_tree / 'notes.txt')], 'dest': str(dest)}).get_json()
+    url = f"/api/files/transfers/{body['job']['id']}/files/pause"
+    assert client.post(url, headers=auth, json={'paths': ['x']}).status_code == 400
+    assert client.post(url, headers=auth,
+                       json={'paths': [str(tmp_tree / 'notes.txt')], 'paused': True}).status_code == 409
+    assert client.post('/api/files/transfers/nope/files/pause', headers=auth,
+                       json={'paths': ['x'], 'paused': True}).status_code == 404
