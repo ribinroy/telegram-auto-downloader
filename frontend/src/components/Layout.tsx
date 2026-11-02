@@ -270,7 +270,7 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
                 </div>
               )}
               {/* File explorer - live browsing of the server's own disks */}
-              <div className="group relative">
+              <div className="hidden sm:block group relative">
                 <button
                   onClick={() => navigate(ROUTES.FILES)}
                   className={`p-2 hover:bg-slate-600/50 text-slate-400 hover:text-white rounded-lg transition-colors ${location.pathname === ROUTES.FILES ? 'bg-slate-600/50 text-white' : 'bg-slate-700/50'}`}
@@ -283,7 +283,7 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
               </div>
               {/* VPS files - only when configured with watched folders */}
               {vpsReady && (
-                <div className="group relative">
+                <div className="hidden sm:block group relative">
                   <button
                     onClick={() => navigate(ROUTES.VPS_FILES)}
                     className={`p-2 hover:bg-slate-600/50 text-slate-400 hover:text-white rounded-lg transition-colors ${location.pathname.startsWith(ROUTES.VPS) ? 'bg-slate-600/50 text-white' : 'bg-slate-700/50'}`}
@@ -325,12 +325,26 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
                   onClick={() => setMenuOpen(o => !o)}
                   aria-label="More"
                   aria-expanded={menuOpen}
-                  className={`p-2 rounded-lg transition-colors text-slate-400 ${menuOpen || location.pathname === ROUTES.SETTINGS || location.pathname === ROUTES.ANALYTICS ? 'bg-slate-600/50 text-white' : 'bg-slate-700/50'}`}
+                  className={`p-2 rounded-lg transition-colors text-slate-400 ${menuOpen || location.pathname === ROUTES.SETTINGS || location.pathname === ROUTES.ANALYTICS || location.pathname === ROUTES.FILES || location.pathname.startsWith(ROUTES.VPS) ? 'bg-slate-600/50 text-white' : 'bg-slate-700/50'}`}
                 >
                   <MoreVertical className="w-4 h-4" />
                 </button>
                 {menuOpen && (
                   <div className="absolute right-0 top-full mt-2 w-44 py-1 bg-slate-800 border border-slate-700 rounded-xl shadow-xl z-50">
+                    <button
+                      onClick={() => { setMenuOpen(false); navigate(ROUTES.FILES); }}
+                      className={`w-full flex items-center gap-3 px-3 py-2.5 text-sm hover:bg-slate-700/60 ${location.pathname === ROUTES.FILES ? 'text-white' : 'text-slate-300'}`}
+                    >
+                      <FolderOpen className="w-4 h-4" /> Files
+                    </button>
+                    {vpsReady && (
+                      <button
+                        onClick={() => { setMenuOpen(false); navigate(ROUTES.VPS_FILES); }}
+                        className={`w-full flex items-center gap-3 px-3 py-2.5 text-sm hover:bg-slate-700/60 ${location.pathname.startsWith(ROUTES.VPS) ? 'text-white' : 'text-slate-300'}`}
+                      >
+                        <HardDrive className="w-4 h-4" /> VPS files
+                      </button>
+                    )}
                     {showSecured && (
                       <button
                         onClick={() => { setMenuOpen(false); navigate(ROUTES.ANALYTICS); }}
