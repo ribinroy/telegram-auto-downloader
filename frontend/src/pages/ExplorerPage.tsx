@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import {
   FolderOpen, Loader2, X, Download, Copy, Scissors, ClipboardPaste,
   Pencil, Trash2, Info, Eye, Link as LinkIcon, CheckSquare, HardDrive, Search, Menu,
-  CheckCircle, AlertCircle,
+  CheckCircle, AlertCircle, Pause,
 } from 'lucide-react';
 import { notify, useErrorToast } from '../lib/notify';
 import { useLayoutContext } from '../components/Layout';
@@ -808,7 +808,9 @@ export function ExplorerPage() {
                         ? 'border-slate-700 max-sm:basis-full max-sm:justify-center max-sm:pt-2 max-sm:border-t sm:pl-2 sm:border-l' : ''
                     }`}
                   >
-                    {barRunning.length > 0
+                    {barRunning.length > 0 && barRunning.every(t => t.status === 'paused')
+                      ? <Pause className="w-4 h-4 shrink-0 text-amber-400" />
+                      : barRunning.length > 0
                       ? <Loader2 className="w-4 h-4 animate-spin shrink-0 text-cyan-400" />
                       : barFinishedBad
                         ? <AlertCircle className="w-4 h-4 shrink-0 text-yellow-400" />

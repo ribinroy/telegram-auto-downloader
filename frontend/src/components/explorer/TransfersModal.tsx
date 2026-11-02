@@ -2,12 +2,13 @@ import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   X, Copy, Scissors, Loader2, CheckCircle, XCircle, AlertCircle, Ban, FolderOpen,
-  Circle, MinusCircle, ArrowRightLeft,
+  Circle, MinusCircle, ArrowRightLeft, Pause, Play,
 } from 'lucide-react';
 import { formatBytes, formatTime } from '../../utils/format';
-import { useCancelTransfer, useDismissTransfer, useTransferFiles } from '../../hooks/useFiles';
+import { useCancelTransfer, useDismissTransfer, useTransferFiles, usePauseTransferFiles } from '../../hooks/useFiles';
 import {
   isTransferActive, transferPercent, transferTitle, pathBaseName as baseName, sortTransferFiles,
+  canPauseFile, canResumeFile,
   type FileTransfer, type TransferFile, type TransferFileState,
 } from '../../api/files';
 
@@ -19,6 +20,7 @@ const FILTER_FROM = 8;
 const STATUS: Record<FileTransfer['status'], { label: string; cls: string; icon: React.ReactNode }> = {
   preparing: { label: 'Preparing', cls: 'text-cyan-300', icon: <Loader2 className="w-4 h-4 animate-spin text-cyan-400" /> },
   running: { label: 'In progress', cls: 'text-cyan-300', icon: <Loader2 className="w-4 h-4 animate-spin text-cyan-400" /> },
+  paused: { label: 'Paused - resume files below to carry on', cls: 'text-amber-300', icon: <Pause className="w-4 h-4 text-amber-400" /> },
   done: { label: 'Done', cls: 'text-green-300', icon: <CheckCircle className="w-4 h-4 text-green-400" /> },
   partial: { label: 'Some items failed', cls: 'text-yellow-300', icon: <AlertCircle className="w-4 h-4 text-yellow-400" /> },
   failed: { label: 'Failed', cls: 'text-red-300', icon: <XCircle className="w-4 h-4 text-red-400" /> },
@@ -73,7 +75,7 @@ function TransferCard({ t, onOpenDest }: { t: FileTransfer; onOpenDest: (path: s
         <div className="mt-3 space-y-2">
           <div className="h-2 rounded-full bg-slate-700 overflow-hidden">
             <div
-              className={`h-full bg-cyan-500 transition-[width] duration-500 ${t.status === 'preparing' ? 'animate-pulse w-full opacity-40' : ''}`}
+              className={`h-full transition-[width] duration-500 ${t.status === 'paused' ? 'bg-amber-500' : 'bg-cyan-500'} ${t.status === 'preparing' ? 'animate-pulse w-full opacity-40' : ''}`}
               style={t.status === 'preparing' ? undefined : { width: `${pct}%` }}
             />
           </div>
@@ -139,18 +141,20 @@ function TransferCard({ t, onOpenDest }: { t: FileTransfer; onOpenDest: (path: s
 const FILE_STATE: Record<TransferFileState, { label: string; icon: React.ReactNode }> = {
   copying: { label: 'Copying', icon: <Loader2 className="w-3.5 h-3.5 animate-spin text-cyan-400" /> },
   failed: { label: 'Failed', icon: <XCircle className="w-3.5 h-3.5 text-red-400" /> },
+  paused: { label: 'Paused', icon: <Pause className="w-3.5 h-3.5 text-amber-400" /> },
   pending: { label: 'To copy', icon: <Circle className="w-3.5 h-3.5 text-slate-600" /> },
   done: { label: 'Copied', icon: <CheckCircle className="w-3.5 h-3.5 text-green-400" /> },
   skipped: { label: 'Not copied', icon: <MinusCircle className="w-3.5 h-3.5 text-slate-500" /> },
   cancelled: { label: 'Cancelled', icon: <Ban className="w-3.5 h-3.5 text-slate-500" /> },
 };
-const STATE_ORDER: TransferFileState[] = ['copying', 'failed', 'pending', 'done', 'skipped', 'cancelled'];
+const STATE_ORDER: TransferFileState[] = ['copying', 'failed', 'paused', 'pending', 'done', 'skipped', 'cancelled'];
 
 function TransferFiles({ t }: { t: FileTransfer }) {
   const active = isTransferActive(t);
   const listing = useTransferFiles(t.id, active);
   const [state, setState] = useState<TransferFileState | 'all'>('all');
   const [needle, setNeedle] = useState('');
+  const pause = usePauseTransferFiles(t.id);
   const data = listing.data?.id === t.id ? listing.data : undefined;
   // Polling stops with the job, so fetch once more when its status moves -
   // otherwise the list would freeze on its last "copying" snapshot.
@@ -172,6 +176,11 @@ function TransferFiles({ t }: { t: FileTransfer }) {
   if (!data.files.length) return null;
 
   const total = data.files.length;
+  // Bulk actions follow the chips and the filter: "paused" -> Resume all.
+  const pausable = active ? matching.filter(canPauseFile) : [];
+  const resumable = active ? matching.filter(canResumeFile) : [];
+  const setPaused = (files: TransferFile[], paused: boolean) =>
+    pause.mutate({ paths: files.map(f => f.path), paused });
   return (
     <div className="rounded-xl border border-slate-700/70 bg-slate-800/20">
       <div className="flex flex-wrap items-center gap-1.5 px-3 pt-3 pb-2">
@@ -181,6 +190,20 @@ function TransferFiles({ t }: { t: FileTransfer }) {
             {FILE_STATE[st].label} {data.counts[st]}
           </Chip>
         ))}
+        {(pausable.length > 1 || resumable.length > 1) && (
+          <span className="ml-auto flex gap-1.5">
+            {pausable.length > 1 && (
+              <BulkButton onClick={() => setPaused(pausable, true)} disabled={pause.isPending}>
+                <Pause className="w-3 h-3" /> Pause {pausable.length}
+              </BulkButton>
+            )}
+            {resumable.length > 1 && (
+              <BulkButton onClick={() => setPaused(resumable, false)} disabled={pause.isPending}>
+                <Play className="w-3 h-3" /> Resume {resumable.length}
+              </BulkButton>
+            )}
+          </span>
+        )}
       </div>
       {total > FILTER_FROM && (
         <div className="px-3 pb-2">
@@ -193,7 +216,15 @@ function TransferFiles({ t }: { t: FileTransfer }) {
         </div>
       )}
       <ul className="max-h-[40dvh] overflow-y-auto border-t border-slate-800 divide-y divide-slate-800/70">
-        {matching.slice(0, MAX_ROWS).map(f => <FileRow key={f.path} f={f} />)}
+        {matching.slice(0, MAX_ROWS).map(f => (
+          <FileRow
+            key={f.path}
+            f={f}
+            actions={active}
+            busy={pause.isPending && !!pause.variables?.paths.includes(f.path)}
+            onPause={paused => setPaused([f], paused)}
+          />
+        ))}
         {matching.length === 0 && <li className="px-3 py-4 text-xs text-slate-500 text-center">Nothing matches</li>}
       </ul>
       {(matching.length > MAX_ROWS || data.truncated) && (
@@ -206,7 +237,13 @@ function TransferFiles({ t }: { t: FileTransfer }) {
   );
 }
 
-function FileRow({ f }: { f: TransferFile }) {
+function FileRow({ f, actions, busy, onPause }: {
+  f: TransferFile;
+  /** The job is still running, so files can be paused / resumed. */
+  actions: boolean;
+  busy: boolean;
+  onPause: (paused: boolean) => void;
+}) {
   const pct = f.state === 'copying' && f.size ? ((f.done ?? 0) / f.size) * 100 : null;
   return (
     <li className="px-3 py-1.5 text-xs">
@@ -223,6 +260,31 @@ function FileRow({ f }: { f: TransferFile }) {
         <span className="shrink-0 text-slate-500 tabular-nums">
           {f.rename ? 'moved' : pct != null ? `${Math.round(pct)}% of ${formatBytes(f.size)}` : formatBytes(f.size)}
         </span>
+        {actions && (
+          <span className="shrink-0 w-6 flex justify-end">
+            {busy ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-500" />
+            ) : canPauseFile(f) ? (
+              <button
+                onClick={() => onPause(true)}
+                title="Pause this file"
+                aria-label={`Pause ${f.rel}`}
+                className="p-0.5 rounded text-slate-500 hover:text-amber-300 hover:bg-slate-700/60 transition-colors"
+              >
+                <Pause className="w-3.5 h-3.5" />
+              </button>
+            ) : canResumeFile(f) ? (
+              <button
+                onClick={() => onPause(false)}
+                title="Resume this file (carries on from the bytes already copied)"
+                aria-label={`Resume ${f.rel}`}
+                className="p-0.5 rounded text-amber-300 hover:text-cyan-300 hover:bg-slate-700/60 transition-colors"
+              >
+                <Play className="w-3.5 h-3.5" />
+              </button>
+            ) : null}
+          </span>
+        )}
       </div>
       {pct != null && (
         <div className="mt-1 ml-5 h-1 rounded-full bg-slate-700 overflow-hidden">
@@ -231,6 +293,18 @@ function FileRow({ f }: { f: TransferFile }) {
       )}
       {f.error && <p className="ml-5 mt-0.5 text-red-300 break-words">{f.error}</p>}
     </li>
+  );
+}
+
+function BulkButton({ onClick, disabled, children }: { onClick: () => void; disabled: boolean; children: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className="flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-slate-700/60 text-slate-300 hover:text-white disabled:opacity-50 transition-colors"
+    >
+      {children}
+    </button>
   );
 }
 
@@ -292,7 +366,7 @@ export function TransfersModal({
                 >
                   <span className="shrink-0">{STATUS[t.status].icon}</span>
                   <span className="truncate">{t.paths.length === 1 ? baseName(t.paths[0]) : `${t.paths.length} items`}</span>
-                  {isTransferActive(t) && t.status === 'running' && (
+                  {(t.status === 'running' || t.status === 'paused') && (
                     <span className="shrink-0 tabular-nums text-slate-500">{Math.floor(transferPercent(t))}%</span>
                   )}
                 </button>
