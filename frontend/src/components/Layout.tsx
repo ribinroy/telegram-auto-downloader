@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Outlet, useNavigate, useLocation, useOutletContext } from 'react-router-dom';
 import { Wifi, WifiOff, HardDrive, Hourglass, Clock, Zap, LogOut, Settings, BarChart3, RefreshCw, FolderOpen, MoreVertical } from 'lucide-react';
 import { formatBytes, formatSpeed, formatTime } from '../utils/format';
-import { type SortBy, type SortOrder } from '../api';
+import { type SortBy, type SortOrder, type DownloadFilter } from '../api';
 import { ToastContainer } from './Toast';
 import { useToast } from '../lib/notify';
 import { ROUTES } from '../routes';
@@ -37,6 +37,8 @@ export interface LayoutContext {
   authors: string[];
   selectedAuthor: string;
   setSelectedAuthor: (s: string) => void;
+  filter: DownloadFilter;
+  setFilter: (f: DownloadFilter) => void;
   loadMore: () => void;
   onRetry: (id: number) => Promise<void>;
   onStop: (messageId: string) => Promise<void>;
@@ -67,6 +69,7 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
   const [sortBy, setSortBy] = useState<SortBy>('created_at');
   const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
   const [selectedAuthor, setSelectedAuthor] = useState<string>('');
+  const [filter, setFilter] = useState<DownloadFilter>('all');
 
   // Secured/hidden state (driven by secured sources/folders)
   const [showSecured, setShowSecured] = useState(false);
@@ -113,11 +116,11 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
   // Downloads (infinite), stats, authors via React Query
   const filters = useMemo(() => ({
     search: debouncedSearch || undefined,
-    filter: 'all' as const,
+    filter,
     sortBy, sortOrder,
     includeHidden: showSecured,
     author: selectedAuthor || undefined,
-  }), [debouncedSearch, sortBy, sortOrder, showSecured, selectedAuthor]);
+  }), [debouncedSearch, filter, sortBy, sortOrder, showSecured, selectedAuthor]);
 
   const downloadsQuery = useDownloads(filters);
   const downloads = useMemo(
@@ -205,6 +208,7 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
     search, setSearch, debouncedSearch,
     sortBy, setSortBy, sortOrder, setSortOrder,
     authors, selectedAuthor, setSelectedAuthor,
+    filter, setFilter,
     loadMore, onRetry, onStop, onPause, onResume, onDelete,
     addUrlOpen, setAddUrlOpen, pastedUrl, setPastedUrl,
     showSecured, refreshDownloads: () => { downloadsQuery.refetch(); },

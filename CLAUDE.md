@@ -195,7 +195,7 @@ Access/refresh token pair. Access tokens are short (`ACCESS_TOKEN_MINUTES`, defa
 - `POST /api/auth/password` - Change password (min 8 chars; bumps `token_version`, revokes other sessions, returns a fresh pair)
 
 ### Downloads
-- `GET /api/downloads` - List (search, filter, sort, paginate, `include_hidden`); each item is annotated with computed `hidden` + `dest_folder`
+- `GET /api/downloads` - List (search, filter, sort, paginate, `include_hidden`); each item is annotated with computed `hidden` + `dest_folder`. `filter=on_disk` keeps finished downloads whose file/folder is still on disk - checked live (`local_copy_exists`), correcting `file_deleted` on rows that disagree; the downloads page's "On disk" select, and the realtime `download:new` patch skips that list
 - `GET /api/stats` - Aggregate statistics
 - `GET /api/authors` - Distinct author list
 - `GET /api/analytics` - Time-series & breakdown analytics

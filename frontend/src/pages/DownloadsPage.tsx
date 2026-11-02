@@ -6,7 +6,7 @@ import { ROUTES } from '../routes';
 import { DownloadItem } from '../components/DownloadItem';
 import { AddUrlModal } from '../components/AddUrlModal';
 import { DownloadQueueButton } from '../components/DownloadQueue';
-import type { SortBy, SortOrder } from '../api';
+import type { SortBy, SortOrder, DownloadFilter } from '../api';
 import { useErrorToast } from '../lib/notify';
 
 export const isTorrentFile = (f: File) =>
@@ -18,6 +18,7 @@ export function DownloadsPage() {
     search, setSearch, debouncedSearch,
     sortBy, setSortBy, sortOrder, setSortOrder,
     authors, selectedAuthor, setSelectedAuthor,
+    filter, setFilter,
     loadMore, onRetry, onStop, onPause, onResume, onDelete,
     addUrlOpen, setAddUrlOpen, pastedUrl, setPastedUrl,
     vpsReady, showSecured,
@@ -140,6 +141,15 @@ export function DownloadsPage() {
         <div className="flex flex-col sm:flex-row sm:items-center gap-3 mb-4 sm:mb-6">
           {/* Sort and Author filter - mobile */}
           <div className="flex items-center justify-end gap-1.5 sm:gap-2 sm:hidden">
+            <select
+              value={filter}
+              onChange={(e) => setFilter(e.target.value as DownloadFilter)}
+              title="Show"
+              className="bg-slate-800/50 border border-slate-700 rounded-lg py-1.5 px-2 text-xs text-white focus:outline-none focus:border-cyan-500 transition-colors cursor-pointer"
+            >
+              <option value="all">All</option>
+              <option value="on_disk">On disk</option>
+            </select>
             {authors.length > 1 && (
               <select
                 value={selectedAuthor}
@@ -204,6 +214,15 @@ export function DownloadsPage() {
 
           {/* Author filter, Sort - desktop */}
           <div className="hidden sm:flex items-center gap-2">
+            <select
+              value={filter}
+              onChange={(e) => setFilter(e.target.value as DownloadFilter)}
+              title="Show"
+              className="bg-slate-800/50 border border-slate-700 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-cyan-500 transition-colors cursor-pointer"
+            >
+              <option value="all">All downloads</option>
+              <option value="on_disk">On disk</option>
+            </select>
             {authors.length > 1 && (
               <select
                 value={selectedAuthor}
@@ -252,8 +271,17 @@ export function DownloadsPage() {
           <div className="min-h-[50vh] flex items-center justify-center text-slate-400">
             <div className="text-center">
               <Download className="w-12 h-12 mx-auto mb-4 opacity-50" />
-              <p>No downloads yet</p>
-              <p className="text-sm">Files sent to your Telegram chat will appear here</p>
+              {filter === 'on_disk' ? (
+                <>
+                  <p>Nothing on disk</p>
+                  <p className="text-sm">No finished download's file is still on the server</p>
+                </>
+              ) : (
+                <>
+                  <p>No downloads yet</p>
+                  <p className="text-sm">Files sent to your Telegram chat will appear here</p>
+                </>
+              )}
             </div>
           </div>
         ) : (

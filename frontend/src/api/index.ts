@@ -210,9 +210,12 @@ export async function revokeSession(sessionId: number): Promise<void> {
   if (!response.ok) throw new Error('Failed to revoke session');
 }
 
+export type DownloadFilter = 'all' | 'active' | 'on_disk';
+
 export interface FetchDownloadsOptions {
   search?: string;
-  filter?: 'all' | 'active';
+  /** 'on_disk': finished downloads whose file is still on the home server */
+  filter?: DownloadFilter;
   sortBy?: SortBy;
   sortOrder?: SortOrder;
   limit?: number;

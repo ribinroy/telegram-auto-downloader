@@ -156,3 +156,15 @@ def test_a_spec_change_applies_to_existing_downloads(client, seeded, auth):
     client.put(f"/api/mappings/{vps['id']}", headers=auth, json={'is_secured': False})
     names = {d['file'] for d in items(client.get('/api/downloads', headers=auth))}
     assert 'c.mkv' in names
+
+
+def test_the_on_disk_filter_lists_only_finished_downloads_still_on_disk(client, db, auth):
+    from backend.config import DOWNLOAD_DIR
+    (DOWNLOAD_DIR / 'here.mkv').write_bytes(b'x')
+    db.add_download(file='here.mkv', status='done', downloaded_from='telegram', message_id='d-1')
+    db.add_download(file='gone.mkv', status='done', downloaded_from='telegram', message_id='d-2')
+    db.add_download(file='here.mkv', status='downloading', downloaded_from='telegram', message_id='d-3')
+    body = client.get('/api/downloads?filter=on_disk', headers=auth).get_json()
+    assert [d['message_id'] for d in body['downloads']] == ['d-1']
+    # The flag is brought in line with what was found
+    assert db.get_download_by_message_id('d-2')['file_deleted'] is True

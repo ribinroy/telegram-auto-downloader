@@ -164,7 +164,8 @@ class WebApp(
 
         Args:
             search: Search query to filter by filename
-            filter_type: 'all' for all downloads, 'active' for non-done downloads
+            filter_type: 'all' for all downloads, 'active' for non-done downloads,
+                'on_disk' for finished downloads whose file is still on disk
             sort_by: Field to sort by ('created_at', 'file', 'status', 'progress')
             sort_order: 'asc' or 'desc'
             limit: Number of items to return (default 30)
@@ -212,6 +213,8 @@ class WebApp(
         # Apply filter_type
         if filter_type == 'active':
             filtered_list = [d for d in filtered_list if d.get("status") != "done"]
+        elif filter_type == 'on_disk':
+            filtered_list = self._on_disk(filtered_list)
 
         # Apply sorting
         reverse = sort_order == 'desc'
@@ -238,6 +241,25 @@ class WebApp(
             "has_more": has_more,
             "total": total_count
         }
+
+    def _on_disk(self, downloads):
+        """Finished downloads whose file (or folder) is still on the home
+        server - checked on disk now, not read from `file_deleted`, which only
+        moves when something happens to look. Rows found to disagree with
+        their flag are corrected on the way, so the rest of the UI agrees."""
+        from backend.web_app.helpers import local_copy_exists
+        db = get_db()
+        kept = []
+        for d in downloads:
+            if d.get("status") != "done":
+                continue
+            exists = local_copy_exists(d)
+            if bool(d.get("file_deleted")) == exists:
+                db.update_download_by_id(d["id"], file_deleted=not exists)
+                d["file_deleted"] = not exists
+            if exists:
+                kept.append(d)
+        return kept
 
     def get_stats(self):
         """Get stats only (without downloads list)"""

@@ -99,7 +99,7 @@ class DownloadRoutesMixin:
         @token_required
         def get_downloads():
             search = request.args.get("search", "")
-            filter_type = request.args.get("filter", "all")  # 'all' or 'active'
+            filter_type = request.args.get("filter", "all")  # 'all', 'active' or 'on_disk'
             sort_by = request.args.get("sort_by", "created_at")  # 'created_at', 'file', 'status', 'progress'
             sort_order = request.args.get("sort_order", "desc")  # 'asc' or 'desc'
             limit = request.args.get("limit", 30, type=int)
