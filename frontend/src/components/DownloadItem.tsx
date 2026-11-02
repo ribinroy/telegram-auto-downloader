@@ -251,6 +251,7 @@ export function DownloadItem({ download, onRetry, onStop, onPause, onResume, onD
   const showProgressBar = (download.status === 'downloading' || download.status === 'paused' || download.status === 'stopped') && progressPercent > 0;
 
   const isTelegram = download.downloaded_from === 'telegram';
+  const isVps = download.downloaded_from === 'vps';
   const navigate = useNavigate();
   const queuePlace = useQueuePlace(download.status === 'waiting' ? download.message_id : null);
   const startNowMut = useStartQueuedNow();
@@ -768,8 +769,8 @@ export function DownloadItem({ download, onRetry, onStop, onPause, onResume, onD
                   </div>
                 </>
               )}
-              {/* For telegram: show resume + stop when paused */}
-              {isTelegram && download.status === 'paused' && (
+              {/* Paused: Telegram, or a VPS folder pull whose files are all paused */}
+              {(isTelegram || isVps) && download.status === 'paused' && (
                 <>
                   <div className="group relative">
                     <button
@@ -1011,7 +1012,7 @@ export function DownloadItem({ download, onRetry, onStop, onPause, onResume, onD
                 </button>
               </>
             )}
-            {isTelegram && download.status === 'paused' && (
+            {(isTelegram || isVps) && download.status === 'paused' && (
               <>
                 <button
                   onClick={() => download.message_id && onResume(download.message_id)}

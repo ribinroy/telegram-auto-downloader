@@ -364,6 +364,15 @@ class VpsDownloader:
         thread = self.threads.get(message_id)
         return {'paused_files': sorted(current), 'running': bool(thread and thread.is_alive())}
 
+    def all_unfinished_paused(self, download: dict):
+        """Whether every file of the pull that isn't done yet is paused. None
+        when it can't be told (the VPS side is out of reach)."""
+        listing = self.file_listing(download)
+        if listing['source'] == 'local':
+            return None
+        unfinished = [f for f in listing['files'] if f['state'] != 'done']
+        return bool(unfinished) and all(f['state'] == 'paused' for f in unfinished)
+
     def _local_listing(self, download: dict) -> dict:
         """What of a pull is on the home server, without the VPS to compare
         against: sizes are local, so nothing can be called partial."""
@@ -490,17 +499,20 @@ class VpsDownloader:
 
             left = [lp for _r, rsize, lp in files if not complete(lp, rsize)]
             if left:
-                # Only paused files are missing: the pull isn't done, it's
-                # stopped where the user left it - a retry (or resuming one
-                # of the files) carries on.
+                # Files are still missing, so the pull isn't done. When every
+                # one of them is paused that was the user's call, and the pull
+                # itself reads as paused (never auto-resumed, like a paused
+                # Telegram download); otherwise it stopped short and a retry
+                # carries on.
+                status = 'paused' if all(rel(lp) in paused for lp in left) else 'stopped'
                 db.update_download_by_message_id(
-                    message_id, status='stopped', speed=0, pending_time=None,
+                    message_id, status=status, speed=0, pending_time=None,
                     downloaded_bytes=transferred[0], total_bytes=total_bytes,
                     progress=(transferred[0] / total_bytes * 100) if total_bytes else 0,
                 )
-                self.emit_status(message_id, 'stopped')
+                self.emit_status(message_id, status)
                 metrics.record_download_stopped('vps')
-                logger.info(f"[vps] Download stopped with {len(left)} paused file(s): {remote_path}")
+                logger.info(f"[vps] Download {status} with {len(left)} file(s) left: {remote_path}")
                 return
 
             db.update_download_by_message_id(

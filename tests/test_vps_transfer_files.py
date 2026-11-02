@@ -153,13 +153,14 @@ def _run(handler, pull, sftp):
     handler._download(REMOTE, 'p-1', pull['dest_base'])
 
 
-def test_a_paused_file_is_skipped_and_the_pull_stops_instead_of_finishing(db, handler, pull):
+def test_a_paused_file_is_skipped_and_the_pull_ends_paused_not_done(db, handler, pull):
     db.update_download_by_message_id('p-1', paused_files='["Extras/sample.mkv"]')
     sftp = _ReadableSFTP(TREE)
     _run(handler, pull, sftp)
     assert [path for path, _n in sftp.reads] == [REMOTE + '/ep02.mkv']
-    # Not "done": a paused file is still missing
-    assert db.get_download_by_message_id('p-1')['status'] == 'stopped'
+    # Not "done": a file is still missing - and since every missing file is
+    # paused, the pull itself reads as paused
+    assert db.get_download_by_message_id('p-1')['status'] == 'paused'
 
 
 def test_pausing_the_file_being_written_keeps_its_bytes_and_moves_on(db, handler, pull, monkeypatch):
@@ -182,10 +183,10 @@ def test_pausing_the_file_being_written_keeps_its_bytes_and_moves_on(db, handler
     _run(handler, pull, sftp)
     from pathlib import Path
     # The chunk in flight lands (5 + 2), nothing after it - and the next file
-    # was still fetched, but the pull stops rather than claiming it's done
+    # was still fetched. Only the paused file is left, so the pull is paused.
     assert (Path(pull['dest_base']) / 'Show' / 'ep02.mkv').stat().st_size == 7
     assert (Path(pull['dest_base']) / 'Show' / 'Extras' / 'sample.mkv').stat().st_size == 4
-    assert db.get_download_by_message_id('p-1')['status'] == 'stopped'
+    assert db.get_download_by_message_id('p-1')['status'] == 'paused'
 
 
 def test_a_file_resumed_after_its_turn_is_fetched_by_a_later_pass(db, handler, pull):
@@ -214,18 +215,19 @@ def test_the_listing_shows_paused_files(db, handler, remote, pull):
 
 
 def test_the_pause_route_saves_and_resuming_restarts_a_stopped_pull(
-        app, client, db, auth, handler, pull, monkeypatch):
+        app, client, db, auth, handler, remote, pull, monkeypatch):
     app.vps_downloader = handler
     res = client.post(f"/api/downloads/{pull['id']}/files/pause", headers=auth,
                       json={'paths': ['ep02.mkv'], 'paused': True})
-    assert res.get_json() == {'paused_files': ['ep02.mkv'], 'restarted': None}
+    # Extras/sample.mkv is still to fetch and not paused: the pull stays stopped
+    assert res.get_json() == {'paused_files': ['ep02.mkv'], 'status': 'stopped', 'restarted': None}
     assert db.get_download_by_message_id('p-1')['paused_files'] == ['ep02.mkv']
 
     resumed = []
     monkeypatch.setattr('backend.resume.resume_download', lambda d, **kw: resumed.append(d['message_id']) or True)
     res = client.post(f"/api/downloads/{pull['id']}/files/pause", headers=auth,
                       json={'paths': ['ep02.mkv'], 'paused': False})
-    assert res.get_json() == {'paused_files': [], 'restarted': 'started'}
+    assert res.get_json() == {'paused_files': [], 'status': 'downloading', 'restarted': 'started'}
     assert resumed == ['p-1']
 
 
@@ -233,3 +235,48 @@ def test_the_pause_route_validates_its_body(client, db, auth, pull):
     url = f"/api/downloads/{pull['id']}/files/pause"
     assert client.post(url, headers=auth, json={'paths': [], 'paused': True}).status_code == 400
     assert client.post(url, headers=auth, json={'paths': ['a'], 'paused': 'yes'}).status_code == 400
+
+
+# --- the pull itself paused when every file left is ---------------------------
+
+def test_a_pull_stops_not_pauses_when_an_unpaused_file_is_still_missing(db, handler, pull):
+    """A missing file nobody paused (here: the VPS stopped serving it) is not
+    the user's decision, so the pull must not read as paused."""
+    db.update_download_by_message_id('p-1', paused_files='["ep02.mkv"]')
+
+    class _ShortSample(_ReadableSFTP):
+        def open(self, path, mode='rb'):
+            inner = super().open(path, mode)
+            if path.endswith('sample.mkv'):
+                inner.readv = lambda chunks: [b'y' * (n // 2) for _o, n in chunks]
+            return inner
+
+    _run(handler, pull, _ShortSample(TREE))
+    assert db.get_download_by_message_id('p-1')['status'] == 'stopped'
+
+
+def test_pausing_the_last_file_left_pauses_a_stopped_pull(app, client, db, auth, handler, remote, pull):
+    app.vps_downloader = handler
+    url = f"/api/downloads/{pull['id']}/files/pause"
+    client.post(url, headers=auth, json={'paths': ['ep02.mkv'], 'paused': True})
+    res = client.post(url, headers=auth, json={'paths': ['Extras/sample.mkv'], 'paused': True})
+    assert res.get_json()['status'] == 'paused'
+    assert db.get_download_by_message_id('p-1')['status'] == 'paused'
+
+
+def test_resuming_a_paused_pull_from_its_row_resumes_every_file(app, client, db, auth, handler, pull, monkeypatch):
+    app.vps_downloader = handler
+    db.update_download_by_message_id('p-1', status='paused', paused_files='["ep02.mkv", "Extras/sample.mkv"]')
+    resumed = []
+    monkeypatch.setattr('backend.resume.resume_download', lambda d, **kw: resumed.append(d['paused_files']) or True)
+    res = client.post('/api/resume', headers=auth, json={'message_id': 'p-1'})
+    assert res.get_json() == {'status': 'downloading'}
+    assert resumed == [[]]  # restarted with nothing paused
+
+
+def test_resume_all_unpauses_the_files_of_a_paused_pull(db, pull):
+    from backend import download_queue
+    db.update_download_by_message_id('p-1', status='paused', paused_files='["ep02.mkv"]')
+    assert download_queue.resume_all() == 1
+    record = db.get_download_by_message_id('p-1')
+    assert record['status'] == 'waiting' and record['paused_files'] == []

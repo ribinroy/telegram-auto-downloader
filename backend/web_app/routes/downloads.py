@@ -94,6 +94,19 @@ class DownloadRoutesMixin:
         self.emit_status(message_id, status)
         return None
 
+    def _restart_vps_pull(self, download):
+        """Start a stopped/paused VPS pull again through the queue - the
+        retry button's path. -> (started|waiting, None) or (None, error)"""
+        from backend.resume import resume_download
+        previous = download["status"]
+        if download_queue.admit_existing(download) == 'queued':
+            return "waiting", None
+        if resume_download(download):
+            return "started", None
+        get_db().update_download_by_message_id(download["message_id"], status=previous)
+        self.emit_status(download["message_id"], previous)
+        return None, "Saved, but the transfer couldn't be restarted"
+
     def register_download_routes(self):
         @self.app.route("/api/downloads", methods=["GET"])
         @token_required
@@ -150,11 +163,13 @@ class DownloadRoutesMixin:
             """Pause or resume files of a VPS folder pull.
             Body: {paths: [str], paused: bool} - paths as the file list shows them.
 
-            Resuming a file of a pull that has stopped (it stops by itself once
-            only paused files are left) starts the pull again through the
-            queue, exactly like the retry button - so it fetches just the
-            files that aren't paused. -> {paused_files, restarted: started|waiting|null}"""
-            from backend.resume import resume_download
+            Pausing the last file still to fetch of a pull that isn't running
+            sets the pull itself to `paused` (a running one gets there on its
+            own when it runs out of unpaused files). Resuming a file of a
+            stopped/failed/paused pull starts it again through the queue,
+            exactly like the retry button - so it fetches just the files that
+            aren't paused.
+            -> {paused_files, status, restarted: started|waiting|null}"""
             data = request.json or {}
             paths, paused = data.get("paths"), data.get("paused")
             if not isinstance(paths, list) or not paths or not all(isinstance(p, str) and p for p in paths):
@@ -172,18 +187,20 @@ class DownloadRoutesMixin:
 
             result = self.vps_downloader.set_files_paused(download, paths, paused)
             restarted = None
-            if not paused and not result["running"] and download["status"] in ("failed", "stopped"):
-                download = db.get_download_by_id(download_id)
-                if download_queue.admit_existing(download) == 'queued':
-                    restarted = "waiting"
-                elif resume_download(download):
-                    restarted = "started"
-                else:
-                    db.update_download_by_message_id(download["message_id"], status=download["status"])
-                    self.emit_status(download["message_id"], download["status"])
-                    return jsonify({"error": "Saved, but the transfer couldn't be restarted",
-                                    "paused_files": result["paused_files"]}), 500
-            return jsonify({"paused_files": result["paused_files"], "restarted": restarted})
+            status = download["status"]
+            message_id = download["message_id"]
+            if paused and not result["running"] and status in ("failed", "stopped", "waiting"):
+                if self.vps_downloader.all_unfinished_paused(db.get_download_by_id(download_id)):
+                    status = "paused"
+                    db.update_download_by_message_id(message_id, status=status, speed=0, pending_time=None)
+                    self.emit_status(message_id, status)
+                    download_queue.kick()
+            elif not paused and not result["running"] and status in ("failed", "stopped", "paused"):
+                restarted, error = self._restart_vps_pull(db.get_download_by_id(download_id))
+                if error:
+                    return jsonify({"error": error, "paused_files": result["paused_files"]}), 500
+                status = "waiting" if restarted == "waiting" else "downloading"
+            return jsonify({"paused_files": result["paused_files"], "status": status, "restarted": restarted})
 
         @self.app.route("/api/retry", methods=["POST"])
         @token_required
@@ -255,6 +272,16 @@ class DownloadRoutesMixin:
             data = request.json
             message_id = data.get("message_id")
             db = get_db()
+
+            # A VPS folder pull is paused when every file left in it is: resuming
+            # the pull means resuming all of them.
+            download = db.get_download_by_message_id(message_id) if message_id else None
+            if download and download.get("downloaded_from") == "vps" and download.get("status") == "paused":
+                db.update_download_by_message_id(message_id, paused_files=None)
+                restarted, error = self._restart_vps_pull(db.get_download_by_message_id(message_id))
+                if error:
+                    return jsonify({"error": error}), 500
+                return jsonify({"status": "waiting" if restarted == "waiting" else "downloading"})
 
             is_uuid = message_id and '-' in message_id
             if is_uuid:

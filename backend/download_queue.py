@@ -310,9 +310,15 @@ def resume_all():
         rows = _resumable()
         position = db.next_queue_position()
         for offset, download in enumerate(rows):
+            # A paused VPS folder pull is paused because all its files are -
+            # resuming everything means them too, or it would start and
+            # stop again at once.
+            extra = ({'paused_files': None}
+                     if download.get('downloaded_from') == 'vps' and download.get('status') == 'paused'
+                     else {})
             db.update_download_by_message_id(
                 download['message_id'], status='waiting', speed=0, error=None,
-                queue_position=position + offset)
+                queue_position=position + offset, **extra)
     for download in rows:
         _emit_status(download['message_id'], 'waiting')
     kick()
