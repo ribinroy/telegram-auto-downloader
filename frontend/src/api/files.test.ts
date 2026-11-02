@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { isRemotePath, transferPercent, transferTitle, type FileTransfer } from './files';
+import {
+  isRemotePath, transferPercent, transferTitle, sortTransferFiles, type FileTransfer, type TransferFile,
+} from './files';
 
 describe('isRemotePath', () => {
   it('only matches the vps: scheme', () => {
@@ -40,5 +42,13 @@ describe('transferTitle', () => {
   it('names one item, counts several, and follows the tense', () => {
     expect(transferTitle(job())).toBe('Copying Movies to Films');
     expect(transferTitle(job({ move: true, status: 'done', paths: ['/x', '/y'] }))).toBe('Moved 2 items to Films');
+  });
+});
+
+describe('sortTransferFiles', () => {
+  const f = (rel: string, state: TransferFile['state']): TransferFile => ({ path: `/s/${rel}`, rel, size: 1, state, rename: false });
+  it('puts the file being written first, then failures, what is left, and what is settled', () => {
+    const files = [f('a', 'done'), f('b', 'pending'), f('c', 'failed'), f('d', 'copying'), f('e', 'pending'), f('g', 'skipped')];
+    expect(sortTransferFiles(files).map(x => x.rel)).toEqual(['d', 'c', 'b', 'e', 'a', 'g']);
   });
 });

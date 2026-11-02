@@ -24,6 +24,10 @@ CHUNK = 4 * 1024 * 1024
 # happened after the fact ("2 failed: permission denied").
 KEEP_FINISHED_SECONDS = 600
 SPEED_WINDOW = 3.0
+# Per-file states are kept for this many files. Past it the job still counts
+# every byte and file; only the listing stops growing (and says so).
+MAX_TRACKED_FILES = 20000
+FILE_STATES = ('pending', 'copying', 'done', 'failed', 'skipped', 'cancelled')
 ACTIVE = ('preparing', 'running')
 
 _jobs = {}
@@ -59,6 +63,12 @@ class TransferJob:
         self._finished = threading.Event()
         self._samples = deque()
         self._mu = threading.Lock()
+        # The plan, one dict per file (state, error), plus a lookup by source
+        # path - the path copytree/shutil.move hand to copy_file.
+        self._files = []
+        self._by_path = {}
+        self.files_truncated = False
+        self._item_index = -1
 
     # --- called from the copy ---------------------------------------------
 
@@ -72,6 +82,32 @@ class TransferJob:
             if self.current_item is not None:
                 self.items_done += 1
             self.current_item = str(source)
+            self._item_index += 1
+
+    def end_item(self, error=None, cancelled=False):
+        """Settle the current item's files once transfer() is done with it."""
+        with self._mu:
+            for f in self._files:
+                if f['item'] != self._item_index:
+                    continue
+                if cancelled:
+                    # The partial target is removed, files already copied included
+                    if f['state'] != 'failed':
+                        f['state'] = 'cancelled'
+                elif f['state'] == 'pending':
+                    if f['rename'] and error is None:
+                        f['state'] = 'done'
+                    else:
+                        f['state'] = 'skipped'
+                        if error:
+                            f['error'] = error
+
+    def _set_file(self, src, state, error=None):
+        f = self._by_path.get(str(src))
+        if f is not None:
+            f['state'] = state
+            if error:
+                f['error'] = error
 
     def copy_file(self, src, dst, *, follow_symlinks=True):
         """shutil.copy2 with a byte counter and a cancel check per chunk."""
@@ -88,16 +124,25 @@ class TransferJob:
             self.current_file = str(src)
             self.current_file_size = size
             self.current_file_done = 0
-        with open(src, 'rb') as fin, open(dst, 'wb') as fout:
-            while True:
-                if self._cancel.is_set():
-                    raise fs.TransferCancelled()
-                chunk = fin.read(CHUNK)
-                if not chunk:
-                    break
-                fout.write(chunk)
-                self._add_bytes(len(chunk))
-        shutil.copystat(src, dst)
+            self._set_file(src, 'copying')
+        try:
+            with open(src, 'rb') as fin, open(dst, 'wb') as fout:
+                while True:
+                    if self._cancel.is_set():
+                        raise fs.TransferCancelled()
+                    chunk = fin.read(CHUNK)
+                    if not chunk:
+                        break
+                    fout.write(chunk)
+                    self._add_bytes(len(chunk))
+            shutil.copystat(src, dst)
+        except OSError as e:
+            # copytree notes this one down and carries on with the next file
+            with self._mu:
+                self._set_file(src, 'failed', e.strerror or str(e))
+            raise
+        with self._mu:
+            self._set_file(src, 'done')
         self._file_done(size)
         return dst
 
@@ -129,10 +174,14 @@ class TransferJob:
     def run(self):
         try:
             dest = fs.transfer_dest(self.dest)
-            total_bytes, total_files = fs.transfer_plan(
-                self.paths, dest, self.move, cancelled=self.cancelled)
+            plan = fs.transfer_plan(self.paths, dest, self.move, cancelled=self.cancelled)
             with self._mu:
-                self.total_bytes, self.total_files = total_bytes, total_files
+                copies = [e for e in plan if not e['rename']]
+                self.total_bytes = sum(e['size'] for e in copies)
+                self.total_files = len(copies)
+                self._files = [dict(e, state='pending') for e in plan[:MAX_TRACKED_FILES]]
+                self._by_path = {f['path']: f for f in self._files}
+                self.files_truncated = len(plan) > MAX_TRACKED_FILES
                 self.status = 'running'
             self.results = fs.transfer(self.paths, self.dest, move=self.move, job=self)
             if self._cancel.is_set() or any(r.get('cancelled') for r in self.results):
@@ -153,6 +202,11 @@ class TransferJob:
                 if self.current_item is not None and self.status != 'cancelled':
                     self.items_done = self.items_total
                 self.current_file = None
+                # Never reached: an item that failed early, or everything after
+                # a cancel.
+                for f in self._files:
+                    if f['state'] in ('pending', 'copying'):
+                        f['state'] = 'skipped'
             self.finished_at = time.time()
             self._finished.set()
 
@@ -165,6 +219,23 @@ class TransferJob:
                 return 0
             (t0, b0), (t1, b1) = self._samples[0], self._samples[-1]
             return (b1 - b0) / (t1 - t0) if t1 > t0 else 0
+
+    def file_listing(self):
+        """The planned files and how far each got, in plan order."""
+        with self._mu:
+            counts = dict.fromkeys(FILE_STATES, 0)
+            files = []
+            for f in self._files:
+                counts[f['state']] += 1
+                row = {'path': f['path'], 'rel': f['rel'], 'size': f['size'],
+                       'state': f['state'], 'rename': f['rename']}
+                if f.get('error'):
+                    row['error'] = f['error']
+                if f['state'] == 'copying':
+                    row['done'] = self.current_file_done
+                files.append(row)
+            return {'id': self.id, 'status': self.status, 'files': files,
+                    'counts': counts, 'truncated': self.files_truncated}
 
     def snapshot(self):
         speed = self.speed()

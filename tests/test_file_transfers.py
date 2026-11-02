@@ -148,3 +148,89 @@ def test_a_slow_paste_answers_running_and_is_listed(client, db, auth, tmp_tree, 
 
 def test_cancel_route_404s_an_unknown_job(client, db, auth):
     assert client.post('/api/files/transfers/nope/cancel', headers=auth).status_code == 404
+
+
+# --- per-file listing -------------------------------------------------------
+
+def _states(job):
+    return {f['rel']: f['state'] for f in job.file_listing()['files']}
+
+
+def test_the_listing_names_every_file_with_where_it_lands(tmp_tree):
+    dest = tmp_tree / 'dest'
+    dest.mkdir()
+    job = _run([tmp_tree / 'Movies', tmp_tree / 'notes.txt'], dest)
+    listing = job.file_listing()
+    assert _states(job) == {'Movies/a.mkv': 'done', 'Movies/nested/b.mp4': 'done', 'notes.txt': 'done'}
+    assert listing['counts']['done'] == 3 and listing['truncated'] is False
+
+
+def test_a_same_disk_move_lists_the_item_as_one_rename(tmp_tree):
+    dest = tmp_tree / 'dest'
+    dest.mkdir()
+    job = _run([tmp_tree / 'Movies'], dest, move=True)
+    [row] = job.file_listing()['files']
+    assert row['rel'] == 'Movies' and row['rename'] is True and row['state'] == 'done'
+
+
+def test_an_item_that_fails_up_front_leaves_its_files_not_copied(tmp_tree):
+    job = _run([tmp_tree / 'Movies'], tmp_tree / 'Movies' / 'nested', move=True)
+    # same disk -> one rename row, refused as "into itself"
+    [row] = job.file_listing()['files']
+    assert row['state'] == 'skipped' and 'into itself' in row['error']
+
+
+def test_a_file_that_cannot_be_read_fails_alone(tmp_tree, monkeypatch):
+    dest = tmp_tree / 'dest'
+    dest.mkdir()
+    bad = str(tmp_tree / 'Movies' / 'a.mkv')
+    real_open = open
+
+    def flaky_open(path, *a, **k):
+        if str(path) == bad and 'r' in (a[0] if a else k.get('mode', 'r')):
+            raise PermissionError(13, 'Permission denied')
+        return real_open(path, *a, **k)
+
+    monkeypatch.setattr('builtins.open', flaky_open)
+    job = _run([tmp_tree / 'Movies'], dest)
+    states = _states(job)
+    assert states['Movies/a.mkv'] == 'failed'
+    assert states['Movies/nested/b.mp4'] == 'done'
+    failed = next(f for f in job.file_listing()['files'] if f['state'] == 'failed')
+    assert failed['error'] == 'Permission denied'
+
+
+def test_cancel_marks_the_item_cancelled_and_the_rest_not_copied(tmp_tree, monkeypatch):
+    big = tmp_tree / 'big.bin'
+    big.write_bytes(b'z' * (64 * 1024))
+    dest = tmp_tree / 'dest'
+    dest.mkdir()
+    monkeypatch.setattr(transfers, 'CHUNK', 1024)
+    first, release = threading.Event(), threading.Event()
+    real_add = transfers.TransferJob._add_bytes
+
+    def slow_add(self, n):
+        real_add(self, n)
+        first.set()
+        release.wait(5)
+
+    monkeypatch.setattr(transfers.TransferJob, '_add_bytes', slow_add)
+    job = transfers.start([str(big), str(tmp_tree / 'notes.txt')], str(dest))
+    assert first.wait(5)
+    row = next(f for f in job.file_listing()['files'] if f['rel'] == 'big.bin')
+    assert row['state'] == 'copying' and row['done'] > 0
+    job.cancel()
+    release.set()
+    assert job.wait(5)
+    assert _states(job) == {'big.bin': 'cancelled', 'notes.txt': 'skipped'}
+
+
+def test_the_files_route(client, db, auth, tmp_tree):
+    dest = tmp_tree / 'dest'
+    dest.mkdir()
+    body = client.post('/api/files/transfer', headers=auth,
+                       json={'paths': [str(tmp_tree / 'notes.txt')], 'dest': str(dest)}).get_json()
+    res = client.get(f"/api/files/transfers/{body['job']['id']}/files", headers=auth)
+    assert res.status_code == 200
+    assert [f['rel'] for f in res.get_json()['files']] == ['notes.txt']
+    assert client.get('/api/files/transfers/nope/files', headers=auth).status_code == 404

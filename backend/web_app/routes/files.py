@@ -240,6 +240,17 @@ class FilesRoutesMixin:
             """Copy/move jobs: running ones plus the last few minutes' finished."""
             return jsonify({"transfers": transfers.list_jobs()})
 
+        @self.app.route("/api/files/transfers/<job_id>/files", methods=["GET"])
+        @token_required
+        def files_transfer_files(job_id):
+            """Every file of one job and its state - its own route, polled only
+            while the details modal shows that job, since a folder of 20k files
+            has no business riding along on the 1s list poll."""
+            job = transfers.get(job_id)
+            if job is None:
+                return jsonify({"error": "No such transfer"}), 404
+            return jsonify(job.file_listing())
+
         @self.app.route("/api/files/transfers/<job_id>/cancel", methods=["POST"])
         @token_required
         def files_transfer_cancel(job_id):

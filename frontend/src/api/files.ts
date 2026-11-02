@@ -123,6 +123,42 @@ export interface FileTransfer {
   acknowledged: boolean;
 }
 
+export type TransferFileState = 'pending' | 'copying' | 'done' | 'failed' | 'skipped' | 'cancelled';
+
+export interface TransferFile {
+  path: string;
+  /** Where it lands under the destination, top folder included. */
+  rel: string;
+  size: number;
+  state: TransferFileState;
+  /** A same-disk move: the whole item is one rename, not a list of copies. */
+  rename: boolean;
+  error?: string;
+  /** Bytes written so far, on the file being copied. */
+  done?: number;
+}
+
+export interface TransferFileListing {
+  id: string;
+  status: FileTransferStatus;
+  files: TransferFile[];
+  counts: Record<TransferFileState, number>;
+  /** The plan was longer than the server keeps per-file states for. */
+  truncated: boolean;
+}
+
+/** What needs attention first: the file being written, then failures, then
+ *  what's still to come, then what's settled. Plan order within each. */
+const FILE_ORDER: Record<TransferFileState, number> = {
+  copying: 0, failed: 1, pending: 2, done: 3, skipped: 4, cancelled: 5,
+};
+export function sortTransferFiles(files: TransferFile[]): TransferFile[] {
+  return files
+    .map((f, i) => [f, i] as const)
+    .sort((a, b) => FILE_ORDER[a[0].state] - FILE_ORDER[b[0].state] || a[1] - b[1])
+    .map(([f]) => f);
+}
+
 export const isTransferActive = (t: FileTransfer) => t.status === 'preparing' || t.status === 'running';
 
 /** 0-100. A same-disk move copies nothing (it's a rename), so it goes by items. */
@@ -190,6 +226,9 @@ export function transferTitle(t: FileTransfer): string {
 
 export const fetchTransfers = () =>
   filesRequest<{ transfers: FileTransfer[] }>('/transfers');
+
+export const fetchTransferFiles = (id: string) =>
+  filesRequest<TransferFileListing>(`/transfers/${id}/files`);
 
 export const cancelTransfer = (id: string) =>
   filesRequest<{ job: FileTransfer }>(`/transfers/${id}/cancel`, {});

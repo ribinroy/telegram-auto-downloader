@@ -490,38 +490,52 @@ def _same_device(source, dest):
 
 
 def transfer_plan(raw_paths, dest, move=False, cancelled=None):
-    """(bytes, files) the transfer will actually copy. A move within one
-    filesystem is a rename - instant, so it counts as nothing to copy; a move
-    across disks is a copy and a delete, and counts like a copy."""
-    total_bytes = total_files = 0
-    for raw in raw_paths:
+    """Every file the transfer will copy, in walk order:
+    [{path, rel, size, item, rename}]. `rel` is the path as it lands under
+    `dest` (top folder included); `item` indexes `raw_paths`.
+
+    A move within one filesystem is a rename - instant, nothing copied - so its
+    item is one `rename: True` entry rather than its files. A move across disks
+    is a copy and a delete, and is planned like a copy. Symlinks inside a folder
+    are recreated as links, not copied, so they aren't listed."""
+    entries = []
+    for item, raw in enumerate(raw_paths):
         try:
             source = resolve_path(raw, follow=False)
         except FsError:
             continue
         if move and _same_device(source, dest):
+            entries.append({'path': str(source), 'rel': source.name, 'size': 0,
+                            'item': item, 'rename': True})
             continue
         if source.is_dir() and not source.is_symlink():
-            for dirpath, _dirs, filenames in os.walk(source, followlinks=False):
+            for dirpath, dirnames, filenames in os.walk(source, followlinks=False):
                 if cancelled and cancelled():
                     raise TransferCancelled()
-                for name in filenames:
+                dirnames.sort()
+                for name in sorted(filenames):
+                    full = os.path.join(dirpath, name)
                     try:
-                        st = os.lstat(os.path.join(dirpath, name))
+                        st = os.lstat(full)
                     except OSError:
                         continue
-                    total_files += 1
-                    if stat_module.S_ISREG(st.st_mode):
-                        total_bytes += st.st_size
+                    if stat_module.S_ISLNK(st.st_mode):
+                        continue
+                    entries.append({
+                        'path': full,
+                        'rel': os.path.join(source.name, os.path.relpath(full, str(source))),
+                        'size': st.st_size if stat_module.S_ISREG(st.st_mode) else 0,
+                        'item': item, 'rename': False,
+                    })
         else:
             try:
                 st = os.lstat(str(source))
             except OSError:
                 continue
-            total_files += 1
-            if stat_module.S_ISREG(st.st_mode):
-                total_bytes += st.st_size
-    return total_bytes, total_files
+            entries.append({'path': str(source), 'rel': source.name,
+                            'size': st.st_size if stat_module.S_ISREG(st.st_mode) else 0,
+                            'item': item, 'rename': False})
+    return entries
 
 
 def transfer(raw_paths, raw_dest, move=False, job=None):
@@ -554,18 +568,34 @@ def transfer(raw_paths, raw_dest, move=False, job=None):
             else:
                 copy_fn(str(source), str(target), follow_symlinks=False)
             results.append({'path': str(source), 'target': str(target)})
+            if job:
+                job.end_item()
         except TransferCancelled:
             # The target is a fresh unique name this call created, so whatever
             # half of it exists is ours to remove. The source is untouched: a
             # cross-disk move only deletes it after the copy completes.
             _discard_partial(target)
             results.append({'path': str(source), 'error': 'Cancelled', 'cancelled': True})
+            if job:
+                job.end_item(cancelled=True)
             break
         except FsError as e:
             results.append({'path': str(source), 'error': e.message})
+            if job:
+                job.end_item(error=e.message)
         except (OSError, shutil.Error) as e:
             results.append({'path': str(source), 'error': str(e)})
+            if job:
+                job.end_item(error=_short_error(e))
     return results
+
+
+def _short_error(e):
+    """shutil.Error carries a list of (src, dst, why) - one line is enough
+    for a file row, which already says which file it is."""
+    if isinstance(e, shutil.Error) and e.args and isinstance(e.args[0], list):
+        return f'{len(e.args[0])} file(s) failed'
+    return getattr(e, 'strerror', None) or str(e)
 
 
 def _discard_partial(target):

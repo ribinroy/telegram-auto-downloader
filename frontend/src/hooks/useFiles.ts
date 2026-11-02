@@ -2,7 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   fetchFileRoots, listFiles, createFolder, renamePath, deletePaths, transferPaths,
   searchFiles, dirSize, readTextFile, uploadFiles,
-  fetchTransfers, cancelTransfer, dismissTransfer, ackTransfers, isTransferActive,
+  fetchTransfers, fetchTransferFiles, cancelTransfer, dismissTransfer, ackTransfers, isTransferActive,
 } from '../api/files';
 import { qk } from '../api/queryKeys';
 
@@ -136,5 +136,17 @@ export function useAckTransfers() {
   return useMutation({
     mutationFn: ackTransfers,
     onSuccess: () => qc.invalidateQueries({ queryKey: qk.fileTransfers() }),
+  });
+}
+
+/** One job's file list, for the details modal only. Polled while the job runs. */
+export function useTransferFiles(id: string | null, active: boolean) {
+  return useQuery({
+    queryKey: qk.fileTransferFiles(id ?? ''),
+    queryFn: () => fetchTransferFiles(id as string),
+    enabled: !!id,
+    staleTime: 0,
+    refetchInterval: active ? 1500 : false,
+    placeholderData: prev => (prev?.id === id ? prev : undefined),
   });
 }
