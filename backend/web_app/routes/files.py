@@ -16,6 +16,7 @@ from pathlib import Path
 from flask import jsonify, request, send_file
 
 from backend import files as fs
+from backend import file_transfers as transfers
 from backend.database import get_db
 
 # One screenful of a grid, generously. A warm-up is fire-and-forget work the
@@ -24,6 +25,8 @@ MAX_WARM = 300
 # Seconds a thumb request may block on generation before answering 503: long
 # enough that an image or a quick clip still arrives in one request.
 THUMB_WAIT = 4
+# Seconds a paste request waits for its copy before answering "running".
+TRANSFER_INLINE_WAIT = 1.0
 from backend.web_app.base import token_required, media_token_required
 from backend.web_app.helpers import range_response
 
@@ -218,12 +221,46 @@ class FilesRoutesMixin:
 
             if rfs.is_remote(dest):
                 return jsonify({"error": "Uploading to the VPS isn't supported yet"}), 400
+            # A local paste runs as a background job (backend/file_transfers.py)
+            # so the explorer can show its progress. Waiting briefly first keeps
+            # a small paste a single round trip: the answer then already holds
+            # the finished job, results and all.
             try:
-                results = fs.transfer(paths, dest, move=bool(data.get("move")))
+                job = transfers.start(paths, dest, move=bool(data.get("move")))
             except fs.FsError as e:
                 return _fs_error(e)
-            return jsonify({"results": results,
-                            "errors": [r for r in results if r.get("error")]})
+            job.wait(TRANSFER_INLINE_WAIT)
+            snap = job.snapshot()
+            return jsonify({"results": snap["results"], "errors": snap["errors"],
+                            "job": snap, "running": not job.finished})
+
+        @self.app.route("/api/files/transfers", methods=["GET"])
+        @token_required
+        def files_transfers():
+            """Copy/move jobs: running ones plus the last few minutes' finished."""
+            return jsonify({"transfers": transfers.list_jobs()})
+
+        @self.app.route("/api/files/transfers/<job_id>/cancel", methods=["POST"])
+        @token_required
+        def files_transfer_cancel(job_id):
+            job = transfers.get(job_id)
+            if job is None:
+                return jsonify({"error": "No such transfer"}), 404
+            job.cancel()
+            # The copy notices within one chunk; wait for that so the answer
+            # can already say "cancelled" (and the partial target is gone).
+            job.wait(5)
+            return jsonify({"job": job.snapshot()})
+
+        @self.app.route("/api/files/transfers/<job_id>", methods=["DELETE"])
+        @token_required
+        def files_transfer_dismiss(job_id):
+            try:
+                if not transfers.dismiss(job_id):
+                    return jsonify({"error": "No such transfer"}), 404
+            except fs.FsError as e:
+                return _fs_error(e)
+            return jsonify({"ok": True})
 
         @self.app.route("/api/files/upload", methods=["POST"])
         @token_required

@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   fetchFileRoots, listFiles, createFolder, renamePath, deletePaths, transferPaths,
   searchFiles, dirSize, readTextFile, uploadFiles,
+  fetchTransfers, cancelTransfer, dismissTransfer, isTransferActive,
 } from '../api/files';
 import { qk } from '../api/queryKeys';
 
@@ -99,5 +100,33 @@ export function useUploadFiles() {
   return useMutation({
     mutationFn: (vars: { dest: string; files: File[] }) => uploadFiles(vars.dest, vars.files),
     onSuccess: invalidate,
+  });
+}
+
+/** Copy/move jobs on the server. Polled every second while one runs - a
+ *  paste can outlive the page that started it, so this is the source of truth
+ *  rather than anything the paste call returned. */
+export function useFileTransfers() {
+  return useQuery({
+    queryKey: qk.fileTransfers(),
+    queryFn: fetchTransfers,
+    staleTime: 0,
+    refetchInterval: q => (q.state.data?.transfers.some(isTransferActive) ? 1000 : false),
+  });
+}
+
+export function useCancelTransfer() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: cancelTransfer,
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.fileTransfers() }),
+  });
+}
+
+export function useDismissTransfer() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: dismissTransfer,
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.fileTransfers() }),
   });
 }

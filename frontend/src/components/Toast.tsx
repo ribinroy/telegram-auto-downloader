@@ -9,6 +9,8 @@ export interface ToastData {
   title: string;
   message?: string;
   duration?: number;
+  /** Clicking the toast's body runs this (and dismisses it) - e.g. open details. */
+  onClick?: () => void;
 }
 
 interface ToastProps {
@@ -64,7 +66,10 @@ function Toast({ toast, onDismiss }: ToastProps) {
       } ${isExiting ? 'opacity-0 translate-x-full' : 'opacity-100 translate-x-0 toast-enter'}`}
     >
       {icons[toast.type]}
-      <div className="flex-1 min-w-0">
+      <div
+        className={`flex-1 min-w-0 ${toast.onClick ? 'cursor-pointer' : ''}`}
+        onClick={toast.onClick ? () => { toast.onClick?.(); handleDismiss(); } : undefined}
+      >
         <p className={`font-semibold text-sm ${titleColors[toast.type]}`}>{toast.title}</p>
         {toast.message && (
           <p className="text-slate-300 text-sm mt-1 line-clamp-2">{toast.message}</p>

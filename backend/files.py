@@ -467,17 +467,80 @@ def delete(raw_paths, permanent=False):
     return results
 
 
-def transfer(raw_paths, raw_dest, move=False):
-    """Copy or move a selection into `dest`, resolving name clashes."""
+class TransferCancelled(Exception):
+    """Raised inside a copy to abandon it. Deliberately not an OSError, so
+    copytree's per-file error collection lets it through instead of noting it
+    down and carrying on with the next file."""
+
+
+def transfer_dest(raw_dest):
+    """Resolve and check a paste destination. Raises FsError."""
     dest = resolve_path(raw_dest)
     if not dest.is_dir():
         raise FsError('Destination is not a directory')
     guard_write(dest)
+    return dest
+
+
+def _same_device(source, dest):
+    try:
+        return os.lstat(str(source)).st_dev == os.stat(str(dest)).st_dev
+    except OSError:
+        return False
+
+
+def transfer_plan(raw_paths, dest, move=False, cancelled=None):
+    """(bytes, files) the transfer will actually copy. A move within one
+    filesystem is a rename - instant, so it counts as nothing to copy; a move
+    across disks is a copy and a delete, and counts like a copy."""
+    total_bytes = total_files = 0
+    for raw in raw_paths:
+        try:
+            source = resolve_path(raw, follow=False)
+        except FsError:
+            continue
+        if move and _same_device(source, dest):
+            continue
+        if source.is_dir() and not source.is_symlink():
+            for dirpath, _dirs, filenames in os.walk(source, followlinks=False):
+                if cancelled and cancelled():
+                    raise TransferCancelled()
+                for name in filenames:
+                    try:
+                        st = os.lstat(os.path.join(dirpath, name))
+                    except OSError:
+                        continue
+                    total_files += 1
+                    if stat_module.S_ISREG(st.st_mode):
+                        total_bytes += st.st_size
+        else:
+            try:
+                st = os.lstat(str(source))
+            except OSError:
+                continue
+            total_files += 1
+            if stat_module.S_ISREG(st.st_mode):
+                total_bytes += st.st_size
+    return total_bytes, total_files
+
+
+def transfer(raw_paths, raw_dest, move=False, job=None):
+    """Copy or move a selection into `dest`, resolving name clashes.
+
+    `job` (a file_transfers.TransferJob) makes it observable: every file is
+    copied through job.copy_file, which counts bytes and raises
+    TransferCancelled once the job is cancelled. Without one, it is the plain
+    synchronous copy it always was."""
+    dest = transfer_dest(raw_dest)
+    copy_fn = job.copy_file if job else shutil.copy2
 
     results = []
     for raw in raw_paths:
         source = resolve_path(raw, follow=False)
+        target = None
         try:
+            if job:
+                job.begin_item(source)
             if move:
                 guard_target(source)
             if str(dest).startswith(str(source).rstrip('/') + '/'):
@@ -485,17 +548,36 @@ def transfer(raw_paths, raw_dest, move=False):
             name = unique_name(dest, source.name)
             target = dest / name
             if move:
-                shutil.move(str(source), str(target))
+                shutil.move(str(source), str(target), copy_function=copy_fn)
             elif source.is_dir() and not source.is_symlink():
-                shutil.copytree(str(source), str(target), symlinks=True)
+                shutil.copytree(str(source), str(target), symlinks=True, copy_function=copy_fn)
             else:
-                shutil.copy2(str(source), str(target), follow_symlinks=False)
+                copy_fn(str(source), str(target), follow_symlinks=False)
             results.append({'path': str(source), 'target': str(target)})
+        except TransferCancelled:
+            # The target is a fresh unique name this call created, so whatever
+            # half of it exists is ours to remove. The source is untouched: a
+            # cross-disk move only deletes it after the copy completes.
+            _discard_partial(target)
+            results.append({'path': str(source), 'error': 'Cancelled', 'cancelled': True})
+            break
         except FsError as e:
             results.append({'path': str(source), 'error': e.message})
         except (OSError, shutil.Error) as e:
             results.append({'path': str(source), 'error': str(e)})
     return results
+
+
+def _discard_partial(target):
+    if target is None or not os.path.lexists(str(target)):
+        return
+    try:
+        if target.is_dir() and not target.is_symlink():
+            shutil.rmtree(str(target), ignore_errors=True)
+        else:
+            target.unlink()
+    except OSError:
+        pass
 
 
 def save_upload(raw_dest, filename, stream):

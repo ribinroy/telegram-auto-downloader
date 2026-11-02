@@ -85,6 +85,48 @@ export interface FileOpResponse {
   download?: boolean;
   /** Set when a delete could not use the trash (remote deletes never can). */
   permanent?: boolean;
+  /** A local paste: the background job doing it (finished already unless `running`). */
+  job?: FileTransfer;
+  running?: boolean;
+}
+
+export type FileTransferStatus = 'preparing' | 'running' | 'done' | 'partial' | 'failed' | 'cancelled';
+
+/** A local copy/move running (or recently finished) on the server. */
+export interface FileTransfer {
+  id: string;
+  move: boolean;
+  paths: string[];
+  dest: string;
+  status: FileTransferStatus;
+  total_bytes: number;
+  done_bytes: number;
+  total_files: number;
+  done_files: number;
+  items_total: number;
+  items_done: number;
+  current_item: string | null;
+  current_file: string | null;
+  current_file_size: number;
+  current_file_done: number;
+  /** Bytes per second, over the last few seconds. */
+  speed: number;
+  eta: number | null;
+  started_at: number;
+  finished_at: number | null;
+  results: FileOpResult[];
+  errors: FileOpResult[];
+  /** A failure of the job as a whole (bad destination, ...). */
+  error: string | null;
+}
+
+export const isTransferActive = (t: FileTransfer) => t.status === 'preparing' || t.status === 'running';
+
+/** 0-100. A same-disk move copies nothing (it's a rename), so it goes by items. */
+export function transferPercent(t: FileTransfer): number {
+  if (!isTransferActive(t)) return 100;
+  if (t.total_bytes > 0) return Math.min(100, (t.done_bytes / t.total_bytes) * 100);
+  return t.items_total ? (t.items_done / t.items_total) * 100 : 0;
 }
 
 export interface DirSize {
@@ -132,6 +174,20 @@ export const deletePaths = (paths: string[], permanent = false) =>
 
 export const transferPaths = (paths: string[], dest: string, move: boolean) =>
   filesRequest<FileOpResponse>('/transfer', { paths, dest, move });
+
+export const fetchTransfers = () =>
+  filesRequest<{ transfers: FileTransfer[] }>('/transfers');
+
+export const cancelTransfer = (id: string) =>
+  filesRequest<{ job: FileTransfer }>(`/transfers/${id}/cancel`, {});
+
+export async function dismissTransfer(id: string): Promise<void> {
+  const response = await authFetch(`/api/files/transfers/${id}`, { method: 'DELETE' });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error((data as { error?: string }).error || 'Request failed');
+  }
+}
 
 export const searchFiles = (path: string, query: string, showHidden = false) =>
   filesRequest<FileSearchResult>('/search', { path, query, show_hidden: showHidden });

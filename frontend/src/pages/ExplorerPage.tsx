@@ -12,12 +12,17 @@ import { FileList, type SortKey, type ViewMode } from '../components/explorer/Fi
 import { FileContextMenu, type MenuItem } from '../components/explorer/FileContextMenu';
 import { FilePreviewModal } from '../components/explorer/FilePreviewModal';
 import { PropertiesModal } from '../components/explorer/PropertiesModal';
+import { TransfersModal, transferTitle } from '../components/explorer/TransfersModal';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import {
   useFileRoots, useFileList, useFileSearch, useCreateFolder, useRenamePath,
-  useDeletePaths, useTransferPaths, useUploadFiles,
+  useDeletePaths, useTransferPaths, useUploadFiles, useFileTransfers,
 } from '../hooks/useFiles';
-import { getFileDownloadUrl, type FileEntry, type FileOpResponse, isRemotePath } from '../api/files';
+import {
+  getFileDownloadUrl, type FileEntry, type FileOpResponse, type FileTransfer, isRemotePath,
+  isTransferActive, transferPercent,
+} from '../api/files';
+import { useQueryClient } from '@tanstack/react-query';
 import { formatBytes } from '../utils/format';
 
 const PREFS_KEY = 'explorer_prefs';
@@ -101,6 +106,14 @@ export function ExplorerPage() {
   const deleting = deleteMut.isPending || deletingLabel !== null;
   const transferMut = useTransferPaths();
   const uploadMut = useUploadFiles();
+  const qc = useQueryClient();
+
+  // Copies and moves run on the server as background jobs; the floating bar
+  // shows the running ones and opens their details on click.
+  const transfersQuery = useFileTransfers();
+  const transfers = useMemo(() => transfersQuery.data?.transfers ?? [], [transfersQuery.data]);
+  const activeTransfers = useMemo(() => transfers.filter(isTransferActive), [transfers]);
+  const [transfersOpen, setTransfersOpen] = useState(false);
 
   // Reveal the ?select= entry: highlight it and bring it into view, then drop
   // the param so a later refresh doesn't re-select it.
@@ -157,7 +170,8 @@ export function ExplorerPage() {
   const barRef = useRef<HTMLDivElement>(null);
   const listBoxRef = useRef<HTMLDivElement>(null);
   const [barHeight, setBarHeight] = useState(0);
-  const barShown = selectedEntries.length > 0 || !!clipboard || deletingLabel !== null;
+  const barShown = selectedEntries.length > 0 || !!clipboard || deletingLabel !== null
+    || activeTransfers.length > 0;
   useEffect(() => {
     const el = barRef.current;
     if (!el) return;
@@ -169,14 +183,20 @@ export function ExplorerPage() {
   // The bar stays mounted so it can animate out. While it does, it keeps
   // showing what it last held - otherwise clearing the selection would empty
   // it mid-fade. (State adjusted during render, React's derived-state pattern.)
-  const [barSnapshot, setBarSnapshot] = useState({ entries: selectedEntries, clipboard, deletingLabel });
+  const [barSnapshot, setBarSnapshot] = useState({ entries: selectedEntries, clipboard, deletingLabel, activeTransfers });
   if (barShown && (barSnapshot.entries !== selectedEntries || barSnapshot.clipboard !== clipboard
-      || barSnapshot.deletingLabel !== deletingLabel)) {
-    setBarSnapshot({ entries: selectedEntries, clipboard, deletingLabel });
+      || barSnapshot.deletingLabel !== deletingLabel || barSnapshot.activeTransfers !== activeTransfers)) {
+    setBarSnapshot({ entries: selectedEntries, clipboard, deletingLabel, activeTransfers });
   }
   const barEntries = barShown ? selectedEntries : barSnapshot.entries;
   const barClipboard = barShown ? clipboard : barSnapshot.clipboard;
   const barDeleting = barShown ? deletingLabel : barSnapshot.deletingLabel;
+  const barTransfers = barShown ? activeTransfers : barSnapshot.activeTransfers;
+  const barTransferPct = useMemo(() => {
+    const total = barTransfers.reduce((n, t) => n + t.total_bytes, 0);
+    if (total > 0) return (barTransfers.reduce((n, t) => n + t.done_bytes, 0) / total) * 100;
+    return barTransfers.length ? barTransfers.reduce((n, t) => n + transferPercent(t), 0) / barTransfers.length : 0;
+  }, [barTransfers]);
   const barSize = barEntries.reduce((sum, e) => sum + e.size, 0);
   const barRemote = barEntries.length > 0 && barEntries.every(e => e.remote);
 
@@ -298,10 +318,56 @@ export function ExplorerPage() {
     }
   };
 
+  // Every job seen running is watched until it finishes, whoever started it
+  // (another tab, before a reload): then the listing is refreshed and the
+  // outcome toasted - clicking the toast opens the details.
+  const watchedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    let finished = false;
+    for (const t of transfers) {
+      if (isTransferActive(t)) {
+        watchedRef.current.add(t.id);
+      } else if (watchedRef.current.delete(t.id)) {
+        finished = true;
+        reportTransfer(t);
+      }
+    }
+    if (finished) qc.invalidateQueries({ queryKey: ['files', 'list'] });
+    // reportTransfer only calls notify(); it has no state of its own
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [transfers, qc]);
+
+  const reportTransfer = (t: FileTransfer) => {
+    const openDetails = () => setTransfersOpen(true);
+    const title = transferTitle(t);
+    if (t.status === 'cancelled') {
+      notify({ type: 'warning', title: `${t.move ? 'Move' : 'Copy'} cancelled`, message: title, onClick: openDetails });
+    } else if (t.status === 'done') {
+      notify({
+        type: 'success', title, onClick: openDetails,
+        message: t.total_bytes ? `${formatBytes(t.done_bytes)} in ${t.done_files} file(s)` : undefined,
+      });
+    } else {
+      const first = t.errors[0]?.error ?? t.error ?? 'Unknown error';
+      notify({
+        type: t.status === 'partial' ? 'warning' : 'error', duration: 7000, onClick: openDetails,
+        title: `${t.move ? 'Move' : 'Copy'} failed for ${t.errors.length || t.paths.length} item(s)`,
+        message: `${first} - click for details`,
+      });
+    }
+  };
+
   const runPaste = async () => {
     if (!clipboard || !writable) return;
     try {
       const res = await transferMut.mutateAsync({ paths: clipboard.paths, dest: currentPath, move: clipboard.move });
+      // Still copying after the server's short wait: it carries on in the
+      // background and the floating bar takes over from here.
+      if (res.running && res.job) {
+        watchedRef.current.add(res.job.id);
+        if (clipboard.move) setClipboard(null);
+        return;
+      }
       const ok = reportErrors(res, clipboard.move ? 'Move' : 'Copy');
       // Pasting from the VPS hands off to the SFTP downloader: nothing has
       // arrived yet, so say so instead of letting the empty folder look broken.
@@ -711,11 +777,38 @@ export function ExplorerPage() {
                     </button>
                   </div>
                 )}
+                {barTransfers.length > 0 && (
+                  <button
+                    onClick={() => setTransfersOpen(true)}
+                    title="Show progress"
+                    className={`flex items-center gap-2 min-w-0 text-sm text-slate-300 hover:text-white transition-colors ${
+                      barDeleting || barEntries.length > 0 || barClipboard
+                        ? 'border-slate-700 max-sm:basis-full max-sm:justify-center max-sm:pt-2 max-sm:border-t sm:pl-2 sm:border-l' : ''
+                    }`}
+                  >
+                    <Loader2 className="w-4 h-4 animate-spin shrink-0 text-cyan-400" />
+                    <span className="truncate max-w-[14rem]" role="status">
+                      {barTransfers.length === 1 ? transferTitle(barTransfers[0]) : `${barTransfers.length} transfers`}
+                    </span>
+                    <span className="w-16 h-1.5 shrink-0 rounded-full bg-slate-700 overflow-hidden">
+                      <span className="block h-full bg-cyan-500 transition-[width] duration-500" style={{ width: `${barTransferPct}%` }} />
+                    </span>
+                    <span className="text-xs text-slate-400 tabular-nums">{Math.floor(barTransferPct)}%</span>
+                  </button>
+                )}
               </div>
             </div>
           </div>
         </div>
       </div>
+
+      {transfersOpen && (
+        <TransfersModal
+          transfers={transfers}
+          onClose={() => setTransfersOpen(false)}
+          onOpenDest={path => { setTransfersOpen(false); navigate(path); }}
+        />
+      )}
 
       {/* Places drawer (below lg). Kept mounted so it slides rather than
           blinking into place, and inert while closed. */}
