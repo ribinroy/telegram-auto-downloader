@@ -462,3 +462,22 @@ def test_a_torrent_whose_bytes_are_all_local_lists_as_downloaded(
     by_hash = {t['hash']: t for t in body['torrents']}
     assert by_hash['h1']['downlee']['on_disk'] is True
     assert by_hash['h2']['downlee'] is None  # only half of it is here
+
+
+def test_details_recognise_a_file_saved_under_its_renamed_name(
+        client, db, configured, monkeypatch, tmp_path):
+    from backend.rename import invalidate_rules_cache
+    db.add_rename_rule(r'(?<=\w)[._](?=\w)', ' ', name='dots to spaces')
+    invalidate_rules_cache()
+    try:
+        local = _local_dir(tmp_path) / 'Show' / 'S01' / 'ep 01.mkv'
+        local.parent.mkdir(parents=True)
+        local.write_bytes(b'x' * 10)
+        details = _details(files=[
+            {'index': 0, 'path': 'Show/S01/ep.01.mkv', 'size': 10, 'percent_done': 100, 'wanted': True},
+        ])
+        monkeypatch.setattr(troute, 'torrent_details', lambda c, h: details)
+        body = client.get('/api/torrent/details?client=qbittorrent&hash=h1', headers=configured).get_json()
+        assert body['files'][0]['downlee']['on_disk'] is True
+    finally:
+        invalidate_rules_cache()

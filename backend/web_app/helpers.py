@@ -24,6 +24,26 @@ def candidate_file_paths(download, file_name):
     return paths
 
 
+def existing_variant(path, source='vps'):
+    """`path`, or - when nothing is there - the same file under the name the
+    rename rules give it, if *that* exists.
+
+    A single-file pull renames the file itself, while a folder pull keeps the
+    files inside it as they are (only its top folder is renamed). So a file
+    pulled on its own first sits at `ep 01.mkv` while the folder pull of the
+    same torrent looks for `ep.01.mkv` - and without this would fetch the
+    whole thing again next to it."""
+    path = Path(path)
+    if path.exists():
+        return path
+    try:
+        from backend.rename import rename_for_download
+        alt = path.with_name(rename_for_download(path.name, source))
+    except Exception:  # noqa: BLE001 - a broken rule must not break a listing
+        return path
+    return alt if alt != path and alt.exists() else path
+
+
 def local_copy_exists(download):
     """Whether a download's file (or folder) is still on the home server.
     A finished pull whose local copy was deleted since is no longer "already

@@ -409,6 +409,10 @@ class TorrentRoutesMixin:
             partial, which a pull resumes)."""
             size = f.get("size") or 0
             local = _file_local_path(client, remote, f)
+            if local:
+                # Pulled on its own, it carries the rename rules' name
+                from backend.web_app.helpers import existing_variant
+                local = existing_variant(local)
             try:
                 return bool(size and local and local.is_file() and local.stat().st_size >= size)
             except OSError:

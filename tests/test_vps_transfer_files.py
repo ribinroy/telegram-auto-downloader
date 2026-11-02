@@ -280,3 +280,64 @@ def test_resume_all_unpauses_the_files_of_a_paused_pull(db, pull):
     assert download_queue.resume_all() == 1
     record = db.get_download_by_message_id('p-1')
     assert record['status'] == 'waiting' and record['paused_files'] == []
+
+
+# --- files already pulled on their own, under a renamed name ---------------
+
+@pytest.fixture
+def dots_to_spaces(db):
+    """The common rule: separators in the stem become spaces. A single-file
+    pull applies it to the file; a folder pull only to its top folder."""
+    from backend.rename import invalidate_rules_cache
+    db.add_rename_rule(r'(?<=\w)[._](?=\w)', ' ', name='dots to spaces')
+    invalidate_rules_cache()
+    yield
+    invalidate_rules_cache()
+
+
+RENAMED_TREE = {
+    '/home6/tester/downloads': {'Show': None},
+    REMOTE: {'ep.01.mkv': 10, 'ep.02.mkv': 10},
+}
+
+
+def test_a_folder_pull_counts_a_file_pulled_on_its_own_under_its_renamed_name(
+        db, handler, tmp_path, dots_to_spaces):
+    dest = tmp_path / 'tv'
+    (dest / 'Show').mkdir(parents=True)
+    (dest / 'Show' / 'ep 01.mkv').write_bytes(b'x' * 10)  # pulled alone earlier
+    pull = db.add_download(file='Show', status='stopped', downloaded_from='vps',
+                           message_id='p-1', url=REMOTE, dest_base=str(dest))
+    sftp = _ReadableSFTP(RENAMED_TREE)
+
+    @contextmanager
+    def session(timeout=15):
+        yield object(), sftp
+
+    import backend.web_app.vps as vps_module
+    original = vps_module.vps_session
+    vps_module.vps_session = session
+    try:
+        files = _by_path(handler.file_listing(pull))
+    finally:
+        vps_module.vps_session = original
+    assert files['ep 01.mkv']['state'] == 'done'
+    assert files['ep.02.mkv']['state'] == 'pending'
+
+    _run(handler, pull, sftp)
+    # Only ep02 was fetched - no second copy of ep01 next to the renamed one
+    assert [p for p, _n in sftp.reads] == [REMOTE + '/ep.02.mkv']
+    assert sorted(p.name for p in (dest / 'Show').iterdir()) == ['ep 01.mkv', 'ep.02.mkv']
+    assert db.get_download_by_message_id('p-1')['status'] == 'done'
+
+
+def test_a_partial_renamed_copy_is_resumed_not_restarted(db, handler, tmp_path, dots_to_spaces):
+    dest = tmp_path / 'tv'
+    (dest / 'Show').mkdir(parents=True)
+    (dest / 'Show' / 'ep 01.mkv').write_bytes(b'x' * 4)
+    pull = db.add_download(file='Show', status='stopped', downloaded_from='vps',
+                           message_id='p-1', url=REMOTE, dest_base=str(dest))
+    sftp = _ReadableSFTP(RENAMED_TREE)
+    _run(handler, pull, sftp)
+    assert (REMOTE + '/ep.01.mkv', 6) in sftp.reads
+    assert (dest / 'Show' / 'ep 01.mkv').read_bytes() == b'x' * 4 + b'y' * 6

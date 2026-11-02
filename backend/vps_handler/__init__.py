@@ -290,6 +290,11 @@ class VpsDownloader:
             remote_files.append((src, st.st_size or 0))
         files = [(rfile, rsize, self._local_destination(rfile, base, strip_prefix, local_name))
                  for rfile, rsize in remote_files]
+        if is_dir:
+            # A file already pulled on its own carries its renamed name: count
+            # that copy (and resume it) rather than fetch it again beside it.
+            from backend.web_app.helpers import existing_variant
+            files = [(rfile, rsize, existing_variant(lp)) for rfile, rsize, lp in files]
         root = self._local_destination(src, base, strip_prefix, local_name)
         return {'files': files, 'is_dir': is_dir, 'src': src, 'local_name': local_name, 'root': root}
 
