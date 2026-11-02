@@ -142,6 +142,7 @@ Main Thread
 - `dest_base` (destination folder a VPS transfer was started with, when it isn't derivable from the source spec - e.g. a torrent client's `local_dir`; a resume reads it back so it can't restart into the wrong folder)
 - `deleted_at` (soft delete), `file_deleted` (physical file removed)
 - `file_count` (files in a VPS folder pull - e.g. a multi-file torrent - set when the transfer plans its work, backfilled by the `check_files` job for older pulls; NULL for a single file)
+- `paused_files` (JSON list of paths, relative to the pull's top folder, that the user paused in a VPS folder pull; the transfer skips them on every run - resume, retry, queue start)
 - `queue_position` (rank in the download queue while `waiting` *or* `downloading` - running ones keep a rank so a reorder can put a waiting one ahead of them; cleared when it leaves both), `format_id` (the yt-dlp format picked, so a queued or resumed download fetches that quality)
 - `created_at`, `updated_at`
 
@@ -201,6 +202,7 @@ Access/refresh token pair. Access tokens are short (`ACCESS_TOKEN_MINUTES`, defa
 - `GET /api/authors` - Distinct author list
 - `GET /api/analytics` - Time-series & breakdown analytics
 - `GET /api/downloads/<id>/files` - The files inside a VPS pull and how far each is locally: `{source: live|vps|local, is_dir, error, files: [{path, size, local_size, state: done|downloading|partial|pending|on_disk}]}` (`VpsDownloader.file_listing()`). A running transfer answers from its own plan (`self.plans`, which knows the file being written); otherwise the plan is rebuilt over the pooled SFTP session; with the VPS unreachable only the local side is listed (`on_disk`). `_plan()` is shared with the transfer itself, so the view and the pull can't disagree about where a file lands. UI: a "N files" link on a VPS row with `file_count > 1` opens `TransferFilesModal` (unfinished files first, filter box past 8, polled every 3s while downloading); `download:files` `{message_id, file_count}` tells the list as soon as a pull has counted its files
+- `POST /api/downloads/<id>/files/pause` - `{paths, paused}` -> `{paused_files, restarted: started|waiting|null}`. Saved on the record and applied live (`VpsDownloader.set_files_paused()` edits the set the running transfer reads): pausing the file being written raises `_FileSkipped` from the progress callback, so its bytes are kept and the transfer moves to the next file. The transfer runs in **passes**, so a file resumed after its turn went by is fetched by the next pass. A pull with only paused files left ends `stopped`, not `done` - the row's retry carries on with the unpaused ones - and resuming a file of a stopped pull restarts it through `admit_existing()`, like the retry button. The modal shows it as an Action column (⏸/▶ per unfinished file, none for done ones or when only the local side could be listed)
 - `POST /api/retry` - Restart a failed/stopped download from the bytes on disk (via `backend/resume.py`; 400/404/500 carry the reason)
 - `POST /api/stop` - Stop active download
 - `POST /api/pause` / `POST /api/resume` - Telegram only

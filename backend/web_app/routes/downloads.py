@@ -144,6 +144,47 @@ class DownloadRoutesMixin:
                 return jsonify({"error": "VPS downloader not available"}), 503
             return jsonify(self.vps_downloader.file_listing(download))
 
+        @self.app.route("/api/downloads/<int:download_id>/files/pause", methods=["POST"])
+        @token_required
+        def download_files_pause(download_id):
+            """Pause or resume files of a VPS folder pull.
+            Body: {paths: [str], paused: bool} - paths as the file list shows them.
+
+            Resuming a file of a pull that has stopped (it stops by itself once
+            only paused files are left) starts the pull again through the
+            queue, exactly like the retry button - so it fetches just the
+            files that aren't paused. -> {paused_files, restarted: started|waiting|null}"""
+            from backend.resume import resume_download
+            data = request.json or {}
+            paths, paused = data.get("paths"), data.get("paused")
+            if not isinstance(paths, list) or not paths or not all(isinstance(p, str) and p for p in paths):
+                return jsonify({"error": "paths must be a non-empty list"}), 400
+            if not isinstance(paused, bool):
+                return jsonify({"error": "paused must be true or false"}), 400
+            db = get_db()
+            download = db.get_download_by_id(download_id)
+            if not download:
+                return jsonify({"error": "Download not found"}), 404
+            if download.get("downloaded_from") != "vps":
+                return jsonify({"error": "Only VPS transfers have a file list"}), 400
+            if not self.vps_downloader:
+                return jsonify({"error": "VPS downloader not available"}), 503
+
+            result = self.vps_downloader.set_files_paused(download, paths, paused)
+            restarted = None
+            if not paused and not result["running"] and download["status"] in ("failed", "stopped"):
+                download = db.get_download_by_id(download_id)
+                if download_queue.admit_existing(download) == 'queued':
+                    restarted = "waiting"
+                elif resume_download(download):
+                    restarted = "started"
+                else:
+                    db.update_download_by_message_id(download["message_id"], status=download["status"])
+                    self.emit_status(download["message_id"], download["status"])
+                    return jsonify({"error": "Saved, but the transfer couldn't be restarted",
+                                    "paused_files": result["paused_files"]}), 500
+            return jsonify({"paused_files": result["paused_files"], "restarted": restarted})
+
         @self.app.route("/api/retry", methods=["POST"])
         @token_required
         def api_retry():

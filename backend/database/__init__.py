@@ -66,6 +66,10 @@ class Download(Base):
     # transfer plans its work; NULL for a single file or when not yet known.
     # The downloads list offers the per-file view on this.
     file_count = Column(Integer, nullable=True)
+    # Files of a folder pull the user paused (JSON list of paths relative to
+    # the pull's top folder, as the per-file view shows them). The transfer
+    # skips them - on a resume, a retry or a queue start too.
+    paused_files = Column(Text, nullable=True)
 
     def to_dict(self):
         """Convert model to dictionary"""
@@ -95,6 +99,7 @@ class Download(Base):
             'queue_position': self.queue_position,
             'format_id': self.format_id,
             'file_count': self.file_count,
+            'paused_files': json.loads(self.paused_files) if self.paused_files else [],
         }
 
 
@@ -447,6 +452,9 @@ class DatabaseManager:
                 conn.commit()
             if 'file_count' not in columns:
                 conn.execute(text('ALTER TABLE downloads ADD COLUMN file_count INTEGER'))
+                conn.commit()
+            if 'paused_files' not in columns:
+                conn.execute(text('ALTER TABLE downloads ADD COLUMN paused_files TEXT'))
                 conn.commit()
 
             # Users: roles + Telegram identity (bot interaction tracking)

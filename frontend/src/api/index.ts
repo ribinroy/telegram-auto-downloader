@@ -212,7 +212,7 @@ export async function revokeSession(sessionId: number): Promise<void> {
 
 export type DownloadFilter = 'all' | 'active' | 'on_disk';
 
-export type TransferFileState = 'done' | 'downloading' | 'partial' | 'pending' | 'on_disk';
+export type TransferFileState = 'done' | 'downloading' | 'partial' | 'pending' | 'paused' | 'on_disk';
 
 export interface TransferFiles {
   /** live: the running transfer's own plan; vps: rebuilt over SFTP;
@@ -221,6 +221,21 @@ export interface TransferFiles {
   error: string | null;
   is_dir: boolean;
   files: { path: string; size: number; local_size: number; state: TransferFileState }[];
+}
+
+/** Pause or resume files of a folder pull. Resuming one of a stopped pull
+ *  restarts it (or queues it, with no free slot). */
+export async function setTransferFilesPaused(
+  downloadId: number, paths: string[], paused: boolean,
+): Promise<{ paused_files: string[]; restarted: 'started' | 'waiting' | null }> {
+  const response = await authFetch(`/api/downloads/${downloadId}/files/pause`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ paths, paused }),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.error || 'Failed to update the file');
+  return body;
 }
 
 export async function fetchTransferFiles(downloadId: number): Promise<TransferFiles> {
