@@ -321,7 +321,7 @@ Live filesystem access - every call reads the disk, nothing is indexed or cached
 - `GET /api/files/roots` - Sidebar places, grouped `drive` / `folder` / `configured`: every real mount from `/proc/mounts` with live capacity, then Home + `DOWNLOAD_DIR`, then DownLee's own destination folders (source mappings, VPS watch-folder destinations, torrent `local_dir`); `?include_hidden=true` includes secured ones
 - `POST /api/files/list` - `{path?, show_hidden?}` -> entries + `writable`, `usage`, `mount`, `trash`
 - `POST /api/files/mkdir` / `rename` / `delete` (`{paths, permanent?}`) / `transfer` (`{paths, dest, move}`) / `upload` (multipart)
-- `GET /api/files/transfers` - local copy/move jobs (running + finished in the last 10 min); `POST /api/files/transfers/<id>/cancel`; `POST /api/files/transfers/ack` (`{ids}`); `DELETE /api/files/transfers/<id>` (finished only, else 409)
+- `GET /api/files/transfers` - local copy/move jobs (running + finished in the last 10 min); `GET /api/files/transfers/<id>/files` (`{files: [{path, rel, size, state, rename, error?, done?}], counts, truncated}`); `POST /api/files/transfers/<id>/cancel`; `POST /api/files/transfers/ack` (`{ids}`); `DELETE /api/files/transfers/<id>` (finished only, else 409)
 - `POST /api/files/search` (recursive, capped by results **and** a wall-clock deadline), `POST /api/files/size` (on-demand `du`), `POST /api/files/text` (preview head)
 - `POST /api/files/thumb/warm` - `{paths}`; queue a page of previews on the generation pool and return at once
 - `POST /api/files/thumb/status` - `{paths}` -> `{states}` (`ready`/`quick`/`pending`/`waiting`/`none`); the open grid's poll, and the "folder is still open" signal for the idle sheet upgrade
@@ -607,6 +607,20 @@ a pulled USB drive disappears from the sidebar.
   `TransferCancelled` (not an `OSError`, so copytree doesn't swallow it) and the
   partial target - always a fresh `unique_name` - is removed; the source is
   untouched. End states: `done` / `partial` / `failed` / `cancelled`.
+  - **Per-file states.** `transfer_plan()` (in `files.py`) returns every file
+    to copy in sorted walk order, with `rel` = where it lands under the
+    destination; a same-disk move is one `rename` row for the whole item, and
+    symlinks inside a folder aren't listed (copytree recreates them, never
+    through `copy_function`). Each file goes `pending` -> `copying` -> `done` /
+    `failed` (a per-file OSError, which copytree records and moves past);
+    `transfer()` calls `job.end_item()` after each item, which marks an item
+    that failed up front `skipped` (with its reason) and a cancelled item's
+    files `cancelled` - its partial target is deleted, copied files included.
+    Anything never reached ends `skipped`. States are kept for
+    `MAX_TRACKED_FILES` (20k); past that the counters still count, and the
+    listing says `truncated`. The listing is **its own route**, polled (1.5s)
+    only for the job the modal is showing - a 20k-file plan has no business on
+    the 1s list poll.
   - **Jobs are the server's, not the tab's**, kept in memory (a restart kills
     the copying thread anyway). `GET /api/files/transfers` is the source of
     truth, so a reload, another tab or another device sees the same jobs and
@@ -617,9 +631,13 @@ a pulled USB drive disappears from the sidebar.
   - UI: `useFileTransfers()` polls every 1s while a job runs. Running jobs and
     unacknowledged finished ones sit in the explorer's floating bar as one
     pill (spinner, title, aggregate bar, %); clicking it opens
-    `TransfersModal` - per job: bytes done/total, files, speed, time left, the
-    file being written with its own bar, per-item errors, Cancel / dismiss, and
-    a link to the destination. A job seen running that finishes is toasted and
+    `TransfersModal` - **one tab per job** when there are several (status icon
+    + %, defaulting to the first running one), and for the selected job: bytes
+    done/total, files, speed, time left, the file being written with its own
+    bar, per-item errors, Cancel / dismiss, a link to the destination, and the
+    **file list** - every planned file with its state (copying first, then
+    failed, to copy, copied; `sortTransferFiles()`), state chips with counts,
+    a filter box past 8 files, and at most 300 rows rendered. A job seen running that finishes is toasted and
     the listing refreshed; the toast is clickable (`ToastData.onClick`) and
     opens the same modal.
 - **Bounded work**: recursive search and folder sizes both stop on a wall-clock
