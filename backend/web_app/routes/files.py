@@ -251,6 +251,23 @@ class FilesRoutesMixin:
                 return jsonify({"error": "No such transfer"}), 404
             return jsonify(job.file_listing())
 
+        @self.app.route("/api/files/transfers/<job_id>/files/pause", methods=["POST"])
+        @token_required
+        def files_transfer_pause(job_id):
+            """Body: {paths:[...], paused: bool} - pause or resume files of a
+            running job. A paused file keeps its bytes and resumes from them."""
+            job = transfers.get(job_id)
+            if job is None:
+                return jsonify({"error": "No such transfer"}), 404
+            data = request.json or {}
+            paths = data.get("paths") or []
+            if not paths or not isinstance(data.get("paused"), bool):
+                return jsonify({"error": "paths and paused are required"}), 400
+            if job.finished:
+                return jsonify({"error": "This transfer has already finished"}), 409
+            changed = job.set_paused(paths, data["paused"])
+            return jsonify({"changed": changed, **job.file_listing()})
+
         @self.app.route("/api/files/transfers/<job_id>/cancel", methods=["POST"])
         @token_required
         def files_transfer_cancel(job_id):

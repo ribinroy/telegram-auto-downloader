@@ -561,7 +561,19 @@ def transfer(raw_paths, raw_dest, move=False, job=None):
                 raise FsError(f'Cannot move "{source.name}" into itself')
             name = unique_name(dest, source.name)
             target = dest / name
-            if move:
+            if move and job and not _same_device(source, dest):
+                # Cross-disk move with a job: copy, then let the job delete the
+                # source. shutil.move would rmtree it right after the copy, and
+                # a file the user paused mid-way hasn't been copied yet - the
+                # job releases the source only once every file of it is in.
+                if source.is_symlink():
+                    os.symlink(os.readlink(str(source)), str(target))
+                elif source.is_dir():
+                    shutil.copytree(str(source), str(target), symlinks=True, copy_function=copy_fn)
+                else:
+                    copy_fn(str(source), str(target), follow_symlinks=False)
+                job.release_source(source)
+            elif move:
                 shutil.move(str(source), str(target), copy_function=copy_fn)
             elif source.is_dir() and not source.is_symlink():
                 shutil.copytree(str(source), str(target), symlinks=True, copy_function=copy_fn)
@@ -596,6 +608,15 @@ def _short_error(e):
     if isinstance(e, shutil.Error) and e.args and isinstance(e.args[0], list):
         return f'{len(e.args[0])} file(s) failed'
     return getattr(e, 'strerror', None) or str(e)
+
+
+def remove_source(path):
+    """Delete a moved item's source once its copy is complete."""
+    path = Path(path)
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(str(path))
+    else:
+        path.unlink()
 
 
 def _discard_partial(target):

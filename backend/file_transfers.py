@@ -27,8 +27,9 @@ SPEED_WINDOW = 3.0
 # Per-file states are kept for this many files. Past it the job still counts
 # every byte and file; only the listing stops growing (and says so).
 MAX_TRACKED_FILES = 20000
-FILE_STATES = ('pending', 'copying', 'done', 'failed', 'skipped', 'cancelled')
-ACTIVE = ('preparing', 'running')
+FILE_STATES = ('pending', 'copying', 'paused', 'done', 'failed', 'skipped', 'cancelled')
+# 'paused': only paused files are left, and the job waits for them.
+ACTIVE = ('preparing', 'running', 'paused')
 
 _jobs = {}
 _lock = threading.Lock()
@@ -69,6 +70,14 @@ class TransferJob:
         self._by_path = {}
         self.files_truncated = False
         self._item_index = -1
+        # Per-file pause. A paused file is set aside (bytes kept) instead of
+        # holding up the rest; once resumed, the second pass (_drain) picks it
+        # up where it stopped. The job only finishes when nothing is set aside.
+        self._paused = set()
+        self._deferred = {}      # src -> {'dst', 'item'}
+        self._sources = {}       # item -> source of a cross-disk move, deleted once complete
+        self._item_failed = set()
+        self._wake = threading.Condition(self._mu)
 
     # --- called from the copy ---------------------------------------------
 
@@ -87,6 +96,8 @@ class TransferJob:
     def end_item(self, error=None, cancelled=False):
         """Settle the current item's files once transfer() is done with it."""
         with self._mu:
+            if error or cancelled:
+                self._item_failed.add(self._item_index)
             for f in self._files:
                 if f['item'] != self._item_index:
                     continue
@@ -94,7 +105,7 @@ class TransferJob:
                     # The partial target is removed, files already copied included
                     if f['state'] != 'failed':
                         f['state'] = 'cancelled'
-                elif f['state'] == 'pending':
+                elif f['state'] == 'pending' and f['path'] not in self._deferred:
                     if f['rename'] and error is None:
                         f['state'] = 'done'
                     else:
@@ -110,7 +121,9 @@ class TransferJob:
                 f['error'] = error
 
     def copy_file(self, src, dst, *, follow_symlinks=True):
-        """shutil.copy2 with a byte counter and a cancel check per chunk."""
+        """shutil.copy2 with a byte counter, a cancel check and a pause check
+        per chunk. A paused file returns as if copied - copytree moves on - and
+        is left to the second pass."""
         if self._cancel.is_set():
             raise fs.TransferCancelled()
         if not follow_symlinks and os.path.islink(src):
@@ -119,17 +132,34 @@ class TransferJob:
             return dst
         if os.path.isdir(dst):
             dst = os.path.join(dst, os.path.basename(src))
+        src, dst = str(src), str(dst)
+        with self._mu:
+            if src in self._paused:
+                self._defer(src, dst)
+                return dst
+        self._copy_from(src, dst, 0)
+        return dst
+
+    def _copy_from(self, src, dst, offset):
+        """Copy src into dst from `offset` on. True when complete, False when
+        the file was paused part-way (it is then set aside)."""
         size = os.path.getsize(src)
         with self._mu:
-            self.current_file = str(src)
+            self.current_file = src
             self.current_file_size = size
-            self.current_file_done = 0
+            self.current_file_done = offset
             self._set_file(src, 'copying')
         try:
-            with open(src, 'rb') as fin, open(dst, 'wb') as fout:
+            with open(src, 'rb') as fin, open(dst, 'ab' if offset else 'wb') as fout:
+                if offset:
+                    fin.seek(offset)
                 while True:
                     if self._cancel.is_set():
                         raise fs.TransferCancelled()
+                    if src in self._paused:
+                        with self._mu:
+                            self._defer(src, dst)
+                        return False
                     chunk = fin.read(CHUNK)
                     if not chunk:
                         break
@@ -142,9 +172,116 @@ class TransferJob:
                 self._set_file(src, 'failed', e.strerror or str(e))
             raise
         with self._mu:
+            self._deferred.pop(src, None)
             self._set_file(src, 'done')
+            if self.current_file == src:
+                self.current_file = None
         self._file_done(size)
-        return dst
+        return True
+
+    def _defer(self, src, dst):
+        """(lock held) Set a paused file aside for the second pass."""
+        entry = self._deferred.get(src)
+        item = entry['item'] if entry else self._item_index
+        self._deferred[src] = {'dst': dst, 'item': item}
+        self._set_file(src, 'paused')
+        if self.current_file == src:
+            self.current_file = None
+
+    def release_source(self, source):
+        """A cross-disk move's copy has run: delete the source now, or - with
+        files of it still set aside - once the second pass has them."""
+        with self._mu:
+            item = self._item_index
+            if any(d['item'] == item for d in self._deferred.values()):
+                self._sources[item] = str(source)
+                return
+        fs.remove_source(source)
+
+    def set_paused(self, paths, paused):
+        """Pause or resume files of this job. Returns how many changed.
+        A file being copied stops within one chunk, its bytes kept."""
+        changed = 0
+        with self._mu:
+            if self.finished:
+                return 0
+            for p in paths or []:
+                f = self._by_path.get(p)
+                if f is None or f['rename']:
+                    continue
+                if paused and f['state'] in ('pending', 'copying'):
+                    self._paused.add(p)
+                    if f['state'] == 'pending':
+                        f['state'] = 'paused'
+                    changed += 1
+                elif not paused and f['state'] == 'paused':
+                    self._paused.discard(p)
+                    f['state'] = 'pending'
+                    changed += 1
+            self._wake.notify_all()
+        return changed
+
+    def _drain(self):
+        """Second pass: copy set-aside files as they are resumed, waiting
+        (status 'paused') while every one left is paused. A cancel discards
+        their partial copies."""
+        while True:
+            with self._mu:
+                while not self._cancel.is_set():
+                    ready = [p for p in self._deferred if p not in self._paused]
+                    if ready or not self._deferred:
+                        break
+                    self.status = 'paused'
+                    self._wake.wait(1.0)
+                if self._cancel.is_set() or not self._deferred:
+                    break
+                self.status = 'running'
+                src = ready[0]
+                entry = self._deferred[src]
+            dst, item = entry['dst'], entry['item']
+            try:
+                offset = os.path.getsize(dst) if os.path.exists(dst) else 0
+                if not self._copy_from(src, dst, offset):
+                    continue
+            except fs.TransferCancelled:
+                break
+            except OSError as e:
+                with self._mu:
+                    self._deferred.pop(src, None)
+                    self._set_file(src, 'failed', e.strerror or str(e))
+                    self._item_failed.add(item)
+                    self.results.append({'path': src, 'error': e.strerror or str(e)})
+            self._release_if_complete(item)
+
+        if self._cancel.is_set():
+            with self._mu:
+                left = list(self._deferred.items())
+                self._deferred.clear()
+                for src, _entry in left:
+                    self._set_file(src, 'cancelled')
+                if left and not any(r.get('cancelled') for r in self.results):
+                    self.results.append({'path': left[0][0], 'error': 'Cancelled', 'cancelled': True})
+            for _src, entry in left:
+                try:
+                    os.unlink(entry['dst'])
+                except OSError:
+                    pass
+        with self._mu:
+            self.status = 'running'
+
+    def _release_if_complete(self, item):
+        with self._mu:
+            source = self._sources.get(item)
+            if source is None or any(d['item'] == item for d in self._deferred.values()):
+                return
+            self._sources.pop(item)
+            if item in self._item_failed:
+                return      # a file of it failed: keep the source, like shutil.move would
+        try:
+            fs.remove_source(source)
+        except OSError as e:
+            with self._mu:
+                self.results.append({'path': source, 'error': f"Copied, but the source couldn't be removed: {e}"})
 
     def _add_bytes(self, n):
         now = time.monotonic()
@@ -162,7 +299,9 @@ class TransferJob:
     # --- control -----------------------------------------------------------
 
     def cancel(self):
-        self._cancel.set()
+        with self._mu:
+            self._cancel.set()
+            self._wake.notify_all()
 
     def wait(self, timeout):
         return self._finished.wait(timeout)
@@ -184,6 +323,7 @@ class TransferJob:
                 self.files_truncated = len(plan) > MAX_TRACKED_FILES
                 self.status = 'running'
             self.results = fs.transfer(self.paths, self.dest, move=self.move, job=self)
+            self._drain()
             if self._cancel.is_set() or any(r.get('cancelled') for r in self.results):
                 self.status = 'cancelled'
             elif any(r.get('error') for r in self.results):
@@ -205,7 +345,7 @@ class TransferJob:
                 # Never reached: an item that failed early, or everything after
                 # a cancel.
                 for f in self._files:
-                    if f['state'] in ('pending', 'copying'):
+                    if f['state'] in ('pending', 'copying', 'paused'):
                         f['state'] = 'skipped'
             self.finished_at = time.time()
             self._finished.set()
