@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Outlet, useNavigate, useLocation, useOutletContext } from 'react-router-dom';
-import { Wifi, WifiOff, HardDrive, Hourglass, Clock, Zap, LogOut, Settings, BarChart3, RefreshCw, FolderOpen } from 'lucide-react';
+import { Wifi, WifiOff, HardDrive, Hourglass, Clock, Zap, LogOut, Settings, BarChart3, RefreshCw, FolderOpen, MoreVertical } from 'lucide-react';
 import { formatBytes, formatSpeed, formatTime } from '../utils/format';
 import { type SortBy, type SortOrder } from '../api';
 import { ToastContainer } from './Toast';
@@ -72,6 +72,22 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
   const [showSecured, setShowSecured] = useState(false);
   const [secretClickCount, setSecretClickCount] = useState(0);
   const secretClickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Phone-only overflow menu for the less-used header actions.
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!menuOpen) return;
+    const close = (e: PointerEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMenuOpen(false); };
+    document.addEventListener('pointerdown', close);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('pointerdown', close);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [menuOpen]);
 
   // Add URL modal
   const [addUrlOpen, setAddUrlOpen] = useState(false);
@@ -202,15 +218,15 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
         <div className="max-w-7xl mx-auto px-3 sm:px-4 py-2">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2 sm:gap-3">
-              <div className="p-2 sm:p-3 rounded-xl cursor-pointer" onClick={() => navigate(ROUTES.DOWNLOADS)}>
+              <div className="p-1.5 sm:p-3 rounded-xl cursor-pointer" onClick={() => navigate(ROUTES.DOWNLOADS)}>
                 <img src="/logo.png" alt="DownLee logo" className="w-6 h-6 sm:w-8 sm:h-8" />
               </div>
             </div>
             <div className="flex items-center gap-1.5 sm:gap-3">
-              {/* Time left for the whole queue - hidden on mobile */}
-              <div className="hidden sm:flex group relative items-center gap-2 px-3 py-1.5 bg-slate-700/50 rounded-lg cursor-default min-w-[100px]">
-                <Hourglass className="w-4 h-4 text-green-400" />
-                <span className="text-sm text-green-400 tabular-nums">{formatTime(stats.eta_seconds ?? null)}</span>
+              {/* Time left for the whole queue */}
+              <div className="group relative flex items-center gap-1 sm:gap-2 px-2 sm:px-3 py-1.5 bg-slate-700/50 rounded-lg cursor-default sm:min-w-[100px]">
+                <Hourglass className="hidden sm:block w-4 h-4 text-green-400" />
+                <span className="text-xs sm:text-sm text-green-400 tabular-nums">{formatTime(stats.eta_seconds ?? null)}</span>
                 <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
                   {stats.remaining_bytes ? `Time left · ${formatBytes(stats.remaining_bytes)} to go` : 'Time left'}
                 </div>
@@ -241,7 +257,7 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
               </div>
               {/* Analytics - only when secured visible */}
               {showSecured && (
-                <div className="group relative">
+                <div className="hidden sm:block group relative">
                   <button
                     onClick={() => navigate(ROUTES.ANALYTICS)}
                     className={`p-2 hover:bg-slate-600/50 text-slate-400 hover:text-white rounded-lg transition-colors ${location.pathname === ROUTES.ANALYTICS ? 'bg-slate-600/50 text-white' : 'bg-slate-700/50'}`}
@@ -280,7 +296,7 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
                 </div>
               )}
               {/* Settings */}
-              <div className="group relative">
+              <div className="hidden sm:block group relative">
                 <button
                   onClick={() => navigate(ROUTES.SETTINGS)}
                   className={`p-2 hover:bg-slate-600/50 text-slate-400 hover:text-white rounded-lg transition-colors ${location.pathname === ROUTES.SETTINGS ? 'bg-slate-600/50 text-white' : 'bg-slate-700/50'}`}
@@ -292,7 +308,7 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
                 </div>
               </div>
               {/* Logout */}
-              <div className="group relative">
+              <div className="hidden sm:block group relative">
                 <button
                   onClick={onLogout}
                   className="p-2 bg-slate-700/50 hover:bg-slate-600/50 text-slate-400 hover:text-white rounded-lg transition-colors"
@@ -302,6 +318,41 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
                 <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
                   Sign out
                 </div>
+              </div>
+              {/* Phone: overflow menu for analytics / settings / sign out */}
+              <div ref={menuRef} className="sm:hidden relative">
+                <button
+                  onClick={() => setMenuOpen(o => !o)}
+                  aria-label="More"
+                  aria-expanded={menuOpen}
+                  className={`p-2 rounded-lg transition-colors text-slate-400 ${menuOpen || location.pathname === ROUTES.SETTINGS || location.pathname === ROUTES.ANALYTICS ? 'bg-slate-600/50 text-white' : 'bg-slate-700/50'}`}
+                >
+                  <MoreVertical className="w-4 h-4" />
+                </button>
+                {menuOpen && (
+                  <div className="absolute right-0 top-full mt-2 w-44 py-1 bg-slate-800 border border-slate-700 rounded-xl shadow-xl z-50">
+                    {showSecured && (
+                      <button
+                        onClick={() => { setMenuOpen(false); navigate(ROUTES.ANALYTICS); }}
+                        className={`w-full flex items-center gap-3 px-3 py-2.5 text-sm hover:bg-slate-700/60 ${location.pathname === ROUTES.ANALYTICS ? 'text-white' : 'text-slate-300'}`}
+                      >
+                        <BarChart3 className="w-4 h-4" /> Analytics
+                      </button>
+                    )}
+                    <button
+                      onClick={() => { setMenuOpen(false); navigate(ROUTES.SETTINGS); }}
+                      className={`w-full flex items-center gap-3 px-3 py-2.5 text-sm hover:bg-slate-700/60 ${location.pathname === ROUTES.SETTINGS ? 'text-white' : 'text-slate-300'}`}
+                    >
+                      <Settings className="w-4 h-4" /> Settings
+                    </button>
+                    <button
+                      onClick={() => { setMenuOpen(false); onLogout(); }}
+                      className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-red-400 hover:bg-slate-700/60"
+                    >
+                      <LogOut className="w-4 h-4" /> Sign out
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           </div>
