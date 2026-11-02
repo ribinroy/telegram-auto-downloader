@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import {
   FolderOpen, Loader2, X, Download, Copy, Scissors, ClipboardPaste,
   Pencil, Trash2, Info, Eye, Link as LinkIcon, CheckSquare, HardDrive, Search, Menu,
+  CheckCircle, AlertCircle,
 } from 'lucide-react';
 import { notify, useErrorToast } from '../lib/notify';
 import { useLayoutContext } from '../components/Layout';
@@ -16,7 +17,7 @@ import { TransfersModal } from '../components/explorer/TransfersModal';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import {
   useFileRoots, useFileList, useFileSearch, useCreateFolder, useRenamePath,
-  useDeletePaths, useTransferPaths, useUploadFiles, useFileTransfers,
+  useDeletePaths, useTransferPaths, useUploadFiles, useFileTransfers, useAckTransfers,
 } from '../hooks/useFiles';
 import {
   getFileDownloadUrl, type FileEntry, type FileOpResponse, type FileTransfer, isRemotePath,
@@ -112,8 +113,26 @@ export function ExplorerPage() {
   // shows the running ones and opens their details on click.
   const transfersQuery = useFileTransfers();
   const transfers = useMemo(() => transfersQuery.data?.transfers ?? [], [transfersQuery.data]);
-  const activeTransfers = useMemo(() => transfers.filter(isTransferActive), [transfers]);
+  const { mutate: ackTransfers } = useAckTransfers();
+  // Outcomes this tab has shown, so the bar drops them before the ack's
+  // refetch lands rather than flashing them for a request.
+  const shownRef = useRef<Set<string>>(new Set());
+  const acknowledge = useCallback((ids: string[]) => {
+    const fresh = ids.filter(id => !shownRef.current.has(id));
+    if (!fresh.length) return;
+    fresh.forEach(id => shownRef.current.add(id));
+    ackTransfers(fresh);
+  }, [ackTransfers]);
+  // The bar holds running jobs plus finished ones no page has shown yet - a
+  // copy that ended while the tab was closed or reloading still says so.
+  const barJobs = useMemo(
+    () => transfers.filter(t => isTransferActive(t) || (!t.acknowledged && !shownRef.current.has(t.id))),
+    [transfers]);
   const [transfersOpen, setTransfersOpen] = useState(false);
+  const openTransfers = useCallback(() => {
+    setTransfersOpen(true);
+    acknowledge(transfers.filter(t => !isTransferActive(t) && !t.acknowledged).map(t => t.id));
+  }, [transfers, acknowledge]);
 
   // Reveal the ?select= entry: highlight it and bring it into view, then drop
   // the param so a later refresh doesn't re-select it.
@@ -171,7 +190,7 @@ export function ExplorerPage() {
   const listBoxRef = useRef<HTMLDivElement>(null);
   const [barHeight, setBarHeight] = useState(0);
   const barShown = selectedEntries.length > 0 || !!clipboard || deletingLabel !== null
-    || activeTransfers.length > 0;
+    || barJobs.length > 0;
   useEffect(() => {
     const el = barRef.current;
     if (!el) return;
@@ -183,20 +202,23 @@ export function ExplorerPage() {
   // The bar stays mounted so it can animate out. While it does, it keeps
   // showing what it last held - otherwise clearing the selection would empty
   // it mid-fade. (State adjusted during render, React's derived-state pattern.)
-  const [barSnapshot, setBarSnapshot] = useState({ entries: selectedEntries, clipboard, deletingLabel, activeTransfers });
+  const [barSnapshot, setBarSnapshot] = useState({ entries: selectedEntries, clipboard, deletingLabel, barJobs });
   if (barShown && (barSnapshot.entries !== selectedEntries || barSnapshot.clipboard !== clipboard
-      || barSnapshot.deletingLabel !== deletingLabel || barSnapshot.activeTransfers !== activeTransfers)) {
-    setBarSnapshot({ entries: selectedEntries, clipboard, deletingLabel, activeTransfers });
+      || barSnapshot.deletingLabel !== deletingLabel || barSnapshot.barJobs !== barJobs)) {
+    setBarSnapshot({ entries: selectedEntries, clipboard, deletingLabel, barJobs });
   }
   const barEntries = barShown ? selectedEntries : barSnapshot.entries;
   const barClipboard = barShown ? clipboard : barSnapshot.clipboard;
   const barDeleting = barShown ? deletingLabel : barSnapshot.deletingLabel;
-  const barTransfers = barShown ? activeTransfers : barSnapshot.activeTransfers;
+  const barTransfers = barShown ? barJobs : barSnapshot.barJobs;
+  const barRunning = useMemo(() => barTransfers.filter(isTransferActive), [barTransfers]);
+  const barFinished = barTransfers.length - barRunning.length;
   const barTransferPct = useMemo(() => {
-    const total = barTransfers.reduce((n, t) => n + t.total_bytes, 0);
-    if (total > 0) return (barTransfers.reduce((n, t) => n + t.done_bytes, 0) / total) * 100;
-    return barTransfers.length ? barTransfers.reduce((n, t) => n + transferPercent(t), 0) / barTransfers.length : 0;
-  }, [barTransfers]);
+    const total = barRunning.reduce((n, t) => n + t.total_bytes, 0);
+    if (total > 0) return (barRunning.reduce((n, t) => n + t.done_bytes, 0) / total) * 100;
+    return barRunning.length ? barRunning.reduce((n, t) => n + transferPercent(t), 0) / barRunning.length : 0;
+  }, [barRunning]);
+  const barFinishedBad = barTransfers.some(t => t.status === 'failed' || t.status === 'partial');
   const barSize = barEntries.reduce((sum, e) => sum + e.size, 0);
   const barRemote = barEntries.length > 0 && barEntries.every(e => e.remote);
 
@@ -318,24 +340,8 @@ export function ExplorerPage() {
     }
   };
 
-  // Every job seen running is watched until it finishes, whoever started it
-  // (another tab, before a reload): then the listing is refreshed and the
-  // outcome toasted - clicking the toast opens the details.
-  const watchedRef = useRef<Set<string>>(new Set());
-  useEffect(() => {
-    let finished = false;
-    for (const t of transfers) {
-      if (isTransferActive(t)) {
-        watchedRef.current.add(t.id);
-      } else if (watchedRef.current.delete(t.id)) {
-        finished = true;
-        reportTransfer(t);
-      }
-    }
-    if (finished) qc.invalidateQueries({ queryKey: ['files', 'list'] });
-  }, [transfers, qc]);
-
-  const reportTransfer = (t: FileTransfer) => {
+  const reportTransfer = useCallback((t: FileTransfer) => {
+    acknowledge([t.id]);
     const openDetails = () => setTransfersOpen(true);
     const title = transferTitle(t);
     if (t.status === 'cancelled') {
@@ -353,7 +359,24 @@ export function ExplorerPage() {
         message: `${first} - click for details`,
       });
     }
-  };
+  }, [acknowledge]);
+
+  // Every job seen running is watched until it finishes, whoever started it
+  // (another tab, before a reload): then the listing is refreshed and the
+  // outcome toasted - clicking the toast opens the details.
+  const watchedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    let finished = false;
+    for (const t of transfers) {
+      if (isTransferActive(t)) {
+        watchedRef.current.add(t.id);
+      } else if (watchedRef.current.delete(t.id)) {
+        finished = true;
+        reportTransfer(t);
+      }
+    }
+    if (finished) qc.invalidateQueries({ queryKey: ['files', 'list'] });
+  }, [transfers, qc, reportTransfer]);
 
   const runPaste = async () => {
     if (!clipboard || !writable) return;
@@ -366,6 +389,7 @@ export function ExplorerPage() {
         if (clipboard.move) setClipboard(null);
         return;
       }
+      if (res.job) acknowledge([res.job.id]);
       const ok = reportErrors(res, clipboard.move ? 'Move' : 'Copy');
       // Pasting from the VPS hands off to the SFTP downloader: nothing has
       // arrived yet, so say so instead of letting the empty folder look broken.
@@ -777,21 +801,32 @@ export function ExplorerPage() {
                 )}
                 {barTransfers.length > 0 && (
                   <button
-                    onClick={() => setTransfersOpen(true)}
-                    title="Show progress"
+                    onClick={openTransfers}
+                    title="Show details"
                     className={`flex items-center gap-2 min-w-0 text-sm text-slate-300 hover:text-white transition-colors ${
                       barDeleting || barEntries.length > 0 || barClipboard
                         ? 'border-slate-700 max-sm:basis-full max-sm:justify-center max-sm:pt-2 max-sm:border-t sm:pl-2 sm:border-l' : ''
                     }`}
                   >
-                    <Loader2 className="w-4 h-4 animate-spin shrink-0 text-cyan-400" />
+                    {barRunning.length > 0
+                      ? <Loader2 className="w-4 h-4 animate-spin shrink-0 text-cyan-400" />
+                      : barFinishedBad
+                        ? <AlertCircle className="w-4 h-4 shrink-0 text-yellow-400" />
+                        : <CheckCircle className="w-4 h-4 shrink-0 text-green-400" />}
                     <span className="truncate max-w-[14rem]" role="status">
-                      {barTransfers.length === 1 ? transferTitle(barTransfers[0]) : `${barTransfers.length} transfers`}
+                      {barRunning.length > 0
+                        ? (barRunning.length === 1 ? transferTitle(barRunning[0]) : `${barRunning.length} transfers`)
+                        : (barFinished === 1 ? transferTitle(barTransfers[0]) : `${barFinished} transfers finished`)}
                     </span>
-                    <span className="w-16 h-1.5 shrink-0 rounded-full bg-slate-700 overflow-hidden">
-                      <span className="block h-full bg-cyan-500 transition-[width] duration-500" style={{ width: `${barTransferPct}%` }} />
-                    </span>
-                    <span className="text-xs text-slate-400 tabular-nums">{Math.floor(barTransferPct)}%</span>
+                    {barRunning.length > 0 && (
+                      <>
+                        <span className="w-16 h-1.5 shrink-0 rounded-full bg-slate-700 overflow-hidden">
+                          <span className="block h-full bg-cyan-500 transition-[width] duration-500" style={{ width: `${barTransferPct}%` }} />
+                        </span>
+                        <span className="text-xs text-slate-400 tabular-nums">{Math.floor(barTransferPct)}%</span>
+                        {barFinished > 0 && <span className="text-xs text-slate-500">· {barFinished} finished</span>}
+                      </>
+                    )}
                   </button>
                 )}
               </div>
