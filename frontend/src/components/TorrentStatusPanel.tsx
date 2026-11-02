@@ -417,8 +417,11 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
               >
                 {t.name}
               </button>
-              <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto pl-7 sm:pl-0">
-                <span className={`text-xs border rounded-full px-2 py-0.5 mr-auto sm:mr-0 ${style.cls}`}>{style.label}</span>
+              <div className="flex items-center justify-end gap-2 shrink-0 w-full sm:w-auto pl-7 sm:pl-0">
+                {/* "Completed" is the normal end state - the hidden bar already says it */}
+                {t.status !== 'completed' && (
+                  <span className={`text-xs border rounded-full px-2 py-0.5 mr-auto sm:mr-0 ${style.cls}`}>{style.label}</span>
+                )}
                 {/* DownLee transfer: already pulled, in flight, retryable, or offered. */}
                 {done && dlDone && (
                   <Tooltip content="Already downloaded to DownLee" position="top">
@@ -517,14 +520,19 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
               {t.rate_upload > 0 && (
                 <span className="flex items-center gap-1"><ArrowUp className="w-3 h-3 text-green-400" />{formatBytes(t.rate_upload)}/s</span>
               )}
-              <span className="flex items-center gap-1" title="Seeds: connected / available in the swarm">
-                <Sprout className="w-3 h-3 text-green-400" />
-                {t.seeds_connected}{t.seeds_total != null ? `/${t.seeds_total}` : ''}
-              </span>
-              <span className="flex items-center gap-1" title="Leeches: connected / in the swarm">
-                <Users className="w-3 h-3 text-amber-400" />
-                {t.leeches_connected}{t.leeches_total != null ? `/${t.leeches_total}` : ''}
-              </span>
+              {/* Swarm counts only matter while there is still data to fetch */}
+              {!done && (
+                <>
+                  <span className="flex items-center gap-1" title="Seeds: connected / available in the swarm">
+                    <Sprout className="w-3 h-3 text-green-400" />
+                    {t.seeds_connected}{t.seeds_total != null ? `/${t.seeds_total}` : ''}
+                  </span>
+                  <span className="flex items-center gap-1" title="Leeches: connected / in the swarm">
+                    <Users className="w-3 h-3 text-amber-400" />
+                    {t.leeches_connected}{t.leeches_total != null ? `/${t.leeches_total}` : ''}
+                  </span>
+                </>
+              )}
               {active && t.eta != null && <span>ETA {formatTime(t.eta)}</span>}
               <span className="truncate max-w-[220px]" title={t.download_dir}>{t.download_dir}</span>
             </div>
