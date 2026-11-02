@@ -118,6 +118,9 @@ export interface FileTransfer {
   errors: FileOpResult[];
   /** A failure of the job as a whole (bad destination, ...). */
   error: string | null;
+  /** A page has shown how it ended. Unacknowledged finished jobs - ones that
+   *  ended while no tab was watching - stay in the floating bar. */
+  acknowledged: boolean;
 }
 
 export const isTransferActive = (t: FileTransfer) => t.status === 'preparing' || t.status === 'running';
@@ -190,6 +193,9 @@ export const fetchTransfers = () =>
 
 export const cancelTransfer = (id: string) =>
   filesRequest<{ job: FileTransfer }>(`/transfers/${id}/cancel`, {});
+
+export const ackTransfers = (ids: string[]) =>
+  filesRequest<{ acknowledged: number }>('/transfers/ack', { ids });
 
 export async function dismissTransfer(id: string): Promise<void> {
   const response = await authFetch(`/api/files/transfers/${id}`, { method: 'DELETE' });

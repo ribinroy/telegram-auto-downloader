@@ -252,6 +252,13 @@ class FilesRoutesMixin:
             job.wait(5)
             return jsonify({"job": job.snapshot()})
 
+        @self.app.route("/api/files/transfers/ack", methods=["POST"])
+        @token_required
+        def files_transfers_ack():
+            """Body: {ids:[...]} - the page has shown these outcomes."""
+            ids = (request.json or {}).get("ids") or []
+            return jsonify({"acknowledged": transfers.acknowledge(ids)})
+
         @self.app.route("/api/files/transfers/<job_id>", methods=["DELETE"])
         @token_required
         def files_transfer_dismiss(job_id):

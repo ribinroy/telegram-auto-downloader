@@ -51,6 +51,10 @@ class TransferJob:
         self.error = None
         self.started_at = time.time()
         self.finished_at = None
+        # Whether a page has shown the outcome yet. A job that finishes while
+        # no tab is open (or mid-reload) stays unacknowledged, so the explorer
+        # still surfaces it on its next load instead of it finishing silently.
+        self.acknowledged = False
         self._cancel = threading.Event()
         self._finished = threading.Event()
         self._samples = deque()
@@ -190,6 +194,7 @@ class TransferJob:
                 'results': [r for r in self.results if not r.get('error')],
                 'errors': errors,
                 'error': self.error,
+                'acknowledged': self.acknowledged,
             }
 
 
@@ -235,6 +240,19 @@ def dismiss(job_id):
             raise fs.FsError('Cancel the transfer before dismissing it', 409)
         _jobs.pop(job_id, None)
         return True
+
+
+def acknowledge(job_ids):
+    """Mark finished jobs' outcomes as seen. Running ones are left alone -
+    there is nothing to acknowledge until they end."""
+    n = 0
+    with _lock:
+        for jid in job_ids or []:
+            job = _jobs.get(jid)
+            if job is not None and job.finished and not job.acknowledged:
+                job.acknowledged = True
+                n += 1
+    return n
 
 
 def clear():

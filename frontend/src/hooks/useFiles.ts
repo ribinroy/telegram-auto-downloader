@@ -2,7 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   fetchFileRoots, listFiles, createFolder, renamePath, deletePaths, transferPaths,
   searchFiles, dirSize, readTextFile, uploadFiles,
-  fetchTransfers, cancelTransfer, dismissTransfer, isTransferActive,
+  fetchTransfers, cancelTransfer, dismissTransfer, ackTransfers, isTransferActive,
 } from '../api/files';
 import { qk } from '../api/queryKeys';
 
@@ -127,6 +127,14 @@ export function useDismissTransfer() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: dismissTransfer,
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.fileTransfers() }),
+  });
+}
+
+export function useAckTransfers() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ackTransfers,
     onSuccess: () => qc.invalidateQueries({ queryKey: qk.fileTransfers() }),
   });
 }
