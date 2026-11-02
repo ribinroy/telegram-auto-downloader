@@ -1,8 +1,8 @@
 import { useInfiniteQuery, useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  fetchDownloads, fetchStats, fetchAuthors, fetchTransferFiles, setTransferFilesPaused,
+  fetchDownloads, fetchStats, fetchAuthors, fetchTransferFiles, setTransferFilesStatus,
   retryDownload, stopDownload, pauseDownload, resumeDownload, deleteDownload, downloadUrl,
-  type FetchDownloadsOptions, type DownloadOptions,
+  type FetchDownloadsOptions, type DownloadOptions, type FileDecision,
 } from '../api';
 import { qk } from '../api/queryKeys';
 
@@ -20,12 +20,12 @@ export function useTransferFiles(downloadId: number, live: boolean) {
   });
 }
 
-/** Pause/resume files of a folder pull; the file list refetches either way. */
-export function useSetTransferFilesPaused(downloadId: number) {
+/** Pause/skip/clear files of a folder pull; the file list refetches either way. */
+export function useSetTransferFilesStatus(downloadId: number) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ paths, paused }: { paths: string[]; paused: boolean }) =>
-      setTransferFilesPaused(downloadId, paths, paused),
+    mutationFn: ({ paths, status }: { paths: string[]; status: FileDecision }) =>
+      setTransferFilesStatus(downloadId, paths, status),
     onSettled: () => qc.invalidateQueries({ queryKey: qk.transferFiles(downloadId) }),
   });
 }
