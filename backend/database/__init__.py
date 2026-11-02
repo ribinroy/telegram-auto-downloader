@@ -66,10 +66,12 @@ class Download(Base):
     # transfer plans its work; NULL for a single file or when not yet known.
     # The downloads list offers the per-file view on this.
     file_count = Column(Integer, nullable=True)
-    # Files of a folder pull the user paused (JSON list of paths relative to
-    # the pull's top folder, as the per-file view shows them). The transfer
-    # skips them - on a resume, a retry or a queue start too.
-    paused_files = Column(Text, nullable=True)
+    # Per-file decisions in a folder pull: JSON {path: 'paused'|'skipped'},
+    # paths relative to the pull's top folder as the per-file view shows
+    # them; a file with no entry is fetched normally. The transfer honours it
+    # on every run - a resume, a retry or a queue start. (Replaces the older
+    # `paused_files` list column, migrated into this one.)
+    file_status = Column(Text, nullable=True)
 
     def to_dict(self):
         """Convert model to dictionary"""
@@ -99,7 +101,7 @@ class Download(Base):
             'queue_position': self.queue_position,
             'format_id': self.format_id,
             'file_count': self.file_count,
-            'paused_files': json.loads(self.paused_files) if self.paused_files else [],
+            'file_status': json.loads(self.file_status) if self.file_status else {},
         }
 
 
@@ -453,9 +455,22 @@ class DatabaseManager:
             if 'file_count' not in columns:
                 conn.execute(text('ALTER TABLE downloads ADD COLUMN file_count INTEGER'))
                 conn.commit()
-            if 'paused_files' not in columns:
-                conn.execute(text('ALTER TABLE downloads ADD COLUMN paused_files TEXT'))
+            if 'file_status' not in columns:
+                conn.execute(text('ALTER TABLE downloads ADD COLUMN file_status TEXT'))
                 conn.commit()
+                # Carry over the older list of paused paths, if this DB had it
+                if 'paused_files' in columns:
+                    rows = conn.execute(text(
+                        'SELECT id, paused_files FROM downloads WHERE paused_files IS NOT NULL')).fetchall()
+                    for row_id, raw in rows:
+                        try:
+                            paths = json.loads(raw) or []
+                        except (ValueError, TypeError):
+                            continue
+                        if paths:
+                            conn.execute(text('UPDATE downloads SET file_status = :v WHERE id = :i'),
+                                         {'v': json.dumps({p: 'paused' for p in paths}), 'i': row_id})
+                    conn.commit()
 
             # Users: roles + Telegram identity (bot interaction tracking)
             if inspector.has_table('users'):

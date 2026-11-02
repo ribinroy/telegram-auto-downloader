@@ -313,9 +313,11 @@ def resume_all():
             # A paused VPS folder pull is paused because all its files are -
             # resuming everything means them too, or it would start and
             # stop again at once.
-            extra = ({'paused_files': None}
-                     if download.get('downloaded_from') == 'vps' and download.get('status') == 'paused'
-                     else {})
+            extra = {}
+            if download.get('downloaded_from') == 'vps' and download.get('status') == 'paused':
+                # Skipped files stay skipped - only the pauses are undone
+                kept = {p: v for p, v in (download.get('file_status') or {}).items() if v != 'paused'}
+                extra = {'file_status': json.dumps(kept, sort_keys=True) if kept else None}
             db.update_download_by_message_id(
                 download['message_id'], status='waiting', speed=0, error=None,
                 queue_position=position + offset, **extra)

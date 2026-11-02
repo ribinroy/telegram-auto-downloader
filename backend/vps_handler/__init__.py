@@ -37,8 +37,14 @@ TRANSFER_CHUNK = 1 << 17  # 128 KiB per request
 TRANSFER_BATCH = 64       # concurrent requests per batch
 
 
+# Per-file decisions in a folder pull (`downloads.file_status` values). A
+# paused file holds the pull back (it ends `paused`); a skipped one is left
+# out, so the pull can finish `done` without it.
+FILE_STATES = ('paused', 'skipped')
+
+
 class _FileSkipped(Exception):
-    """The file being transferred was paused: keep its bytes, move on."""
+    """The file being transferred was paused or skipped: keep its bytes, move on."""
 
 
 class _Cancelled(Exception):
@@ -57,9 +63,9 @@ class VpsDownloader:
         # still fetching; two writers appending to one partial would corrupt it.
         self.writing = {}
         self.plans = {}  # message_id -> running transfer's _plan() + 'current' file
-        # message_id -> paths (relative to the pull's top folder) the user
-        # paused; the running transfer reads this live, the DB keeps it.
-        self.paused_files = {}
+        # message_id -> {path: 'paused'|'skipped'} for a running folder pull;
+        # the transfer reads this live, the DB (`file_status`) keeps it.
+        self.file_status = {}
         self.writing_lock = threading.Lock()
         # autoSync baseline: folder path -> set of filenames already accounted for
         self._seen = {}
@@ -309,7 +315,8 @@ class VpsDownloader:
         local side can be listed, and every file there reads as `on_disk`.
 
         -> {source: live|vps|local, is_dir, error?, files: [{path, size,
-            local_size, state: done|downloading|partial|pending|paused|on_disk}]}"""
+            local_size, state: done|downloading|partial|pending|paused|skipped|on_disk,
+            local_path (set once the file is whole)}]}"""
         message_id = download.get('message_id')
         plan = self.plans.get(message_id)
         source, error = 'live', None
@@ -328,7 +335,7 @@ class VpsDownloader:
 
         running = source == 'live'
         current = plan.get('current') if running else None
-        paused = set(self.paused_files.get(message_id) or download.get('paused_files') or [])
+        decided = dict(self.file_status.get(message_id) or download.get('file_status') or {})
         root = plan['root']
         out = []
         for _rfile, size, lp in plan['files']:
@@ -339,44 +346,65 @@ class VpsDownloader:
             rel = lp.relative_to(root).as_posix() if plan['is_dir'] else lp.name
             if lp.exists() and local_size >= size:
                 state = 'done'
-            elif rel in paused:
-                state = 'paused'
+            elif decided.get(rel) in FILE_STATES:
+                state = decided[rel]
             elif current is not None and lp == current:
                 state = 'downloading'
             elif local_size > 0:
                 state = 'partial'
             else:
                 state = 'pending'
-            out.append({'path': rel, 'size': size, 'local_size': local_size, 'state': state})
+            # Where it is on the home server, once it's whole - the view button
+            # streams it from there
+            local_path = str(lp) if state == 'done' else None
+            out.append({'path': rel, 'size': size, 'local_size': local_size, 'state': state,
+                        'local_path': local_path})
         return {'source': source, 'error': None, 'is_dir': plan['is_dir'], 'files': out}
 
-    def set_files_paused(self, download: dict, paths, paused: bool) -> dict:
-        """Pause or resume files of a folder pull. Saved on the record (so a
+    def set_files_status(self, download: dict, paths, status) -> dict:
+        """Mark files of a folder pull `paused` or `skipped`, or clear them
+        (`status=None`) so they are fetched again. Saved on the record (so a
         resume, retry or queue start honours it) and, while the transfer runs,
-        applied to it live: pausing the file it is on stops that file there
-        and moves on. -> {paused_files, running}"""
+        applied to it live: marking the file it is on stops that file there and
+        moves on. -> {file_status, running}"""
+        if status is not None and status not in FILE_STATES:
+            raise ValueError(f"Unknown file status: {status}")
         message_id = download.get('message_id')
         paths = {p for p in (paths or []) if isinstance(p, str) and p}
-        current = set(download.get('paused_files') or [])
-        current = (current | paths) if paused else (current - paths)
-        get_db().update_download_by_message_id(message_id, paused_files=json.dumps(sorted(current)) if current else None)
-        live = self.paused_files.get(message_id)
-        if live is not None:
-            if paused:
-                live.update(paths)
+        current = dict(download.get('file_status') or {})
+        for path in paths:
+            if status is None:
+                current.pop(path, None)
             else:
-                live.difference_update(paths)
+                current[path] = status
+        get_db().update_download_by_message_id(
+            message_id, file_status=json.dumps(current, sort_keys=True) if current else None)
+        live = self.file_status.get(message_id)
+        if live is not None:
+            for path in paths:
+                if status is None:
+                    live.pop(path, None)
+                else:
+                    live[path] = status
         thread = self.threads.get(message_id)
-        return {'paused_files': sorted(current), 'running': bool(thread and thread.is_alive())}
+        return {'file_status': current, 'running': bool(thread and thread.is_alive())}
 
-    def all_unfinished_paused(self, download: dict):
-        """Whether every file of the pull that isn't done yet is paused. None
-        when it can't be told (the VPS side is out of reach)."""
+    def remaining(self, download: dict):
+        """What is left of a pull that isn't running, judged against the VPS:
+        `('done', wanted_bytes)` when every file not skipped is here,
+        `('paused', ...)` when every one still missing is paused, otherwise
+        `(None, ...)` - also when the VPS side is out of reach."""
         listing = self.file_listing(download)
         if listing['source'] == 'local':
-            return None
-        unfinished = [f for f in listing['files'] if f['state'] != 'done']
-        return bool(unfinished) and all(f['state'] == 'paused' for f in unfinished)
+            return None, 0
+        wanted = [f for f in listing['files'] if f['state'] != 'skipped']
+        wanted_bytes = sum(f['size'] for f in wanted)
+        unfinished = [f for f in wanted if f['state'] != 'done']
+        if not unfinished:
+            return 'done', wanted_bytes
+        if all(f['state'] == 'paused' for f in unfinished):
+            return 'paused', wanted_bytes
+        return None, wanted_bytes
 
     def _local_listing(self, download: dict) -> dict:
         """What of a pull is on the home server, without the VPS to compare
@@ -389,7 +417,8 @@ class VpsDownloader:
         if root.is_file():
             size = root.stat().st_size
             return {'is_dir': False, 'files': [
-                {'path': root.name, 'size': size, 'local_size': size, 'state': 'on_disk'}]}
+                {'path': root.name, 'size': size, 'local_size': size, 'state': 'on_disk',
+                 'local_path': str(root)}]}
         files = []
         for dirpath, _dirs, names in os.walk(root):
             for n in sorted(names):
@@ -399,7 +428,7 @@ class VpsDownloader:
                 except OSError:
                     continue
                 files.append({'path': p.relative_to(root).as_posix(), 'size': size,
-                              'local_size': size, 'state': 'on_disk'})
+                              'local_size': size, 'state': 'on_disk', 'local_path': str(p)})
         files.sort(key=lambda f: f['path'])
         return {'is_dir': True, 'files': files}
 
@@ -413,7 +442,6 @@ class VpsDownloader:
             plan = self._plan(sftp, remote_path, message_id, dest)
             is_dir, local_name = plan['is_dir'], plan['local_name']
             files = plan['files']  # (remote_file, size, local_path)
-            total_bytes = sum(size for _, size, _ in files)
             plan['current'] = None
             self.plans[message_id] = plan
             root = plan['root']
@@ -421,10 +449,19 @@ class VpsDownloader:
             def rel(lp):
                 return lp.relative_to(root).as_posix() if is_dir else lp.name
 
-            # The same set object the pause route edits while this runs
+            # The same dict the file-status route edits while this runs
             record = db.get_download_by_message_id(message_id) or {}
-            paused = self.paused_files.setdefault(message_id, set())
-            paused.update(record.get('paused_files') or [])
+            decided = self.file_status.setdefault(message_id, {})
+            decided.update(record.get('file_status') or {})
+
+            def flag(lp):
+                return decided.get(rel(lp))
+
+            def total():
+                # Skipped files aren't part of what this pull has to fetch
+                return sum(size for _r, size, lp in files if flag(lp) != 'skipped')
+
+            total_bytes = total()
             if is_dir:
                 db.update_download_by_message_id(message_id, file_count=len(files))
                 self.emit_file_count(message_id, len(files))
@@ -437,7 +474,8 @@ class VpsDownloader:
                 if lp.exists():
                     ls = lp.stat().st_size
                     counted[lp] = min(ls, rsize) if rsize else ls
-                    transferred[0] += counted[lp]
+                    if flag(lp) != 'skipped':
+                        transferred[0] += counted[lp]
 
             state = {'last_update': 0.0, 'last_bytes': transferred[0], 'last_time': start_time.timestamp()}
 
@@ -445,11 +483,12 @@ class VpsDownloader:
                 transferred[0] += delta
                 if message_id in self.cancelled:
                     raise _Cancelled()
-                if plan.get('current_rel') in paused:
+                if decided.get(plan.get('current_rel')) in FILE_STATES:
                     raise _FileSkipped()
                 now = time.time()
                 if now - state['last_update'] < 1:
                     return
+                total_bytes = total()  # moves when a file is skipped mid-run
                 elapsed = now - state['last_time']
                 speed = ((transferred[0] - state['last_bytes']) / elapsed / 1024) if elapsed > 0 else 0  # KB/s
                 progress = (transferred[0] / total_bytes * 100) if total_bytes else 0
@@ -477,7 +516,7 @@ class VpsDownloader:
                 for rfile, rsize, lp in files:
                     if message_id in self.cancelled:
                         raise _Cancelled()
-                    if rel(lp) in paused or complete(lp, rsize):
+                    if flag(lp) in FILE_STATES or complete(lp, rsize):
                         continue
                     plan['current'], plan['current_rel'] = lp, rel(lp)
                     lp.parent.mkdir(parents=True, exist_ok=True)
@@ -493,27 +532,30 @@ class VpsDownloader:
                         counted[lp] = rsize
                     except _FileSkipped:
                         counted[lp] = lp.stat().st_size if lp.exists() else 0
-                        logger.info(f"[vps] Paused file skipped: {rfile}")
+                        logger.info(f"[vps] File {flag(lp) or 'skipped'}, moving on: {rfile}")
                     finally:
                         self._release(lp, message_id)
                         plan['current'] = plan['current_rel'] = None
-                if all(complete(lp, rsize) or rel(lp) in paused for _r, rsize, lp in files):
+                if all(complete(lp, rsize) or flag(lp) in FILE_STATES for _r, rsize, lp in files):
                     break
 
             sftp.close()
 
-            left = [lp for _r, rsize, lp in files if not complete(lp, rsize)]
+            total_bytes = total()
+            left = [lp for _r, rsize, lp in files if flag(lp) != 'skipped' and not complete(lp, rsize)]
             if left:
                 # Files are still missing, so the pull isn't done. When every
                 # one of them is paused that was the user's call, and the pull
                 # itself reads as paused (never auto-resumed, like a paused
                 # Telegram download); otherwise it stopped short and a retry
                 # carries on.
-                status = 'paused' if all(rel(lp) in paused for lp in left) else 'stopped'
+                status = 'paused' if all(flag(lp) == 'paused' for lp in left) else 'stopped'
+                have = sum(min(lp.stat().st_size, rsize) for _r, rsize, lp in files
+                           if flag(lp) != 'skipped' and lp.exists())
                 db.update_download_by_message_id(
                     message_id, status=status, speed=0, pending_time=None,
-                    downloaded_bytes=transferred[0], total_bytes=total_bytes,
-                    progress=(transferred[0] / total_bytes * 100) if total_bytes else 0,
+                    downloaded_bytes=have, total_bytes=total_bytes,
+                    progress=(have / total_bytes * 100) if total_bytes else 0,
                 )
                 self.emit_status(message_id, status)
                 metrics.record_download_stopped('vps')
@@ -559,7 +601,7 @@ class VpsDownloader:
                     pass
             self.clients.pop(message_id, None)
             self.plans.pop(message_id, None)
-            self.paused_files.pop(message_id, None)
+            self.file_status.pop(message_id, None)
             self.cancelled.discard(message_id)
             self.threads.pop(message_id, None)
             self.download_tasks.pop(message_id, None)
