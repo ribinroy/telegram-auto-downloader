@@ -397,7 +397,8 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
               selected.has(t.hash) ? 'border-purple-500/60 bg-purple-500/5' : 'border-slate-700/50'
             }`}
           >
-            <div className="flex items-center justify-between gap-3">
+            {/* Phone: the status + buttons wrap onto their own row under the name */}
+            <div className="flex flex-wrap sm:flex-nowrap items-center justify-between gap-x-3 gap-y-2">
               <button
                 onClick={() => toggleSelect(t.hash)}
                 className="shrink-0"
@@ -416,8 +417,8 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
               >
                 {t.name}
               </button>
-              <div className="flex items-center gap-2 shrink-0">
-                <span className={`text-xs border rounded-full px-2 py-0.5 ${style.cls}`}>{style.label}</span>
+              <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto pl-7 sm:pl-0">
+                <span className={`text-xs border rounded-full px-2 py-0.5 mr-auto sm:mr-0 ${style.cls}`}>{style.label}</span>
                 {/* DownLee transfer: already pulled, in flight, retryable, or offered. */}
                 {done && dlDone && (
                   <Tooltip content="Already downloaded to DownLee" position="top">
@@ -498,15 +499,18 @@ export function TorrentStatusPanel({ client, onCountChange }: { client: TorrentC
               </div>
             </div>
 
-            <div className="mt-2 h-1.5 bg-slate-700 rounded-full overflow-hidden">
-              <div
-                className={`h-full transition-all duration-300 ${active ? 'progress-shimmer' : 'bg-slate-500'}`}
-                style={{ width: `${t.percent_done}%` }}
-              />
-            </div>
+            {/* A finished torrent's bar is just a full line - drop it */}
+            {!done && (
+              <div className="mt-2 h-1.5 bg-slate-700 rounded-full overflow-hidden">
+                <div
+                  className={`h-full transition-all duration-300 ${active ? 'progress-shimmer' : 'bg-slate-500'}`}
+                  style={{ width: `${t.percent_done}%` }}
+                />
+              </div>
+            )}
 
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-400 mt-1.5">
-              <span>{t.percent_done}% of {formatBytes(t.total_size)}</span>
+              <span>{done ? formatBytes(t.total_size) : `${t.percent_done}% of ${formatBytes(t.total_size)}`}</span>
               {t.rate_download > 0 && (
                 <span className="flex items-center gap-1"><ArrowDown className="w-3 h-3 text-cyan-400" />{formatBytes(t.rate_download)}/s</span>
               )}
