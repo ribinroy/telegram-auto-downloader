@@ -321,7 +321,7 @@ Live filesystem access - every call reads the disk, nothing is indexed or cached
 - `GET /api/files/roots` - Sidebar places, grouped `drive` / `folder` / `configured`: every real mount from `/proc/mounts` with live capacity, then Home + `DOWNLOAD_DIR`, then DownLee's own destination folders (source mappings, VPS watch-folder destinations, torrent `local_dir`); `?include_hidden=true` includes secured ones
 - `POST /api/files/list` - `{path?, show_hidden?}` -> entries + `writable`, `usage`, `mount`, `trash`
 - `POST /api/files/mkdir` / `rename` / `delete` (`{paths, permanent?}`) / `transfer` (`{paths, dest, move}`) / `upload` (multipart)
-- `GET /api/files/transfers` - local copy/move jobs (running + finished in the last 10 min); `GET /api/files/transfers/<id>/files` (`{files: [{path, rel, size, state, rename, error?, done?}], counts, truncated}`); `POST /api/files/transfers/<id>/cancel`; `POST /api/files/transfers/ack` (`{ids}`); `DELETE /api/files/transfers/<id>` (finished only, else 409)
+- `GET /api/files/transfers` - local copy/move jobs (running + finished in the last 10 min); `GET /api/files/transfers/<id>/files` (`{files: [{path, rel, size, state, rename, error?, done?}], counts, truncated}`); `POST /api/files/transfers/<id>/files/pause` (`{paths, paused: bool}` -> fresh listing + `changed`; 409 once finished); `POST /api/files/transfers/<id>/cancel`; `POST /api/files/transfers/ack` (`{ids}`); `DELETE /api/files/transfers/<id>` (finished only, else 409)
 - `POST /api/files/search` (recursive, capped by results **and** a wall-clock deadline), `POST /api/files/size` (on-demand `du`), `POST /api/files/text` (preview head)
 - `POST /api/files/thumb/warm` - `{paths}`; queue a page of previews on the generation pool and return at once
 - `POST /api/files/thumb/status` - `{paths}` -> `{states}` (`ready`/`quick`/`pending`/`waiting`/`none`); the open grid's poll, and the "folder is still open" signal for the idle sheet upgrade
@@ -618,7 +618,22 @@ a pulled USB drive disappears from the sidebar.
     files `cancelled` - its partial target is deleted, copied files included.
     Anything never reached ends `skipped`. States are kept for
     `MAX_TRACKED_FILES` (20k); past that the counters still count, and the
-    listing says `truncated`. The listing is **its own route**, polled (1.5s)
+    listing says `truncated`.
+  - **Per-file pause / resume.** A paused file is *set aside*, never blocking
+    the rest: `copy_file` sees it in `_paused` (before its turn, or between
+    chunks mid-copy), keeps the bytes written, records it in `_deferred`, and
+    returns as if done so copytree moves on. After `transfer()` returns, the
+    job's **second pass** (`_drain()`) copies resumed files from their kept
+    size (`ab` + seek), and while every file left is paused the job sits in
+    status **`paused`** (still active: polled, cancellable, in the bar) on a
+    condition that `set_paused()`/`cancel()` notify. Cancel discards the
+    set-aside partials; items already complete stay. **Cross-disk moves with a
+    job are copy-then-`release_source()`**, not `shutil.move`: shutil.move
+    rmtrees the source right after copying, which would delete a file paused
+    before it was copied. The source goes once all its files are in, and is
+    kept if any failed (shutil.move's own rule). Same-disk moves are renames
+    and have nothing to pause.
+  - The listing is **its own route**, polled (1.5s)
     only for the job the modal is showing - a 20k-file plan has no business on
     the 1s list poll.
   - **Jobs are the server's, not the tab's**, kept in memory (a restart kills
@@ -637,7 +652,11 @@ a pulled USB drive disappears from the sidebar.
     bar, per-item errors, Cancel / dismiss, a link to the destination, and the
     **file list** - every planned file with its state (copying first, then
     failed, to copy, copied; `sortTransferFiles()`), state chips with counts,
-    a filter box past 8 files, and at most 300 rows rendered. A job seen running that finishes is toasted and
+    a filter box past 8 files, and at most 300 rows rendered. While the job
+    runs each row has ⏸ (pending/copying) or ▶ (paused) - `canPauseFile` /
+    `canResumeFile` - and the chip row offers Pause n / Resume n over what the
+    chips + filter show. The answer is the fresh listing, written straight into
+    the query cache. A job seen running that finishes is toasted and
     the listing refreshed; the toast is clickable (`ToastData.onClick`) and
     opens the same modal.
 - **Bounded work**: recursive search and folder sizes both stop on a wall-clock

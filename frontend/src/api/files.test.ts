@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
-  isRemotePath, transferPercent, transferTitle, sortTransferFiles, type FileTransfer, type TransferFile,
+  isRemotePath, transferPercent, transferTitle, sortTransferFiles, canPauseFile, canResumeFile, isTransferActive,
+  type FileTransfer, type TransferFile,
 } from './files';
 
 describe('isRemotePath', () => {
@@ -50,5 +51,26 @@ describe('sortTransferFiles', () => {
   it('puts the file being written first, then failures, what is left, and what is settled', () => {
     const files = [f('a', 'done'), f('b', 'pending'), f('c', 'failed'), f('d', 'copying'), f('e', 'pending'), f('g', 'skipped')];
     expect(sortTransferFiles(files).map(x => x.rel)).toEqual(['d', 'c', 'b', 'e', 'a', 'g']);
+  });
+});
+
+describe('pause / resume eligibility', () => {
+  const f = (state: TransferFile['state'], rename = false): TransferFile => ({ path: '/s/x', rel: 'x', size: 1, state, rename });
+  it('pauses what is still to come or being written, and resumes only what is paused', () => {
+    expect(canPauseFile(f('pending'))).toBe(true);
+    expect(canPauseFile(f('copying'))).toBe(true);
+    expect(canPauseFile(f('done'))).toBe(false);
+    expect(canResumeFile(f('paused'))).toBe(true);
+    expect(canResumeFile(f('failed'))).toBe(false);
+  });
+  it('never offers either on a rename, which is instant', () => {
+    expect(canPauseFile(f('pending', true))).toBe(false);
+  });
+  it('treats a job waiting on paused files as still running', () => {
+    expect(isTransferActive(job({ status: 'paused' }))).toBe(true);
+  });
+  it('lists paused files after failures and before what is left', () => {
+    const rows = [{ ...f('pending'), rel: 'p' }, { ...f('paused'), rel: 'z' }, { ...f('failed'), rel: 'e' }];
+    expect(sortTransferFiles(rows).map(x => x.rel)).toEqual(['e', 'z', 'p']);
   });
 });
