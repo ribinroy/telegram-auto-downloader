@@ -182,7 +182,34 @@ class VpsDownloader:
         if started:
             metrics.record_download_started('vps')
             self._spawn(remote_path, message_id, dest)
+        elif not size:
+            # Waiting with no size (a folder - the browser lists no recursive
+            # size): measure it now, so the header's "to download" total and
+            # ETA count it before its turn comes.
+            threading.Thread(target=self._measure_waiting,
+                             args=(message_id, remote_path), daemon=True).start()
         return new_download
+
+    def _measure_waiting(self, message_id: str, remote_path: str):
+        """Fill in total_bytes for a waiting pull that arrived without one.
+
+        Only while it is still waiting with no size: once the transfer starts
+        its own plan sets the real figure, and that must not be overwritten.
+        """
+        try:
+            from backend.remote_files import dir_size
+            size = int(dir_size(remote_path).get('size') or 0)
+        except Exception as e:
+            logger.debug("Could not size waiting VPS pull %s: %s", remote_path, e)
+            return
+        if size <= 0:
+            return
+        db = get_db()
+        dl = db.get_download_by_message_id(message_id)
+        if not dl or dl.get('status') != 'waiting' or (dl.get('total_bytes') or 0):
+            return
+        db.update_download_by_message_id(message_id, total_bytes=size)
+        self.emit_progress(message_id, 0, dl.get('downloaded_bytes') or 0, size, 0, None)
 
     def resume_download(self, message_id: str) -> bool:
         """Resume a stopped/failed VPS download from where it left off,

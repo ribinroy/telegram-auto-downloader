@@ -32,7 +32,7 @@ import { ConfirmDialog } from './ConfirmDialog';
 import { VideoPlayerModal } from './VideoPlayerModal';
 import { TransferFilesModal } from './TransferFilesModal';
 import { Tooltip } from './Tooltip';
-import { checkVideoFile, getVideoStreamUrl, getThumbUrl } from '../api';
+import { checkVideoFile, getVideoStreamUrl, getThumbUrl, ensureMediaToken } from '../api';
 
 const VIDEO_EXTENSIONS = /\.(mp4|mkv|webm|avi|mov|m4v|flv|wmv)$/i;
 
@@ -396,6 +396,7 @@ export function DownloadItem({ download, onRetry, onStop, onPause, onResume, onD
         navigate(`${ROUTES.FILES}?path=${encodeURIComponent(result.parent)}`
           + `&select=${encodeURIComponent(result.path || '')}`);
       } else {
+        await ensureMediaToken();
         setVideoUrl(getVideoStreamUrl(download.id));
         setVideoPlayerOpen(true);
       }

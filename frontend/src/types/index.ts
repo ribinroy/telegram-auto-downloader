@@ -95,6 +95,14 @@ export interface Stats {
   total_speed: number;
   /** Bytes left across running + waiting downloads. */
   remaining_bytes?: number;
+  /** Bytes left on running downloads only. */
+  running_bytes?: number;
+  /** Bytes of downloads waiting their turn in the queue. */
+  waiting_bytes?: number;
+  running_count?: number;
+  waiting_count?: number;
+  /** Running/waiting downloads whose size isn't known yet (not in the totals). */
+  unsized_count?: number;
   /** Seconds until the whole queue finishes at the current speed; null when nothing is moving. */
   eta_seconds?: number | null;
   downloaded_count: number;

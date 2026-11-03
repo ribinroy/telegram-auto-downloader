@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Routes, Route } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
-import { verifyToken, clearToken, getToken, logout, ensureMediaToken, setSessionExpiredHandler } from './api';
+import { verifyToken, clearToken, getToken, logout, ensureMediaToken, setSessionExpiredHandler, startMediaTokenKeeper } from './api';
 import { LoginPage } from './components/LoginPage';
 import { Layout } from './components/Layout';
 import { DownloadsPage } from './pages/DownloadsPage';
@@ -46,6 +46,13 @@ function App() {
     };
     checkAuth();
   }, []);
+
+  // The media token expires on its own (MEDIA_TOKEN_HOURS); without this a
+  // tab left open past that builds every video/image URL with a dead token.
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    return startMediaTokenKeeper();
+  }, [isAuthenticated]);
 
   const handleLogin = () => setIsAuthenticated(true);
   const handleLogout = async () => {
