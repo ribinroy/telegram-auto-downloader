@@ -81,6 +81,7 @@ Main Thread
 |  |- utils/__init__.py             # Helpers (resolve_spec, encryption, MIME types)
 |  |- files.py                      # Filesystem service for the file explorer (mounts, listing, ops, thumbs)
 |  |- remote_files.py               # The VPS as a second explorer drive, over SFTP (`vps:` paths)
+|  |- file_transfers.py             # Background copy/move jobs for the explorer (progress, cancel)
 |  |- jobs.py                       # Maintenance job bodies + schedule store + JobScheduler thread
 |  |- logsafe.py                    # Log redaction filter + rotating, owner-only log handler
 |  |- netwatch.py                   # Connectivity probe + stall sweep -> resumes interrupted downloads
@@ -320,6 +321,7 @@ Live filesystem access - every call reads the disk, nothing is indexed or cached
 - `GET /api/files/roots` - Sidebar places, grouped `drive` / `folder` / `configured`: every real mount from `/proc/mounts` with live capacity, then Home + `DOWNLOAD_DIR`, then DownLee's own destination folders (source mappings, VPS watch-folder destinations, torrent `local_dir`); `?include_hidden=true` includes secured ones
 - `POST /api/files/list` - `{path?, show_hidden?}` -> entries + `writable`, `usage`, `mount`, `trash`
 - `POST /api/files/mkdir` / `rename` / `delete` (`{paths, permanent?}`) / `transfer` (`{paths, dest, move}`) / `upload` (multipart)
+- `GET /api/files/transfers` - local copy/move jobs (running + finished in the last 10 min); `GET /api/files/transfers/<id>/files` (`{files: [{path, rel, size, state, rename, error?, done?}], counts, truncated}`); `POST /api/files/transfers/<id>/files/pause` (`{paths, paused: bool}` -> fresh listing + `changed`; 409 once finished); `POST /api/files/transfers/<id>/cancel`; `POST /api/files/transfers/ack` (`{ids}`); `DELETE /api/files/transfers/<id>` (finished only, else 409)
 - `POST /api/files/search` (recursive, capped by results **and** a wall-clock deadline), `POST /api/files/size` (on-demand `du`), `POST /api/files/text` (preview head)
 - `POST /api/files/thumb/warm` - `{paths}`; queue a page of previews on the generation pool and return at once
 - `POST /api/files/thumb/status` - `{paths}` -> `{states}` (`ready`/`quick`/`pending`/`waiting`/`none`); the open grid's poll, and the "folder is still open" signal for the idle sheet upgrade
@@ -593,6 +595,70 @@ a pulled USB drive disappears from the sidebar.
   Trash and a solid red Delete (permanent; "Delete on VPS" for a VPS selection,
   which has no trash). The trash path is reported by `/api/files/list` (only once it
   exists) and linked in the sidebar.
+- **Copy/move are background jobs** (`backend/file_transfers.py`). A local
+  `transfer` starts a `TransferJob` on its own daemon thread and the route waits
+  `TRANSFER_INLINE_WAIT` (1s) - a small paste still answers finished in one round
+  trip (`{results, errors, job, running: false}`); a big one answers
+  `running: true` and carries on. The job first walks the sources to plan
+  bytes/files (`status: 'preparing'`), then copies every file through
+  `job.copy_file` (4 MB chunks: byte counter, current file, cancel check), passed
+  to `shutil.copytree`/`shutil.move` as `copy_function`. A same-disk move is a
+  rename and plans zero bytes, so its progress goes by items. Cancel raises
+  `TransferCancelled` (not an `OSError`, so copytree doesn't swallow it) and the
+  partial target - always a fresh `unique_name` - is removed; the source is
+  untouched. End states: `done` / `partial` / `failed` / `cancelled`.
+  - **Per-file states.** `transfer_plan()` (in `files.py`) returns every file
+    to copy in sorted walk order, with `rel` = where it lands under the
+    destination; a same-disk move is one `rename` row for the whole item, and
+    symlinks inside a folder aren't listed (copytree recreates them, never
+    through `copy_function`). Each file goes `pending` -> `copying` -> `done` /
+    `failed` (a per-file OSError, which copytree records and moves past);
+    `transfer()` calls `job.end_item()` after each item, which marks an item
+    that failed up front `skipped` (with its reason) and a cancelled item's
+    files `cancelled` - its partial target is deleted, copied files included.
+    Anything never reached ends `skipped`. States are kept for
+    `MAX_TRACKED_FILES` (20k); past that the counters still count, and the
+    listing says `truncated`.
+  - **Per-file pause / resume.** A paused file is *set aside*, never blocking
+    the rest: `copy_file` sees it in `_paused` (before its turn, or between
+    chunks mid-copy), keeps the bytes written, records it in `_deferred`, and
+    returns as if done so copytree moves on. After `transfer()` returns, the
+    job's **second pass** (`_drain()`) copies resumed files from their kept
+    size (`ab` + seek), and while every file left is paused the job sits in
+    status **`paused`** (still active: polled, cancellable, in the bar) on a
+    condition that `set_paused()`/`cancel()` notify. Cancel discards the
+    set-aside partials; items already complete stay. **Cross-disk moves with a
+    job are copy-then-`release_source()`**, not `shutil.move`: shutil.move
+    rmtrees the source right after copying, which would delete a file paused
+    before it was copied. The source goes once all its files are in, and is
+    kept if any failed (shutil.move's own rule). Same-disk moves are renames
+    and have nothing to pause.
+  - The listing is **its own route**, polled (1.5s)
+    only for the job the modal is showing - a 20k-file plan has no business on
+    the 1s list poll.
+  - **Jobs are the server's, not the tab's**, kept in memory (a restart kills
+    the copying thread anyway). `GET /api/files/transfers` is the source of
+    truth, so a reload, another tab or another device sees the same jobs and
+    progress. Finished jobs are listed for 10 minutes. `acknowledged` records
+    that some page showed the outcome: the explorer acks when it toasts a
+    finish, gets a finished job back inline, or opens the details modal - so a
+    copy that ended while no tab was watching still shows up on the next load.
+  - UI: `useFileTransfers()` polls every 1s while a job runs. Running jobs and
+    unacknowledged finished ones sit in the explorer's floating bar as one
+    pill (spinner, title, aggregate bar, %); clicking it opens
+    `TransfersModal` - **one tab per job** when there are several (status icon
+    + %, defaulting to the first running one), and for the selected job: bytes
+    done/total, files, speed, time left, the file being written with its own
+    bar, per-item errors, Cancel / dismiss, a link to the destination, and the
+    **file list** - every planned file with its state (copying first, then
+    failed, to copy, copied; `sortTransferFiles()`), state chips with counts,
+    a filter box past 8 files, and at most 300 rows rendered. While the job
+    runs each row has ⏸ (pending/copying) or ▶ (paused) - `canPauseFile` /
+    `canResumeFile` - and the chip row offers Pause n / Resume n over what the
+    chips + filter show. The answer is the fresh listing, written straight into
+    the query cache. A job seen running that finishes is toasted and
+    the listing refreshed; the toast is clickable (`ToastData.onClick`) and
+    opens the same modal.
 - **Bounded work**: recursive search and folder sizes both stop on a wall-clock
   deadline as well as a result cap, because "search from the root of a 20 TB array"
   is a reasonable thing to ask a web request to do exactly once.

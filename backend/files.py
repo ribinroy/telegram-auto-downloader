@@ -467,35 +467,168 @@ def delete(raw_paths, permanent=False):
     return results
 
 
-def transfer(raw_paths, raw_dest, move=False):
-    """Copy or move a selection into `dest`, resolving name clashes."""
+class TransferCancelled(Exception):
+    """Raised inside a copy to abandon it. Deliberately not an OSError, so
+    copytree's per-file error collection lets it through instead of noting it
+    down and carrying on with the next file."""
+
+
+def transfer_dest(raw_dest):
+    """Resolve and check a paste destination. Raises FsError."""
     dest = resolve_path(raw_dest)
     if not dest.is_dir():
         raise FsError('Destination is not a directory')
     guard_write(dest)
+    return dest
+
+
+def _same_device(source, dest):
+    try:
+        return os.lstat(str(source)).st_dev == os.stat(str(dest)).st_dev
+    except OSError:
+        return False
+
+
+def transfer_plan(raw_paths, dest, move=False, cancelled=None):
+    """Every file the transfer will copy, in walk order:
+    [{path, rel, size, item, rename}]. `rel` is the path as it lands under
+    `dest` (top folder included); `item` indexes `raw_paths`.
+
+    A move within one filesystem is a rename - instant, nothing copied - so its
+    item is one `rename: True` entry rather than its files. A move across disks
+    is a copy and a delete, and is planned like a copy. Symlinks inside a folder
+    are recreated as links, not copied, so they aren't listed."""
+    entries = []
+    for item, raw in enumerate(raw_paths):
+        try:
+            source = resolve_path(raw, follow=False)
+        except FsError:
+            continue
+        if move and _same_device(source, dest):
+            entries.append({'path': str(source), 'rel': source.name, 'size': 0,
+                            'item': item, 'rename': True})
+            continue
+        if source.is_dir() and not source.is_symlink():
+            for dirpath, dirnames, filenames in os.walk(source, followlinks=False):
+                if cancelled and cancelled():
+                    raise TransferCancelled()
+                dirnames.sort()
+                for name in sorted(filenames):
+                    full = os.path.join(dirpath, name)
+                    try:
+                        st = os.lstat(full)
+                    except OSError:
+                        continue
+                    if stat_module.S_ISLNK(st.st_mode):
+                        continue
+                    entries.append({
+                        'path': full,
+                        'rel': os.path.join(source.name, os.path.relpath(full, str(source))),
+                        'size': st.st_size if stat_module.S_ISREG(st.st_mode) else 0,
+                        'item': item, 'rename': False,
+                    })
+        else:
+            try:
+                st = os.lstat(str(source))
+            except OSError:
+                continue
+            entries.append({'path': str(source), 'rel': source.name,
+                            'size': st.st_size if stat_module.S_ISREG(st.st_mode) else 0,
+                            'item': item, 'rename': False})
+    return entries
+
+
+def transfer(raw_paths, raw_dest, move=False, job=None):
+    """Copy or move a selection into `dest`, resolving name clashes.
+
+    `job` (a file_transfers.TransferJob) makes it observable: every file is
+    copied through job.copy_file, which counts bytes and raises
+    TransferCancelled once the job is cancelled. Without one, it is the plain
+    synchronous copy it always was."""
+    dest = transfer_dest(raw_dest)
+    copy_fn = job.copy_file if job else shutil.copy2
 
     results = []
     for raw in raw_paths:
         source = resolve_path(raw, follow=False)
+        target = None
         try:
+            if job:
+                job.begin_item(source)
             if move:
                 guard_target(source)
             if str(dest).startswith(str(source).rstrip('/') + '/'):
                 raise FsError(f'Cannot move "{source.name}" into itself')
             name = unique_name(dest, source.name)
             target = dest / name
-            if move:
-                shutil.move(str(source), str(target))
+            if move and job and not _same_device(source, dest):
+                # Cross-disk move with a job: copy, then let the job delete the
+                # source. shutil.move would rmtree it right after the copy, and
+                # a file the user paused mid-way hasn't been copied yet - the
+                # job releases the source only once every file of it is in.
+                if source.is_symlink():
+                    os.symlink(os.readlink(str(source)), str(target))
+                elif source.is_dir():
+                    shutil.copytree(str(source), str(target), symlinks=True, copy_function=copy_fn)
+                else:
+                    copy_fn(str(source), str(target), follow_symlinks=False)
+                job.release_source(source)
+            elif move:
+                shutil.move(str(source), str(target), copy_function=copy_fn)
             elif source.is_dir() and not source.is_symlink():
-                shutil.copytree(str(source), str(target), symlinks=True)
+                shutil.copytree(str(source), str(target), symlinks=True, copy_function=copy_fn)
             else:
-                shutil.copy2(str(source), str(target), follow_symlinks=False)
+                copy_fn(str(source), str(target), follow_symlinks=False)
             results.append({'path': str(source), 'target': str(target)})
+            if job:
+                job.end_item()
+        except TransferCancelled:
+            # The target is a fresh unique name this call created, so whatever
+            # half of it exists is ours to remove. The source is untouched: a
+            # cross-disk move only deletes it after the copy completes.
+            _discard_partial(target)
+            results.append({'path': str(source), 'error': 'Cancelled', 'cancelled': True})
+            if job:
+                job.end_item(cancelled=True)
+            break
         except FsError as e:
             results.append({'path': str(source), 'error': e.message})
+            if job:
+                job.end_item(error=e.message)
         except (OSError, shutil.Error) as e:
             results.append({'path': str(source), 'error': str(e)})
+            if job:
+                job.end_item(error=_short_error(e))
     return results
+
+
+def _short_error(e):
+    """shutil.Error carries a list of (src, dst, why) - one line is enough
+    for a file row, which already says which file it is."""
+    if isinstance(e, shutil.Error) and e.args and isinstance(e.args[0], list):
+        return f'{len(e.args[0])} file(s) failed'
+    return getattr(e, 'strerror', None) or str(e)
+
+
+def remove_source(path):
+    """Delete a moved item's source once its copy is complete."""
+    path = Path(path)
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(str(path))
+    else:
+        path.unlink()
+
+
+def _discard_partial(target):
+    if target is None or not os.path.lexists(str(target)):
+        return
+    try:
+        if target.is_dir() and not target.is_symlink():
+            shutil.rmtree(str(target), ignore_errors=True)
+        else:
+            target.unlink()
+    except OSError:
+        pass
 
 
 def save_upload(raw_dest, filename, stream):

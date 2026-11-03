@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { isRemotePath } from './files';
+import {
+  isRemotePath, transferPercent, transferTitle, sortTransferFiles, canPauseFile, canResumeFile, isTransferActive,
+  type FileTransfer, type TransferFile,
+} from './files';
 
 describe('isRemotePath', () => {
   it('only matches the vps: scheme', () => {
@@ -13,5 +16,61 @@ describe('isRemotePath', () => {
 
   it('does not match a local path that merely contains vps', () => {
     expect(isRemotePath('/mnt/vps:backup')).toBe(false);
+  });
+});
+
+const job = (over: Partial<FileTransfer> = {}): FileTransfer => ({
+  id: 'j', move: false, paths: ['/a/Movies'], dest: '/mnt/hdd/Films', status: 'running',
+  total_bytes: 200, done_bytes: 50, total_files: 2, done_files: 0, items_total: 1, items_done: 0,
+  current_item: null, current_file: null, current_file_size: 0, current_file_done: 0,
+  speed: 0, eta: null, started_at: 0, finished_at: null, results: [], errors: [], error: null,
+  acknowledged: false, ...over,
+});
+
+describe('transferPercent', () => {
+  it('goes by bytes while copying', () => {
+    expect(transferPercent(job())).toBe(25);
+  });
+  it('goes by items when nothing is copied (a same-disk move)', () => {
+    expect(transferPercent(job({ total_bytes: 0, done_bytes: 0, items_total: 4, items_done: 1 }))).toBe(25);
+  });
+  it('is full once finished, whatever the counters say', () => {
+    expect(transferPercent(job({ status: 'failed' }))).toBe(100);
+  });
+});
+
+describe('transferTitle', () => {
+  it('names one item, counts several, and follows the tense', () => {
+    expect(transferTitle(job())).toBe('Copying Movies to Films');
+    expect(transferTitle(job({ move: true, status: 'done', paths: ['/x', '/y'] }))).toBe('Moved 2 items to Films');
+  });
+});
+
+describe('sortTransferFiles', () => {
+  const f = (rel: string, state: TransferFile['state']): TransferFile => ({ path: `/s/${rel}`, rel, size: 1, state, rename: false });
+  it('puts the file being written first, then failures, what is left, and what is settled', () => {
+    const files = [f('a', 'done'), f('b', 'pending'), f('c', 'failed'), f('d', 'copying'), f('e', 'pending'), f('g', 'skipped')];
+    expect(sortTransferFiles(files).map(x => x.rel)).toEqual(['d', 'c', 'b', 'e', 'a', 'g']);
+  });
+});
+
+describe('pause / resume eligibility', () => {
+  const f = (state: TransferFile['state'], rename = false): TransferFile => ({ path: '/s/x', rel: 'x', size: 1, state, rename });
+  it('pauses what is still to come or being written, and resumes only what is paused', () => {
+    expect(canPauseFile(f('pending'))).toBe(true);
+    expect(canPauseFile(f('copying'))).toBe(true);
+    expect(canPauseFile(f('done'))).toBe(false);
+    expect(canResumeFile(f('paused'))).toBe(true);
+    expect(canResumeFile(f('failed'))).toBe(false);
+  });
+  it('never offers either on a rename, which is instant', () => {
+    expect(canPauseFile(f('pending', true))).toBe(false);
+  });
+  it('treats a job waiting on paused files as still running', () => {
+    expect(isTransferActive(job({ status: 'paused' }))).toBe(true);
+  });
+  it('lists paused files after failures and before what is left', () => {
+    const rows = [{ ...f('pending'), rel: 'p' }, { ...f('paused'), rel: 'z' }, { ...f('failed'), rel: 'e' }];
+    expect(sortTransferFiles(rows).map(x => x.rel)).toEqual(['e', 'z', 'p']);
   });
 });

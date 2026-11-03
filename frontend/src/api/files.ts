@@ -85,6 +85,93 @@ export interface FileOpResponse {
   download?: boolean;
   /** Set when a delete could not use the trash (remote deletes never can). */
   permanent?: boolean;
+  /** A local paste: the background job doing it (finished already unless `running`). */
+  job?: FileTransfer;
+  running?: boolean;
+}
+
+/** `paused`: only paused files are left, and the job is waiting on them. */
+export type FileTransferStatus = 'preparing' | 'running' | 'paused' | 'done' | 'partial' | 'failed' | 'cancelled';
+
+/** A local copy/move running (or recently finished) on the server. */
+export interface FileTransfer {
+  id: string;
+  move: boolean;
+  paths: string[];
+  dest: string;
+  status: FileTransferStatus;
+  total_bytes: number;
+  done_bytes: number;
+  total_files: number;
+  done_files: number;
+  items_total: number;
+  items_done: number;
+  current_item: string | null;
+  current_file: string | null;
+  current_file_size: number;
+  current_file_done: number;
+  /** Bytes per second, over the last few seconds. */
+  speed: number;
+  eta: number | null;
+  started_at: number;
+  finished_at: number | null;
+  results: FileOpResult[];
+  errors: FileOpResult[];
+  /** A failure of the job as a whole (bad destination, ...). */
+  error: string | null;
+  /** A page has shown how it ended. Unacknowledged finished jobs - ones that
+   *  ended while no tab was watching - stay in the floating bar. */
+  acknowledged: boolean;
+}
+
+export type TransferFileState = 'pending' | 'copying' | 'paused' | 'done' | 'failed' | 'skipped' | 'cancelled';
+
+export interface TransferFile {
+  path: string;
+  /** Where it lands under the destination, top folder included. */
+  rel: string;
+  size: number;
+  state: TransferFileState;
+  /** A same-disk move: the whole item is one rename, not a list of copies. */
+  rename: boolean;
+  error?: string;
+  /** Bytes written so far, on the file being copied. */
+  done?: number;
+}
+
+export interface TransferFileListing {
+  id: string;
+  status: FileTransferStatus;
+  files: TransferFile[];
+  counts: Record<TransferFileState, number>;
+  /** The plan was longer than the server keeps per-file states for. */
+  truncated: boolean;
+}
+
+/** What needs attention first: the file being written, then failures, then
+ *  what's still to come, then what's settled. Plan order within each. */
+const FILE_ORDER: Record<TransferFileState, number> = {
+  copying: 0, failed: 1, paused: 2, pending: 3, done: 4, skipped: 5, cancelled: 6,
+};
+export function sortTransferFiles(files: TransferFile[]): TransferFile[] {
+  return files
+    .map((f, i) => [f, i] as const)
+    .sort((a, b) => FILE_ORDER[a[0].state] - FILE_ORDER[b[0].state] || a[1] - b[1])
+    .map(([f]) => f);
+}
+
+export const isTransferActive = (t: FileTransfer) =>
+  t.status === 'preparing' || t.status === 'running' || t.status === 'paused';
+
+/** Files a pause/resume button can act on. Renames are instant; settled files are done. */
+export const canPauseFile = (f: TransferFile) => !f.rename && (f.state === 'pending' || f.state === 'copying');
+export const canResumeFile = (f: TransferFile) => !f.rename && f.state === 'paused';
+
+/** 0-100. A same-disk move copies nothing (it's a rename), so it goes by items. */
+export function transferPercent(t: FileTransfer): number {
+  if (!isTransferActive(t)) return 100;
+  if (t.total_bytes > 0) return Math.min(100, (t.done_bytes / t.total_bytes) * 100);
+  return t.items_total ? (t.items_done / t.items_total) * 100 : 0;
 }
 
 export interface DirSize {
@@ -132,6 +219,39 @@ export const deletePaths = (paths: string[], permanent = false) =>
 
 export const transferPaths = (paths: string[], dest: string, move: boolean) =>
   filesRequest<FileOpResponse>('/transfer', { paths, dest, move });
+
+export const pathBaseName = (p: string | null) => (p ? p.split('/').filter(Boolean).pop() ?? p : '');
+
+/** "Copying 3 items to Movies" / "Moved notes.txt to Docs". */
+export function transferTitle(t: FileTransfer): string {
+  const active = isTransferActive(t);
+  const verb = t.move ? (active ? 'Moving' : 'Moved') : (active ? 'Copying' : 'Copied');
+  const what = t.paths.length === 1 ? pathBaseName(t.paths[0]) : `${t.paths.length} items`;
+  return `${verb} ${what} to ${pathBaseName(t.dest) || t.dest}`;
+}
+
+export const fetchTransfers = () =>
+  filesRequest<{ transfers: FileTransfer[] }>('/transfers');
+
+export const fetchTransferFiles = (id: string) =>
+  filesRequest<TransferFileListing>(`/transfers/${id}/files`);
+
+export const pauseTransferFiles = (id: string, paths: string[], paused: boolean) =>
+  filesRequest<TransferFileListing & { changed: number }>(`/transfers/${id}/files/pause`, { paths, paused });
+
+export const cancelTransfer = (id: string) =>
+  filesRequest<{ job: FileTransfer }>(`/transfers/${id}/cancel`, {});
+
+export const ackTransfers = (ids: string[]) =>
+  filesRequest<{ acknowledged: number }>('/transfers/ack', { ids });
+
+export async function dismissTransfer(id: string): Promise<void> {
+  const response = await authFetch(`/api/files/transfers/${id}`, { method: 'DELETE' });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error((data as { error?: string }).error || 'Request failed');
+  }
+}
 
 export const searchFiles = (path: string, query: string, showHidden = false) =>
   filesRequest<FileSearchResult>('/search', { path, query, show_hidden: showHidden });

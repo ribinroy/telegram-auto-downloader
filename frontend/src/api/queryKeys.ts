@@ -36,6 +36,8 @@ export const qk = {
     ['files', 'search', path, query, showHidden] as const,
   fileSize: (path: string) => ['files', 'size', path] as const,
   fileText: (path: string) => ['files', 'text', path] as const,
+  fileTransfers: () => ['files', 'transfers'] as const,
+  fileTransferFiles: (id: string) => ['files', 'transfers', id, 'files'] as const,
 
   telegramStatus: () => ['telegram', 'status'] as const,
   telegramApiConfig: () => ['telegram', 'api'] as const,
