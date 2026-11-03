@@ -8,6 +8,7 @@ import {
 import type { Download } from '../types';
 import type { FileDecision, TransferFileState } from '../api';
 import { getFileStreamUrl } from '../api/files';
+import { ensureMediaToken } from '../api';
 import { useTransferFiles, useSetTransferFilesStatus } from '../hooks/useDownloads';
 import { notify } from '../lib/notify';
 import { ROUTES } from '../routes';
@@ -78,7 +79,8 @@ export function TransferFilesModal({ download, onClose }: { download: Download; 
   const [playing, setPlaying] = useState<{ url: string; title: string } | null>(null);
   const view = (localPath: string, name: string) => {
     if (VIDEO_EXTENSIONS.test(localPath)) {
-      setPlaying({ url: getFileStreamUrl(localPath), title: name });
+      void ensureMediaToken().then(() =>
+        setPlaying({ url: getFileStreamUrl(localPath), title: name }));
       return;
     }
     const parent = localPath.replace(/\/[^/]*$/, '') || '/';

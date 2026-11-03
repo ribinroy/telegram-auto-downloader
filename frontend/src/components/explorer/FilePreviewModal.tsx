@@ -1,7 +1,8 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { X, ChevronLeft, ChevronRight, Download, Loader2, FileQuestion } from 'lucide-react';
 import { getFileStreamUrl, getFileDownloadUrl, type FileEntry } from '../../api/files';
+import { ensureMediaToken } from '../../api';
 import { useFileText } from '../../hooks/useFiles';
 import { formatBytes } from '../../utils/format';
 
@@ -88,25 +89,35 @@ export function FilePreviewModal({
 }
 
 function PreviewBody({ entry }: { entry: FileEntry }) {
+  // A media element can't tell us *why* it failed, and the likeliest reason
+  // is a missing/expired media token - so mint a fresh one and rebuild the
+  // URL once. `attempt` keys the element so it reloads; one retry per file.
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => { setAttempt(0); }, [entry.path]);
   const url = getFileStreamUrl(entry.path);
+  const onError = () => {
+    if (attempt > 0) return;
+    void ensureMediaToken(true).then(() => setAttempt(1));
+  };
+  const key = `${url}#${attempt}`;
 
   if (entry.kind === 'video') {
     return (
-      <video key={url} src={url} controls autoPlay playsInline className="w-full max-h-[78vh]" />
+      <video key={key} src={url} onError={onError} controls autoPlay playsInline className="w-full max-h-[78vh]" />
     );
   }
   if (entry.kind === 'image') {
-    return <img key={url} src={url} alt={entry.name} className="max-h-[78vh] w-auto object-contain" />;
+    return <img key={key} src={url} onError={onError} alt={entry.name} className="max-h-[78vh] w-auto object-contain" />;
   }
   if (entry.kind === 'audio') {
     return (
       <div className="w-full p-10">
-        <audio key={url} src={url} controls autoPlay className="w-full" />
+        <audio key={key} src={url} onError={onError} controls autoPlay className="w-full" />
       </div>
     );
   }
   if (entry.ext === 'pdf') {
-    return <iframe key={url} src={url} title={entry.name} className="w-full h-[78vh] bg-white" />;
+    return <iframe key={key} src={url} title={entry.name} className="w-full h-[78vh] bg-white" />;
   }
   if (entry.kind === 'text') return <TextPreview path={entry.path} />;
 

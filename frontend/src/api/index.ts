@@ -67,8 +67,10 @@ async function refreshAccessToken(): Promise<string | null> {
       const data = await response.json();
       if (!data.token) return null;
       setTokens(data.token, data.refresh_token);
-      // The media token is derived from the session; force a re-mint.
-      localStorage.removeItem(MEDIA_TOKEN_KEY);
+      // A refresh doesn't bump token_version, so the media token stays valid.
+      // It used to be removed here with nothing minting a new one until a
+      // reload - every <video>/<img> URL built after the first refresh then
+      // carried an empty token and got a 401.
       return data.token as string;
     } catch {
       return null;
@@ -1506,15 +1508,40 @@ export async function upgradeYtdlp(): Promise<{ old_version?: string; new_versio
 
 let mediaTokenInFlight: Promise<string | null> | null = null;
 
+/** Re-mint this long before the media token's own expiry. */
+const MEDIA_TOKEN_MARGIN_MS = 10 * 60 * 1000;
+
+/** `exp` of a JWT in ms, or null if it can't be read. */
+export function jwtExpiryMs(token: string): number | null {
+  try {
+    const part = token.split('.')[1];
+    if (!part) return null;
+    const json = atob(part.replace(/-/g, '+').replace(/_/g, '/'));
+    const exp = JSON.parse(json)?.exp;
+    return typeof exp === 'number' ? exp * 1000 : null;
+  } catch {
+    return null;
+  }
+}
+
+/** True when a token is missing, unreadable, or inside `marginMs` of expiry. */
+export function mediaTokenStale(token: string | null, now = Date.now(), marginMs = 0): boolean {
+  if (!token) return true;
+  const exp = jwtExpiryMs(token);
+  return exp === null || exp - marginMs <= now;
+}
+
 export function getMediaToken(): string | null {
-  return localStorage.getItem(MEDIA_TOKEN_KEY);
+  const token = localStorage.getItem(MEDIA_TOKEN_KEY);
+  // An expired token is no better than none - the server 401s both.
+  return token && !mediaTokenStale(token) ? token : null;
 }
 
 /** Mint (or reuse) the media token. Call before rendering media URLs. */
 export async function ensureMediaToken(force = false): Promise<string | null> {
   if (!force) {
-    const cached = getMediaToken();
-    if (cached) return cached;
+    const cached = localStorage.getItem(MEDIA_TOKEN_KEY);
+    if (!mediaTokenStale(cached, Date.now(), MEDIA_TOKEN_MARGIN_MS)) return cached;
   }
   if (mediaTokenInFlight) return mediaTokenInFlight;
 
@@ -1534,6 +1561,26 @@ export async function ensureMediaToken(force = false): Promise<string | null> {
   })();
 
   return mediaTokenInFlight;
+}
+
+/**
+ * Keep the media token fresh for as long as the app is open: re-check every
+ * minute and whenever the tab comes back (a phone suspends timers in the
+ * background, so the interval alone can wake up long past the expiry).
+ * Returns a stop function.
+ */
+export function startMediaTokenKeeper(): () => void {
+  const check = () => { void ensureMediaToken(); };
+  const onVisible = () => { if (document.visibilityState === 'visible') check(); };
+  check();
+  const timer = window.setInterval(check, 60 * 1000);
+  document.addEventListener('visibilitychange', onVisible);
+  window.addEventListener('focus', check);
+  return () => {
+    window.clearInterval(timer);
+    document.removeEventListener('visibilitychange', onVisible);
+    window.removeEventListener('focus', check);
+  };
 }
 
 export function getVideoStreamUrl(downloadId: number): string {

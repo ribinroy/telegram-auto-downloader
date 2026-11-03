@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Outlet, useNavigate, useLocation, useOutletContext } from 'react-router-dom';
 import { Wifi, WifiOff, HardDrive, Hourglass, Clock, Zap, LogOut, Settings, BarChart3, RefreshCw, FolderOpen, MoreVertical } from 'lucide-react';
 import { formatBytes, formatSpeed, formatTime } from '../utils/format';
+import { toDownloadBytes, toDownloadDetail, etaDetail } from '../utils/queueStats';
 import { type SortBy, type SortOrder, type DownloadFilter } from '../api';
 import { ToastContainer } from './Toast';
 import { useToast } from '../lib/notify';
@@ -232,15 +233,17 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
                 <Hourglass className="hidden sm:block w-4 h-4 text-green-400" />
                 <span className="text-xs sm:text-sm text-green-400 tabular-nums">{formatTime(stats.eta_seconds ?? null)}</span>
                 <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
-                  {stats.remaining_bytes ? `Time left · ${formatBytes(stats.remaining_bytes)} to go` : 'Time left'}
+                  {etaDetail(stats).map(line => <div key={line}>{line}</div>)}
                 </div>
               </div>
-              {/* Pending */}
+              {/* Total still to download: running + waiting */}
               <div className="group relative flex items-center gap-1 sm:gap-2 px-2 sm:px-3 py-1.5 bg-slate-700/50 rounded-lg cursor-default sm:min-w-[100px]">
                 <Clock className="hidden sm:block w-4 h-4 text-yellow-400" />
-                <span className="text-xs sm:text-sm text-yellow-400 tabular-nums">{formatBytes(stats.pending_bytes)}</span>
+                <span className="text-xs sm:text-sm text-yellow-400 tabular-nums">
+                  {formatBytes(toDownloadBytes(stats))}{stats.unsized_count ? '+' : ''}
+                </span>
                 <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
-                  Pending
+                  {toDownloadDetail(stats).map(line => <div key={line}>{line}</div>)}
                 </div>
               </div>
               {/* Speed */}
