@@ -260,7 +260,9 @@ export function VRVideoPlayer({ video, projection, subtitle, fullscreen = false,
     }
     meshes.forEach(m => s.scene.add(m));
     meshesRef.current = meshes;
-  }, [projection]);
+    // `video` too: a new element rebuilds the scene above (declared first, so
+    // it runs first), and the meshes have to be built into that scene again.
+  }, [projection, video]);
 
   // Subtitle cue -> canvas texture; redrawn only when the text changes.
   useEffect(() => {

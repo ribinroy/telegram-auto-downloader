@@ -7,7 +7,7 @@ import { VRVideoPlayer } from './VRVideoPlayer';
 // disposes - so the tests are about the player's decisions, not rendering.
 interface Vec { x: number; y: number; z: number; set: (x: number, y: number, z: number) => void }
 interface Obj { children: Obj[]; layers: { mask: number }; position: Vec; scale: Vec; visible: boolean; add: (o: Obj) => void; remove: (o: Obj) => void }
-interface Geometry { params?: { radius: number; phiStart: number; phiLength: number }; uv?: { array: Float32Array; count: number; needsUpdate: boolean }; width?: number; height?: number; scale: ReturnType<typeof vi.fn>; dispose: ReturnType<typeof vi.fn> }
+interface Geometry { params?: { radius: number; phiStart: number; phiLength: number }; attributes?: { uv: { array: Float32Array; count: number; needsUpdate: boolean } }; width?: number; height?: number; scale: ReturnType<typeof vi.fn>; dispose: ReturnType<typeof vi.fn> }
 interface Material { map: unknown; dispose: ReturnType<typeof vi.fn> }
 interface MeshObj extends Obj { geometry: Geometry; material: Material }
 interface Renderer {
@@ -93,7 +93,7 @@ const spheres = () => scene().children.filter((c): c is MeshObj => 'geometry' in
 const flatPlane = () => scene().children.find((c): c is MeshObj => 'geometry' in c && !(c as MeshObj).geometry.params) ?? null;
 const controls = () => last<Controls>(made.controls);
 const uvs = (m: MeshObj, axis: 'x' | 'y') => {
-  const a = m.geometry.uv!.array;
+  const a = m.geometry.attributes!.uv.array;
   return Array.from({ length: a.length / 2 }, (_, i) => a[i * 2 + (axis === 'x' ? 0 : 1)]);
 };
 
@@ -167,7 +167,7 @@ describe('VRVideoPlayer - the scene', () => {
       expect(m.geometry.params!.phiLength).toBeCloseTo(Math.PI);
       expect(m.geometry.params!.phiStart).toBeCloseTo(Math.PI);     // 1.5π - π/2: the middle of the frame straight ahead
       expect(m.geometry.scale).toHaveBeenCalledWith(-1, 1, 1);       // inverted, texture facing inward
-      expect(m.geometry.uv!.needsUpdate).toBe(true);
+      expect(m.geometry.attributes!.uv.needsUpdate).toBe(true);
       expect(m.material.map).toBe(last(made.videoTextures));
     }
     expect(uvs(left, 'x')).toEqual([0, 0.5, 0, 0.5]);
@@ -189,7 +189,7 @@ describe('VRVideoPlayer - the scene', () => {
     expect(spheres()).toHaveLength(1);
     expect(mono.layers.mask).toBe(1);
     expect(mono.geometry.params!.phiLength).toBeCloseTo(Math.PI);
-    expect(mono.geometry.uv!.needsUpdate).toBe(false);
+    expect(mono.geometry.attributes!.uv.needsUpdate).toBe(false);
     expect(uvs(mono, 'x')).toEqual([0, 1, 0, 1]);
     // The old pair was taken down and freed
     expect(left.geometry.dispose).toHaveBeenCalledTimes(1);
@@ -236,7 +236,9 @@ describe('VRVideoPlayer - the scene', () => {
     expect(first.dispose).toHaveBeenCalledTimes(1);
     expect(first.loop).toBeNull();
     expect(renderer()).not.toBe(first);
+    // The spheres are built into the new scene, not left behind with the old one
     expect(spheres()).toHaveLength(2);
+    expect(spheres()[0].material.map).toBe(last(made.videoTextures));
   });
 
   it('unmounting frees everything and ends a headset session that is still open', () => {
@@ -456,7 +458,8 @@ describe('VRVideoPlayer - the headset', () => {
     xr.requestSession.mockRejectedValue(new Error('No headset'));
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     renderPlayer();
-    await act(async () => { fireEvent.click(await screen.findByTitle('Watch in the headset')); });
+    const button = await screen.findByTitle('Watch in the headset');
+    await act(async () => { fireEvent.click(button); });
     expect(error).toHaveBeenCalledWith('Could not start the VR session:', expect.any(Error));
     expect(screen.getByTitle('Watch in the headset')).toBeInTheDocument();
     expect(renderer().xr.setSession).not.toHaveBeenCalled();
