@@ -129,8 +129,6 @@ def test_stopping_a_telegram_download_cancels_its_task_and_edits_the_chat(app, c
 def test_a_requeue_waits_for_the_task_to_leave(app, db, telegram, monkeypatch):
     """A reorder sending a running download back to waiting must not write
     'waiting' before the handler's own 'stopped' lands."""
-    import backend.web_app.routes.downloads as routes
-    monkeypatch.setattr(routes.time, 'sleep', lambda s: None, raising=False) if hasattr(routes, 'time') else None
     db.add_download(file='a', status='downloading', message_id='42', queue_position=4)
     task = FakeTask()
     app.download_tasks[42] = task

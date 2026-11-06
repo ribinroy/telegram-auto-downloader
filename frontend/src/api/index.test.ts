@@ -475,6 +475,68 @@ describe('downloads list', () => {
   });
 });
 
+describe('signing out on a 401 the refresh could not clear', () => {
+  it.each([
+    ['fetchDownloads', () => fetchDownloads()],
+    ['fetchAuthors', () => fetchAuthors()],
+    ['checkUrl', () => checkUrl('u')],
+    ['downloadUrl', () => downloadUrl({ url: 'u' })],
+    ['fetchMappings', () => fetchMappings()],
+    ['createMapping', () => createMapping({ downloaded_from: 'x' })],
+    ['updateMapping', () => updateMapping(1, {})],
+    ['deleteMapping', () => deleteMapping(1)],
+    ['fetchCookies', () => fetchCookies()],
+    ['saveCookies', () => saveCookies('')],
+    ['fetchTelegramStatus', () => fetchTelegramStatus()],
+    ['fetchUsers', () => fetchUsers()],
+    ['syncUsers', () => syncUsers()],
+    ['updateUserRole', () => updateUserRole(1, 'user')],
+    ['fetchBotQueries', () => fetchBotQueries()],
+    ['fetchVpsConfig', () => fetchVpsConfig()],
+    ['saveVpsConfig', () => saveVpsConfig({ host: 'h', port: 22, username: 'u', remote_path: '/' })],
+    ['testVpsConnection', () => testVpsConnection({ host: 'h', port: 22, username: 'u', remote_path: '/' })],
+    ['deleteVpsConfig', () => deleteVpsConfig()],
+    ['fetchVpsUsage', () => fetchVpsUsage()],
+    ['fetchTorrentConfig', () => fetchTorrentConfig()],
+    ['saveTorrentConfig', () => saveTorrentConfig('transmission', { url: 'u', username: 'n' })],
+    ['setStopOnComplete', () => setStopOnComplete('transmission', true)],
+    ['setTorrentHidden', () => setTorrentHidden('transmission', true)],
+    ['deleteTorrentConfig', () => deleteTorrentConfig('transmission')],
+    ['testTorrentConnection', () => testTorrentConnection('transmission', { url: 'u', username: 'n' })],
+    ['setTelegramDefault', () => setTelegramDefault(null)],
+    ['fetchTorrentList', () => fetchTorrentList('transmission')],
+    ['torrentAction', () => torrentAction('transmission', 'stop', [])],
+    ['addTorrent', () => addTorrent('magnet:', 'transmission')],
+    ['browseVps', () => browseVps()],
+    ['browseLocal', () => browseLocal()],
+    ['fetchVpsFolders', () => fetchVpsFolders()],
+    ['addVpsFolders', () => addVpsFolders([])],
+    ['fetchVpsFolderDeleteImpact', () => fetchVpsFolderDeleteImpact(1)],
+    ['deleteVpsFolder', () => deleteVpsFolder(1)],
+    ['updateVpsFolder', () => updateVpsFolder(1, {})],
+    ['fetchVpsFiles', () => fetchVpsFiles()],
+    ['downloadVpsFile', () => downloadVpsFile('/x')],
+    ['deleteVpsRemote', () => deleteVpsRemote('/x')],
+    ['fetchAnalytics', () => fetchAnalytics()],
+    ['checkVideoFile', () => checkVideoFile(1)],
+    ['checkFiles', () => checkFiles()],
+    ['syncThumbnails', () => syncThumbnails()],
+    ['getYtdlpVersion', () => getYtdlpVersion()],
+    ['upgradeYtdlp', () => upgradeYtdlp()],
+  ])('%s drops the tokens and reloads', async (_name, call) => {
+    setToken('a');
+    const { reload, restore } = stubReload();
+    try {
+      stubFetch(jsonResponse({ error: 'no' }, 401));
+      await call().catch(() => {});
+      expect(getToken()).toBeNull();
+      expect(reload).toHaveBeenCalledTimes(1);
+    } finally {
+      restore();
+    }
+  });
+});
+
 describe('retryDownload', () => {
   it('posts the id and resolves on success', async () => {
     const fetchMock = stubFetch(jsonResponse({ status: 'started' }));
