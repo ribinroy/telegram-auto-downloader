@@ -74,7 +74,7 @@ describe('TransfersModal - one job', () => {
     renderWithClient(<TransfersModal transfers={[job({ status: 'preparing', total_bytes: 0 })]} onClose={() => {}} onOpenDest={() => {}} />);
     expect(screen.getByText('Counting what to copy…')).toBeInTheDocument();
     expect(screen.queryByText('Files')).toBeNull();
-    expect(files.fetchTransferFiles).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: /^All \d/ })).toBeNull();
   });
 
   it('a job-level error is shown', () => {
@@ -99,8 +99,9 @@ describe('TransfersModal - the file list', () => {
     expect(screen.getByRole('button', { name: 'All 4' })).toHaveClass('text-cyan-200');
     expect(screen.getByRole('button', { name: 'Copying 1' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Copied 1' })).toBeInTheDocument();
-    // One pausable or resumable file: no bulk bar
-    expect(screen.queryByRole('button', { name: /^Pause \d/ })).toBeNull();
+    // Copying + pending make two pausable files, so Pause gets a bulk button; one paused file does not
+    expect(screen.getByRole('button', { name: 'Pause 2' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Resume \d/ })).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'Pause Movies/c.mkv' }));
     await waitFor(() => expect(files.pauseTransferFiles).toHaveBeenCalledWith('j1', ['/a/Movies/c.mkv'], true));
@@ -163,7 +164,7 @@ describe('TransfersModal - several jobs', () => {
     fireEvent.click(tabs[0]);
     expect(screen.getAllByRole('tab')[0]).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByText('Copied 2 items to Films')).toBeInTheDocument();
-    await waitFor(() => expect(files.fetchTransferFiles).toHaveBeenCalledWith('j0', expect.anything()));
+    await waitFor(() => expect(files.fetchTransferFiles).toHaveBeenCalledWith('j0'));
   });
 
   it('says so when there is nothing, and closes on the X or the backdrop', () => {
