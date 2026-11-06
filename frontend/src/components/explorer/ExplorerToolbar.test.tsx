@@ -65,13 +65,15 @@ describe('ExplorerToolbar - path row', () => {
     expect(props.onNavigate).toHaveBeenCalledWith('/mnt/other');
     expect(screen.queryByDisplayValue('/mnt/other')).toBeNull();     // back to crumbs
 
+    // The draft is kept until the path prop changes (the page navigates)
     fireEvent.click(screen.getByTitle('Type a path'));
-    const again = screen.getByDisplayValue('/mnt/disk/Movies');
+    const again = document.querySelector('input.font-mono') as HTMLInputElement;
+    expect(again.value).toBe('  /mnt/other  ');
     fireEvent.change(again, { target: { value: '/typo' } });
     fireEvent.keyDown(again, { key: 'Escape' });
     expect(props.onNavigate).toHaveBeenCalledTimes(1);
     expect(screen.getByRole('button', { name: 'Movies' })).toBeInTheDocument();
-    // The draft was reset, so reopening shows the real path again
+    // Escape put the real path back in the draft
     fireEvent.click(screen.getByTitle('Type a path'));
     expect(screen.getByDisplayValue('/mnt/disk/Movies')).toBeInTheDocument();
   });
@@ -179,10 +181,11 @@ describe('ExplorerToolbar - the phone overflow menu', () => {
 
   it('each menu entry calls through to the same handler as its button', () => {
     const { props } = renderToolbar({ view: 'grid', autoRefresh: true, writable: false });
-    const pick = (label: string) => {
+    const openMenu = () => {
       fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
-      fireEvent.click(screen.getByRole('button', { name: label }));
+      return within(document.querySelector('.z-\\[110\\]') as HTMLElement);
     };
+    const pick = (label: string) => fireEvent.click(openMenu().getByRole('button', { name: label }));
     pick('List view');
     expect(props.onViewChange).toHaveBeenCalledWith('list');
     pick('Show hidden files');
@@ -193,9 +196,9 @@ describe('ExplorerToolbar - the phone overflow menu', () => {
     expect(props.onRefresh).toHaveBeenCalledTimes(1);
     pick('Sort by name (A-Z)');
     expect(props.onSortChange).toHaveBeenCalledWith('name');
-    fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
-    expect(screen.queryByRole('button', { name: 'New folder' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Upload files' })).toBeNull();
+    const menu = openMenu();
+    expect(menu.queryByRole('button', { name: 'New folder' })).toBeNull();
+    expect(menu.queryByRole('button', { name: 'Upload files' })).toBeNull();
   });
 
   it('the click that opens the menu does not also close it; the next outside click does', () => {
