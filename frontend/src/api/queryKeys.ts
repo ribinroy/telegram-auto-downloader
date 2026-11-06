@@ -14,6 +14,8 @@ export const qk = {
   subtitles: (sourceKey: string) => ['subtitles', sourceKey] as const,
   internetSpeed: () => ['speedtest', 'internet'] as const,
   speedResults: (kind: string) => ['speedtest', 'results', kind] as const,
+  vrSettings: () => ['vr', 'settings'] as const,
+  downloadProjection: (downloadId: number) => ['vr', 'projection', downloadId] as const,
   analytics: (days: number, groupBy: 'day' | 'hour', includeDeleted: boolean) =>
     ['analytics', days, groupBy, includeDeleted] as const,
   mappings: () => ['mappings'] as const,

@@ -6,6 +6,11 @@ import {
   fetchInternetSpeed, startInternetSpeed, cancelInternetSpeed, isInternetRunning,
   fetchSpeedResults, recordBrowserResult, deleteSpeedResult, type SpeedTestKind,
 } from '../api/internetSpeed';
+import {
+  fetchVrSettings, regenerateVrKey, disableVrKey, setVrIncludeSecured,
+  fetchDownloadProjection, saveDownloadProjection, type VrFeedSettings,
+} from '../api/vr';
+import type { Projection } from '../utils/vr';
 
 // --- Auth (imperative) ---
 export function useLogin() {
@@ -102,5 +107,46 @@ export function useDeleteSpeedResult() {
   return useMutation({
     mutationFn: deleteSpeedResult,
     onSettled: () => qc.invalidateQueries({ queryKey: ['speedtest', 'results'] }),
+  });
+}
+
+// --- VR headset feed (HereSphere / DeoVR) ---
+export function useVrSettings(enabled = true) {
+  return useQuery({ queryKey: qk.vrSettings(), queryFn: fetchVrSettings, enabled });
+}
+
+function useVrMutation<V>(fn: (v: V) => Promise<VrFeedSettings>) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: fn,
+    onSuccess: (data) => qc.setQueryData(qk.vrSettings(), data),
+  });
+}
+export const useRegenerateVrKey = () => useVrMutation((includeSecured?: boolean) => regenerateVrKey(includeSecured));
+export const useDisableVrKey = () => useVrMutation<void>(() => disableVrKey());
+export const useSetVrIncludeSecured = () => useVrMutation((v: boolean) => setVrIncludeSecured(v));
+
+// The projection pick a download carries server-side, so the headset feed
+// and the web player agree. Only downloads have one; explorer paths don't.
+export function useDownloadProjection(downloadId: number | null) {
+  return useQuery({
+    queryKey: qk.downloadProjection(downloadId ?? 0),
+    queryFn: () => fetchDownloadProjection(downloadId!),
+    enabled: downloadId != null,
+    staleTime: 10 * 60 * 1000,
+  });
+}
+
+export function useSaveDownloadProjection(downloadId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (projection: Projection | null) => saveDownloadProjection(downloadId!, projection),
+    // Optimistic: the picker must not flip back while the save is in flight.
+    onMutate: (projection) => {
+      if (downloadId == null) return;
+      qc.setQueryData(qk.downloadProjection(downloadId), (old: { projection: Projection | null; detected: Projection; lens: string | null } | undefined) =>
+        old ? { ...old, projection } : old);
+    },
+    onSettled: () => { if (downloadId != null) void qc.invalidateQueries({ queryKey: qk.downloadProjection(downloadId) }); },
   });
 }

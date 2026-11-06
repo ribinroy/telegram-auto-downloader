@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, lazy, Suspense, type ReactNode } from 'react';
 import { Captions, Globe, Maximize, Minimize } from 'lucide-react';
-import { useSubtitleTracks } from '../hooks/useMisc';
+import { useSubtitleTracks, useDownloadProjection, useSaveDownloadProjection } from '../hooks/useMisc';
 import { loadVRPlayer, preloadVRPlayer } from '../lib/vrPreload';
 import { getSubtitleUrl, type SubtitleSource } from '../api/subtitles';
 import {
@@ -52,8 +52,13 @@ export function VideoPlayer({ src, name, subtitles, onError, autoPlay = true, ex
   useEffect(() => { preloadVRPlayer(); }, []);
 
   const { data: tracks = [] } = useSubtitleTracks(subtitles ?? null);
+  // A download's pick lives on the server too (the headset feed reads it);
+  // an explorer path only has this browser's memory.
+  const downloadId = subtitles && 'downloadId' in subtitles ? subtitles.downloadId : null;
+  const serverPick = useDownloadProjection(downloadId);
+  const savePick = useSaveDownloadProjection(downloadId);
   const detected = useMemo(() => detectProjection(name, aspect), [name, aspect]);
-  const projection: Projection = manual ?? detected;
+  const projection: Projection = manual ?? serverPick.data?.projection ?? detected;
   const vr = projection !== 'flat';
 
   // A new file resets the per-file state; done during render (React's
@@ -72,6 +77,7 @@ export function VideoPlayer({ src, name, subtitles, onError, autoPlay = true, ex
     const next = p === detected ? null : p;
     setManual(next);
     rememberProjection(name, next);
+    if (downloadId != null) savePick.mutate(next);
   };
 
   // Drive the <track> modes from the picker. In the flat view the browser
