@@ -74,7 +74,7 @@ Main Thread
 |  |  |- helpers.py                 # Misc helpers (candidate_file_paths)
 |  |  '- routes/                    # Per-domain Flask route mixins (auth, downloads, url,
 |  |                                #   analytics, settings, vps_settings, torrent, vps_browse, media,
-|  |                                #   rename_rules, files)
+|  |                                #   rename_rules, files, speedtest)
 |  |- telegram_handler/__init__.py  # Telethon download handler (~436 lines)
 |  |- ytdlp_handler/__init__.py     # yt-dlp subprocess handler (~604 lines)
 |  |- vps_handler/__init__.py       # SFTP download handler + hourly autoSync
@@ -343,6 +343,24 @@ Live filesystem access - every call reads the disk, nothing is indexed or cached
 - `POST /api/jobs/check-files` - Look on disk for every finished download's file/folder (`local_copy_exists`) and set `file_deleted` to match, both ways -> `{checked, present, missing, marked_missing, restored}` (job `check_files`, schedulable)
 - `GET /api/jobs/schedules` - Every job with its schedule, last outcome and next fire time (plus the server's `tz`)
 - `PUT /api/jobs/schedules/<job_id>` - `{enabled?, time? 'HH:MM', days?: [0-6]}` (Monday = 0)
+
+### Network speed test (Settings → Network)
+Browser ↔ server throughput, so a stuttering stream can be blamed on the
+Wi-Fi or on the box. `web_app/routes/speedtest.py` is deliberately dumb and
+behind `@token_required` (an open bandwidth sink is a gift to anyone who finds
+the port): `GET /api/speedtest/ping` (answers at once, `no-store`),
+`GET /api/speedtest/download?size=` (streams one reused 1 MB block of
+`os.urandom` noise up to 4 GB - generating noise per chunk would make the CPU
+the bottleneck), `POST /api/speedtest/upload` (reads the body in 1 MB chunks
+and discards it, returns `{bytes, seconds}`). **The browser does all the
+timing** (`api/speedtest.ts`): 8 pings after an uncounted warm-up request; a
+download read through a `ReadableStream` for up to 8 s then aborted; an
+upload of a 256 MB noise `Blob` via XHR (fetch has no upload progress), same
+deadline. `utils/speedtest.ts` turns samples into figures - `throughputMbps`
+skips the first 0.3 s (TCP slow start), `recentMbps` is the live number - and
+keeps the last 8 runs in `localStorage`, per browser. UI:
+`components/SpeedTestSettings.tsx`. The Python server itself tops out around
+a few Gbit/s, which the page says.
 
 ### Monitoring
 - `GET /metrics` - Prometheus (no auth)
