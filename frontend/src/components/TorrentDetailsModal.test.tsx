@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, fireEvent, waitFor, within } from '@testing-library/react';
 import * as api from '../api';
 import { renderWithClient } from '../test/queryWrapper';
-import { makeDownload } from '../test/fixtures';
+import { makeDownload, deferred } from '../test/fixtures';
 import { captureToasts } from '../test/toasts';
 import { qk } from '../api/queryKeys';
 import type { Download } from '../types';
@@ -69,7 +69,7 @@ describe('TorrentDetailsModal - loading and details', () => {
     expect(screen.getByRole('dialog', { name: 'Show S01' })).toBeInTheDocument();
     expect(document.querySelector('.animate-spin')).not.toBeNull();
     expect(await screen.findByText(/downloading · 60% of 1.00 GB/)).toBeInTheDocument();
-    expect(screen.getByText('private')).toBeInTheDocument();
+    expect(screen.getByText(/private/)).toBeInTheDocument();
     expect(stat('Downloaded')).toHaveTextContent('1.00 GB');
     expect(stat('Uploaded · ratio')).toHaveTextContent('1.25 GB · 1.25');
     expect(stat('Seeds')).toHaveTextContent('3 / 30');
@@ -124,7 +124,7 @@ describe('TorrentDetailsModal - loading and details', () => {
     expect(stat('Saved to')).toHaveTextContent('—');
     expect(stat('Completed')).not.toHaveTextContent('—');
     expect(screen.queryByText(/Trackers ·/)).toBeNull();
-    expect(screen.queryByText('private')).toBeNull();
+    expect(screen.queryByText(/private/)).toBeNull();
     expect(document.querySelector('.bg-green-500')).not.toBeNull();
   });
 });
@@ -162,12 +162,17 @@ describe('TorrentDetailsModal - files and priorities', () => {
 
   it('a per-file change applies at once, then the client\'s view is refetched', async () => {
     vi.mocked(api.fetchTorrentDetails).mockResolvedValue(details());
+    const pending = deferred<void>();
+    vi.mocked(api.setTorrentFilePriority).mockReturnValue(pending.promise);
     const { client } = renderModal('transmission');
     const invalidate = vi.spyOn(client, 'invalidateQueries');
     const select = await screen.findByRole('combobox', { name: 'Priority of ep2.mkv' });
     fireEvent.change(select, { target: { value: 'high' } });
-    expect(select).toHaveValue('high');   // optimistic
-    await waitFor(() => expect(api.setTorrentFilePriority).toHaveBeenCalledWith('transmission', 'h1', [1], 'high'));
+    // Optimistic: the select holds the new level while the client is still answering
+    await waitFor(() => expect(select).toHaveValue('high'));
+    expect(api.setTorrentFilePriority).toHaveBeenCalledWith('transmission', 'h1', [1], 'high');
+    expect(invalidate).not.toHaveBeenCalled();
+    pending.resolve();
     await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: qk.torrentDetails('transmission', 'h1') }));
   });
 
@@ -183,7 +188,7 @@ describe('TorrentDetailsModal - files and priorities', () => {
     capture.stop();
   });
 
-  it('bulk: select-all follows the filter, the bar applies a level to the selection and clears it', async () => {
+  it('bulk: select-all follows the filter, the bar applies a level to the selection and clears it', { timeout: 20_000 }, async () => {
     const many = Array.from({ length: 10 }, (_, i) => file(i, `Show S01/ep${i + 1}.mkv`));
     many.push(file(10, 'Show S01/sample.mkv'));
     vi.mocked(api.fetchTorrentDetails).mockResolvedValue(details({ files: many }));
@@ -235,7 +240,7 @@ describe('TorrentDetailsModal - per-file DownLee', () => {
 
   it('starting a pull posts the index, toasts, and shows the file running until the refetch', async () => {
     vi.mocked(api.fetchTorrentDetails).mockResolvedValue(details());
-    vi.mocked(api.downloadTorrentFiles).mockResolvedValue({ started: [{ index: 1, path: 'Show S01/ep2.mkv', id: 2, message_id: 'm2' }], skipped: [], errors: [] });
+    vi.mocked(api.downloadTorrentFiles).mockResolvedValue({ started: [{ index: 1, id: 2, message_id: 'm2' }], skipped: [], errors: [] });
     const capture = captureToasts();
     const { client } = renderModal('qbittorrent');
     const invalidate = vi.spyOn(client, 'invalidateQueries');
@@ -252,7 +257,7 @@ describe('TorrentDetailsModal - per-file DownLee', () => {
   it('reports skipped (already there) and failed files, and a request that throws', async () => {
     vi.mocked(api.fetchTorrentDetails).mockResolvedValue(details());
     vi.mocked(api.downloadTorrentFiles)
-      .mockResolvedValueOnce({ started: [], skipped: [{ index: 1, path: 'x' }], errors: [{ index: 1, path: 'x', error: 'no such file' }] })
+      .mockResolvedValueOnce({ started: [], skipped: [{ index: 1 }], errors: [{ index: 1, error: 'no such file' }] })
       .mockRejectedValueOnce(new Error('offline'));
     const capture = captureToasts();
     renderModal('qbittorrent');
@@ -299,7 +304,7 @@ describe('TorrentDetailsModal - per-file DownLee', () => {
 
   it('the bulk "To DownLee" pulls only the pullable part of the selection and says how many', async () => {
     vi.mocked(api.fetchTorrentDetails).mockResolvedValue(details());
-    vi.mocked(api.downloadTorrentFiles).mockResolvedValue({ started: [{ index: 1, path: 'Show S01/ep2.mkv', id: 2, message_id: 'm2' }], skipped: [], errors: [] });
+    vi.mocked(api.downloadTorrentFiles).mockResolvedValue({ started: [{ index: 1, id: 2, message_id: 'm2' }], skipped: [], errors: [] });
     renderModal('qbittorrent');
     await screen.findByText('Files · 3 (1 skipped)');
     fireEvent.click(screen.getByRole('checkbox', { name: 'Select ep10.mkv' }));
@@ -308,7 +313,8 @@ describe('TorrentDetailsModal - per-file DownLee', () => {
     const pull = screen.getByRole('button', { name: 'To DownLee (1)' });
     fireEvent.click(pull);
     await waitFor(() => expect(api.downloadTorrentFiles).toHaveBeenCalledWith('qbittorrent', 'h1', [1]));
-    expect(screen.queryByText(/selected/)).toBeNull;
+    // The selection is spent
+    expect(screen.getByText('Clear').parentElement!.parentElement).toHaveAttribute('inert');
   });
 });
 

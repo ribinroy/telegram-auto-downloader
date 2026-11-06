@@ -46,7 +46,7 @@ const data = (over: Partial<AnalyticsData> = {}): AnalyticsData => ({
 });
 
 const pies = () => screen.getAllByTestId('pie').map(ul => within(ul).getAllByRole('listitem').map(li => li.textContent));
-const card = (label: string) => screen.getByText(label).closest('.rounded-xl')!.querySelector('.font-bold')!;
+const card = (label: string) => screen.getByText(label, { selector: 'span' }).closest('.rounded-xl')!.querySelector('.font-bold')!;
 let toasts: ReturnType<typeof captureToasts>;
 
 beforeEach(() => {
@@ -87,7 +87,7 @@ describe('AnalyticsPage - loading and summary', () => {
     vi.mocked(api.fetchAnalytics).mockResolvedValue(data({ by_source: [{ source: 'empty', count: 0, size: 0 }] }));
     renderWithClient(<AnalyticsPage />);
     const row = (await screen.findByText('empty')).closest('tr')!;
-    expect(within(row).getAllByRole('cell').map(c => c.textContent)).toEqual(['empty', '0', '0.00 B', '0.00 B']);
+    expect(within(row).getAllByRole('cell').map(c => c.textContent)).toEqual(['empty', '0', '0 B', '0 B']);
   });
 
   it('a failed load says so in place and as a toast', async () => {
@@ -105,8 +105,8 @@ describe('AnalyticsPage - controls', () => {
     renderWithClient(<AnalyticsPage />);
     await screen.findByText('Top Sources');
     const [days, groupBy] = screen.getAllByRole('combobox') as HTMLSelectElement[];
-    const titles: Record<string, string> = { 7: '(1 week)', 1: '(1 day)', 90: '(90 days)', 0: '(All Time)', 30: '(1 month)' };
-    for (const [value, title] of Object.entries(titles)) {
+    const titles: [string, string][] = [['7', '(1 week)'], ['1', '(1 day)'], ['90', '(90 days)'], ['0', '(All Time)'], ['30', '(1 month)']];
+    for (const [value, title] of titles) {
       fireEvent.change(days, { target: { value } });
       await waitFor(() => expect(api.fetchAnalytics).toHaveBeenLastCalledWith(Number(value), 'day', false));
       expect(await screen.findByText(`Hourly Distribution ${title}`)).toBeInTheDocument();

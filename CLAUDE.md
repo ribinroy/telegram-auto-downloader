@@ -878,11 +878,10 @@ reloads or rewinds. The browser's native controls are never shown.
   file's identity + track (demuxing a 50 GB MKV once is fine, every play is
   not). Track ids are `f:<sidecar name>` / `s:<n>` (n-th subtitle stream,
   bitmap ones counted so `-map 0:s:n` lands); a sidecar id is validated
-  against the video's folder and stem before anything is read. In the flat
-  view the chosen track is `showing` (browser-rendered); in VR it is `hidden`
-  - still firing `cuechange`, not painted onto a `<video>` nobody sees - and
-  the cue text is drawn on a canvas plane parented to the camera, so it stays
-  in front of you however you turn, headset included. `backend/subtitles.py`
+  against the video's folder and stem before anything is read. The chosen
+  track is `hidden` - still firing `cuechange`, not painted onto the `<video>`,
+  which nobody sees - and the cue text is drawn on a canvas plane parented to
+  the camera, so it stays in front of you however you turn, headset included. `backend/subtitles.py`
   owns it; `web_app/helpers.subtitle_response()` is shared by both route pairs.
 
 ## VR headset feed (HereSphere / DeoVR)

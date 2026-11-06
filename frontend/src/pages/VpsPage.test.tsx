@@ -60,7 +60,7 @@ const renderAt = (path = '/vps') => renderWithClient(
 );
 const filesSection = () => screen.getByPlaceholderText('Search files...').closest('.hidden');
 const row = (name: string) => screen.getByTitle(name).closest('.rounded-xl') as HTMLElement;
-const tabs = () => screen.getAllByRole('button').filter(b => b.className.includes('border-b-2')).map(b => b.textContent);
+const tabs = () => screen.getAllByRole('button').filter(b => b.className.includes('border-b-2')).map(b => b.textContent?.trim());
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -180,7 +180,7 @@ describe('VpsPage - files', () => {
     expect(screen.queryByTitle('old.mkv')).toBeNull();
     expect(tabs()).toEqual(['Files (2)']);
     const filter = screen.getByTitle('Filter by watched folder');
-    expect(within(filter).getAllByRole('option').map(o => o.textContent)).toEqual(['All folders', '/home/hs/downloads', '/home/hs/other']);
+    expect(within(filter).getAllByRole('option').map(o => o.textContent)).toEqual(['All folders', '/home/hs/downloads', '/home/hs/other', '/home/hs/broken']);
     fireEvent.change(filter, { target: { value: '/home/hs/other' } });
     expect(screen.queryByTitle('movie.mkv')).toBeNull();
     expect(screen.getByTitle('other.mkv')).toBeInTheDocument();
@@ -196,7 +196,7 @@ describe('VpsPage - files', () => {
     expect(screen.getByTitle('clip.mp4')).toBeInTheDocument();
     fireEvent.change(search, { target: { value: 'zzz' } });
     expect(screen.getByText('No files match "zzz"')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Clear search' }));
+    fireEvent.click(screen.getByText('Clear search', { selector: 'button' }));
     expect(screen.getByTitle('movie.mkv')).toBeInTheDocument();
     fireEvent.change(search, { target: { value: 'm' } });
     fireEvent.click(screen.getByTitle('Clear search'));

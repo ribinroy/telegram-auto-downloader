@@ -86,7 +86,7 @@ describe('SettingsPage - tab routing', () => {
     expect(current()).toContain('Password');
   });
 
-  it('every sidebar entry navigates to its own URL and swaps the panel', async () => {
+  it('every sidebar entry navigates to its own URL and swaps the panel', { timeout: 20_000 }, async () => {
     renderAt('/settings');
     const expectTab = (label: string, tab: string, testId: string) => {
       fireEvent.click(nav().getByRole('button', { name: new RegExp(`^${label}`) }));

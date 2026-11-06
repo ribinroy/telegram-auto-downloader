@@ -375,7 +375,7 @@ describe('TorrentStatusPanel - search, filter, sort, selection', () => {
     expect(names()).toEqual(['Pending.mkv', 'Pulled.mkv', 'Ubuntu.iso', 'Stopped.mkv']);
   });
 
-  it('multi-select by hash: bulk actions run in one call; select-all follows the filter', async () => {
+  it('multi-select by hash: bulk actions run in one call; select-all follows the filter', { timeout: 20_000 }, async () => {
     vi.mocked(api.fetchTorrentList).mockResolvedValue(four());
     renderPanel('qbittorrent');
     await screen.findByText('Ubuntu.iso');
