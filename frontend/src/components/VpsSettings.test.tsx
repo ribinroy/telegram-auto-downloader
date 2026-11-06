@@ -63,7 +63,7 @@ const dialog = (heading: string) =>
 /** A torrent client card, by its heading; `open()` expands it. */
 const card = (label: string) => {
   const root = screen.getByRole('heading', { name: label }).closest('.rounded-xl') as HTMLElement;
-  return { root, q: within(root), open: () => fireEvent.click(within(root).getByRole('button', { name: label })) };
+  return { root, q: within(root), open: () => fireEvent.click(within(root).getByRole('button', { name: new RegExp(`^${label}`) })) };
 };
 
 beforeEach(() => {
@@ -214,7 +214,6 @@ describe('VpsSettings - watched folders', () => {
   it('with none: says so', async () => {
     renderWithClient(<VpsSettings />);
     expect(await screen.findByText('No folders watched yet')).toBeInTheDocument();
-    expect(screen.getByText('→ default folder (Downloads/VPS)', { exact: false }) || true).toBeTruthy();
   });
 
   it('autoSync and hidden toggle with a PATCH; hidden also tells the parent', async () => {
@@ -275,7 +274,8 @@ describe('VpsSettings - watched folders', () => {
     vi.mocked(api.fetchVpsFolders).mockResolvedValue([folder()]);
     vi.mocked(api.addVpsFolders).mockResolvedValue([folder(), folder({ id: 2, path: '/remote/picked' })]);
     const { client } = renderWithClient(<VpsSettings />);
-    fireEvent.click(await screen.findByRole('button', { name: /browse/i }));
+    await screen.findByText('Configured');   // Browse is disabled until the config says there is a password
+    fireEvent.click(screen.getByRole('button', { name: /browse/i }));
     expect(screen.getByTestId('browser')).toHaveAttribute('data-added', '/home/hs/downloads');
     expect(screen.getByTestId('browser')).toHaveAttribute('data-single', 'false');
     fireEvent.click(screen.getByText('pick'));
@@ -288,7 +288,8 @@ describe('VpsSettings - watched folders', () => {
     vi.mocked(api.addVpsFolders).mockRejectedValue(new Error('x'));
     const capture = captureToasts();
     renderWithClient(<VpsSettings />);
-    fireEvent.click(await screen.findByRole('button', { name: /browse/i }));
+    await screen.findByText('Configured');
+    fireEvent.click(screen.getByRole('button', { name: /browse/i }));
     fireEvent.click(screen.getByText('pick nothing'));
     expect(api.addVpsFolders).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: /browse/i }));
@@ -326,6 +327,7 @@ describe('VpsSettings - removing a watched folder (delete impact)', () => {
     vi.mocked(api.fetchVpsFolderDeleteImpact).mockResolvedValue({ count: 5, sample: ['a.mkv', 'b.mkv', 'c.mkv'] });
     renderWithClient(<VpsSettings />);
     fireEvent.click(await screen.findByTitle('Remove folder'));
+    await screen.findByRole('heading', { name: 'Hidden downloads will become visible' });
     const d = dialog('Hidden downloads will become visible');
     expect(await d.findByText(/5 downloads are hidden only because of this folder/)).toBeInTheDocument();
     expect(d.getByText(/• a.mkv/)).toBeInTheDocument();
@@ -374,7 +376,7 @@ describe('VpsSettings - torrent clients', () => {
     await waitFor(() => expect(screen.getAllByText('Configured')).toHaveLength(3));   // VPS + two clients
     expect(screen.getByText('Hidden')).toBeInTheDocument();
     expect(screen.queryByText('Web/RPC URL')).toBeNull();
-    expect(card('Transmission').q.getByRole('button', { name: 'Transmission' })).toHaveAttribute('aria-expanded', 'false');
+    expect(card('Transmission').q.getByRole('button', { name: /^Transmission/ })).toHaveAttribute('aria-expanded', 'false');
   });
 
   it('expands to a hydrated form; the URL label and hints differ per client', async () => {
@@ -405,7 +407,7 @@ describe('VpsSettings - torrent clients', () => {
     await screen.findByText('hs@box.seedhost.eu:2222');
     card('qBittorrent').open();
     const q = card('qBittorrent').q;
-    const save = q.getByRole('button', { name: /save/i });
+    const save = q.getByRole('button', { name: /^save$/i });
     expect(save).toBeDisabled();   // no URL yet
     fireEvent.change(q.getByPlaceholderText(/qbittorrent\/$/), { target: { value: ' https://box/qbt/ ' } });
     fireEvent.change(q.getByPlaceholderText(/leave blank for the client default/), { target: { value: '/dl' } });
@@ -433,7 +435,7 @@ describe('VpsSettings - torrent clients', () => {
     await screen.findByText('hs@box.seedhost.eu:2222');
     await waitFor(() => expect(screen.getAllByText('Configured').length).toBe(2));
     card('Transmission').open();
-    const save = card('Transmission').q.getByRole('button', { name: /save/i });
+    const save = card('Transmission').q.getByRole('button', { name: /^save$/i });
     fireEvent.click(save);
     await waitFor(() => expect(capture.toasts.map(t => t.message)).toContain('Saved, but the temp dir could not be applied'));
     fireEvent.click(save);

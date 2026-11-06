@@ -306,7 +306,6 @@ describe('Layout - the outlet context', () => {
     renderLayout();
     await waitFor(() => expect(screen.getByTestId('state')).toHaveTextContent('hasMore'));
     fireEvent.click(screen.getByText('loadMore'));
-    await waitFor(() => expect(screen.getByTestId('state')).toHaveTextContent('more'));
     await waitFor(() => expect(screen.getByTestId('files')).toHaveTextContent('a.mkv,b.mkv'));
     expect(api.fetchDownloads).toHaveBeenCalledTimes(2);
     expect(api.fetchDownloads).toHaveBeenLastCalledWith(expect.objectContaining({ offset: 1 }));

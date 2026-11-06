@@ -12,7 +12,7 @@ vi.mock('../api', async (orig) => ({
 }));
 
 const rule = (over: Partial<api.RenameRule> = {}): api.RenameRule => ({
-  id: 1, name: 'Dots to spaces', pattern: '(?<=\\w)[._](?=\\w)', replacement: ' ', enabled: true, position: 0,
+  id: 1, name: 'Tidy dots', pattern: '(?<=\\w)[._](?=\\w)', replacement: ' ', enabled: true, position: 0,
   source: null, stop_on_match: false, ...over,
 });
 const dots = rule();
@@ -24,14 +24,14 @@ const previewOf = (changed: number, total: number, rows: { original: string; new
 });
 
 const planItem = (over: Partial<api.RenameApplyItem> = {}): api.RenameApplyItem => ({
-  id: 1, from: 'A.Movie.mkv', to: 'A Movie.mkv', applied: ['Dots to spaces'], source: null, status: 'would_rename', ...over,
+  id: 1, from: 'A.Movie.mkv', to: 'A Movie.mkv', applied: ['Tidy dots'], source: null, status: 'would_rename', ...over,
 });
 const applyResult = (over: Partial<api.RenameApplyResult> = {}): api.RenameApplyResult => ({
   dry_run: true, total: 2, renamed: 0, skipped: 0, failed: 0,
   items: [planItem(), planItem({ id: 2, from: 'gone.mkv', to: 'gone.mkv', status: 'missing' })], ...over,
 });
 
-const pattern = () => screen.getByPlaceholderText('\\.(1080p|720p)');
+const pattern = () => screen.getByPlaceholderText('\\\\.(1080p|720p)');
 const replacement = () => screen.getByPlaceholderText('(empty to remove)');
 const ruleName = () => screen.getByPlaceholderText('Rule name (optional)');
 const dialog = (heading: string) =>
@@ -54,12 +54,12 @@ describe('RenameRulesSettings - listing', () => {
     vi.mocked(api.fetchRenameRules).mockResolvedValue({ rules: [dots, tags] });
     renderWithClient(<RenameRulesSettings />);
     expect(screen.getByText('Loading rules...')).toBeInTheDocument();
-    expect(await screen.findByText('Dots to spaces')).toBeInTheDocument();
+    expect(await screen.findByText('Tidy dots')).toBeInTheDocument();
     // A nameless rule is listed by its pattern; source and stop badges
     expect(screen.getAllByText('\\.1080p').length).toBeGreaterThan(0);
     expect(screen.getByText('telegram')).toBeInTheDocument();
     expect(screen.getByText('stops')).toBeInTheDocument();
-    expect(screen.getByText('(removed)')).toBeInTheDocument();
+    expect(screen.getByText(/\(removed\)/)).toBeInTheDocument();
     const boxes = screen.getAllByRole('checkbox');
     expect(boxes[0]).toBeChecked();
     expect(boxes[1]).not.toBeChecked();
@@ -77,7 +77,8 @@ describe('RenameRulesSettings - listing', () => {
     expect(await screen.findByText(/No rules yet/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /add rule/i })).toBeInTheDocument();
     // Presets in chain order
-    const presets = screen.getAllByRole('button').filter(b => b.className.includes('bg-slate-700/50')).map(b => b.textContent);
+    const strip = screen.getByText('or start from:').parentElement as HTMLElement;
+    const presets = within(strip).getAllByRole('button').slice(1).map(b => b.textContent?.trim());
     expect(presets).toEqual(['Drop leading tag / site', 'Strip quality tags', 'Dots to spaces', 'Drop release group', 'Year in brackets']);
     expect(screen.queryByText('Effect on new downloads')).toBeNull();
     expect(api.testRenameRules).not.toHaveBeenCalled();
@@ -159,15 +160,15 @@ describe('RenameRulesSettings - editor', () => {
   it('editing an existing rule prefills and updates it in place', async () => {
     vi.mocked(api.fetchRenameRules).mockResolvedValue({ rules: [dots, tags] });
     renderWithClient(<RenameRulesSettings />);
-    fireEvent.click(await screen.findByRole('button', { name: /Dots to spaces/ }));
-    expect(ruleName()).toHaveValue('Dots to spaces');
+    fireEvent.click(await screen.findByRole('button', { name: /Tidy dots/ }));
+    expect(ruleName()).toHaveValue('Tidy dots');
     expect(pattern()).toHaveValue('(?<=\\w)[._](?=\\w)');
     // The other row is still listed as a row, not an editor
     expect(screen.getByText('stops')).toBeInTheDocument();
     fireEvent.change(replacement(), { target: { value: '-' } });
     fireEvent.click(screen.getByRole('button', { name: /save rule/i }));
     await waitFor(() => expect(api.updateRenameRule).toHaveBeenCalledWith(1, {
-      name: 'Dots to spaces', pattern: '(?<=\\w)[._](?=\\w)', replacement: '-', enabled: true, source: null, stop_on_match: false,
+      name: 'Tidy dots', pattern: '(?<=\\w)[._](?=\\w)', replacement: '-', enabled: true, source: null, stop_on_match: false,
     }));
   });
 });
@@ -176,7 +177,7 @@ describe('RenameRulesSettings - order, toggle, delete', () => {
   it('the arrows swap neighbours and send the new id order', async () => {
     vi.mocked(api.fetchRenameRules).mockResolvedValue({ rules: [dots, tags] });
     renderWithClient(<RenameRulesSettings />);
-    await screen.findByText('Dots to spaces');
+    await screen.findByText('Tidy dots');
     const ups = screen.getAllByRole('button', { name: 'Move up' });
     const downs = screen.getAllByRole('button', { name: 'Move down' });
     expect(ups[0]).toBeDisabled();
@@ -199,9 +200,9 @@ describe('RenameRulesSettings - order, toggle, delete', () => {
   it('delete asks, names the rule, and removes it', async () => {
     vi.mocked(api.fetchRenameRules).mockResolvedValue({ rules: [dots] });
     renderWithClient(<RenameRulesSettings />);
-    await screen.findByText('Dots to spaces');
+    await screen.findByText('Tidy dots');
     fireEvent.click(screen.getByRole('button', { name: 'Delete rule' }));
-    expect(screen.getByText(/"Dots to spaces" will no longer be applied/)).toBeInTheDocument();
+    expect(screen.getByText(/"Tidy dots" will no longer be applied/)).toBeInTheDocument();
     fireEvent.click(dialog('Delete this rule?').getByRole('button', { name: 'Cancel' }));
     expect(api.deleteRenameRule).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Delete rule' }));
@@ -216,7 +217,7 @@ describe('RenameRulesSettings - apply to existing files', () => {
     vi.mocked(api.applyRenameRules).mockResolvedValue(applyResult());
     const { client } = renderWithClient(<RenameRulesSettings />);
     const invalidate = vi.spyOn(client, 'invalidateQueries');
-    await screen.findByText('Dots to spaces');
+    await screen.findByText('Tidy dots');
     expect(screen.queryByRole('button', { name: /rename \d+ file/i })).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: /preview changes/i }));
@@ -245,7 +246,7 @@ describe('RenameRulesSettings - apply to existing files', () => {
       .mockResolvedValueOnce(applyResult({ dry_run: false, total: 1, renamed: 0, failed: 1, items: [] }))
       .mockResolvedValueOnce(applyResult({ total: 0, items: [] }));
     renderWithClient(<RenameRulesSettings />);
-    await screen.findByText('Dots to spaces');
+    await screen.findByText('Tidy dots');
     fireEvent.click(screen.getByRole('button', { name: /preview changes/i }));
     fireEvent.click(await screen.findByRole('button', { name: 'Rename 1 file' }));
     fireEvent.click(dialog('Rename existing files?').getByRole('button', { name: 'Rename them' }));
@@ -261,7 +262,7 @@ describe('RenameRulesSettings - apply to existing files', () => {
     vi.mocked(api.fetchRenameRules).mockResolvedValue({ rules: [dots] });
     vi.mocked(api.applyRenameRules).mockResolvedValue(applyResult());
     renderWithClient(<RenameRulesSettings />);
-    await screen.findByText('Dots to spaces');
+    await screen.findByText('Tidy dots');
     fireEvent.click(screen.getByRole('button', { name: /preview changes/i }));
     await screen.findByRole('button', { name: 'Rename 2 files' });
     fireEvent.click(screen.getByTitle('Disable'));
