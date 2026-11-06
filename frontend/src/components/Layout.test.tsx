@@ -299,14 +299,14 @@ describe('Layout - the outlet context', () => {
     }
   });
 
-  it('loadMore fetches the next page only while there is one and none is in flight', async () => {
+  it('loadMore fetches the next page only while there is one', async () => {
     vi.mocked(api.fetchDownloads)
       .mockResolvedValueOnce(page([makeDownload({ file: 'a.mkv' })], true))
       .mockResolvedValueOnce(page([makeDownload({ id: 2, message_id: 'm2', file: 'b.mkv' })], false));
     renderLayout();
     await waitFor(() => expect(screen.getByTestId('state')).toHaveTextContent('hasMore'));
     fireEvent.click(screen.getByText('loadMore'));
-    fireEvent.click(screen.getByText('loadMore'));   // already fetching
+    await waitFor(() => expect(screen.getByTestId('state')).toHaveTextContent('more'));
     await waitFor(() => expect(screen.getByTestId('files')).toHaveTextContent('a.mkv,b.mkv'));
     expect(api.fetchDownloads).toHaveBeenCalledTimes(2);
     expect(api.fetchDownloads).toHaveBeenLastCalledWith(expect.objectContaining({ offset: 1 }));

@@ -236,14 +236,15 @@ describe('DownloadsPage - dropping .torrent files', () => {
     expect(ctx.setPastedUrl).toHaveBeenCalledWith(null);
     expect(ctx.setAddUrlOpen).toHaveBeenCalledWith(true);
     // The page passes the batch to the modal once the layout says it is open
-    vi.mocked(useLayoutContext).mockReturnValue(makeContext({ addUrlOpen: true }));
+    const open = makeContext({ addUrlOpen: true });
+    vi.mocked(useLayoutContext).mockReturnValue(open);
     rerender(<MemoryRouter><DownloadsPage /><LocationProbe /></MemoryRouter>);
     expect(screen.getByTestId('modal')).toHaveAttribute('data-files', 'a.torrent,B.TORRENT');
     expect(screen.getByTestId('modal')).toHaveAttribute('data-open', 'true');
     // Closing clears the batch and the pasted URL
     fireEvent.click(screen.getByText('close-modal'));
-    expect(ctx.setAddUrlOpen).toHaveBeenCalledWith(false);
-    expect(ctx.setPastedUrl).toHaveBeenLastCalledWith(null);
+    expect(open.setAddUrlOpen).toHaveBeenCalledWith(false);
+    expect(open.setPastedUrl).toHaveBeenLastCalledWith(null);
     expect(screen.getByTestId('modal')).toHaveAttribute('data-files', '');
   });
 
