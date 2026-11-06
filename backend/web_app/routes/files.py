@@ -28,7 +28,8 @@ THUMB_WAIT = 4
 # Seconds a paste request waits for its copy before answering "running".
 TRANSFER_INLINE_WAIT = 1.0
 from backend.web_app.base import token_required, media_token_required
-from backend.web_app.helpers import range_response
+from backend.web_app.helpers import range_response, subtitle_response
+from backend import subtitles
 
 
 def _configured_roots(seen, include_hidden=False):
@@ -356,6 +357,33 @@ class FilesRoutesMixin:
                 return _fs_error(e)
             except (OSError, ValueError) as e:
                 return jsonify({"error": str(e)}), 400
+
+        @self.app.route("/api/files/subtitles", methods=["POST"])
+        @token_required
+        def files_subtitles():
+            """Body: {path} - subtitle tracks of a local video (sidecars +
+            embedded). No remote side: a track would have to be pulled over
+            SFTP to be converted, and the VPS isn't streamed from anyway."""
+            data = request.json or {}
+            if rfs.is_remote(data.get("path")):
+                return jsonify({"error": "Subtitles are only listed for local files"}), 400
+            try:
+                path = fs.resolve_path(data.get("path"))
+                return jsonify({"tracks": subtitles.list_tracks(path)})
+            except fs.FsError as e:
+                return _fs_error(e)
+            except subtitles.SubtitleError as e:
+                return jsonify({"error": str(e)}), e.status
+
+        @self.app.route("/api/files/subtitle", methods=["GET"])
+        @media_token_required
+        def files_subtitle():
+            """One track as WebVTT (?path=...&track=<id>) for a <track> element."""
+            try:
+                path = fs.resolve_path(request.args.get("path"))
+            except fs.FsError as e:
+                return _fs_error(e)
+            return subtitle_response(path, request.args.get("track"))
 
         @self.app.route("/api/files/stream", methods=["GET"])
         @media_token_required

@@ -1,6 +1,7 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { login, updatePassword, checkUrl, fetchAnalytics } from '../api';
 import { qk } from '../api/queryKeys';
+import { listSubtitleTracks, subtitleSourceKey, type SubtitleSource } from '../api/subtitles';
 
 // --- Auth (imperative) ---
 export function useLogin() {
@@ -24,5 +25,16 @@ export function useAnalytics(days: number, groupBy: 'day' | 'hour', includeDelet
   return useQuery({
     queryKey: qk.analytics(days, groupBy, includeDeleted),
     queryFn: () => fetchAnalytics(days, groupBy, includeDeleted),
+  });
+}
+
+// --- Subtitle tracks of a video (sidecars + embedded) ---
+export function useSubtitleTracks(source: SubtitleSource | null) {
+  return useQuery({
+    queryKey: qk.subtitles(source ? subtitleSourceKey(source) : ''),
+    queryFn: () => listSubtitleTracks(source!),
+    enabled: !!source,
+    // Probing an MKV is cheap but not free; a track list doesn't change mid-play.
+    staleTime: 10 * 60 * 1000,
   });
 }

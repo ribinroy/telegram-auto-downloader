@@ -48,7 +48,7 @@ Main Thread
 - **Tailwind CSS 4** - Styling
 - **Socket.IO client** - WebSocket
 - **Recharts** - Analytics charts
-- **Three.js** - VR video player
+- **Three.js** - 180/360 VR renderer (WebXR) inside the shared video player
 - **Lucide React** - Icons
 
 ## Project Structure
@@ -89,6 +89,7 @@ Main Thread
 |  |- resume.py                     # Single resume path shared by /api/retry and the watchdog
 |  |- download_queue.py             # Concurrency limits + the waiting line (QueueRunner thread)
 |  |- file_meta.py                  # Video metadata extraction (ffprobe)
+|  |- subtitles.py                  # Subtitle tracks (sidecar + embedded) served as WebVTT
 |  |- browser_downloader.py         # Playwright fallback for yt-dlp
 |  '- metrics/__init__.py           # Prometheus counters
 |
@@ -122,8 +123,9 @@ Main Thread
 |        |                          #   ContextMenu, PreviewModal, PropertiesModal
 |        |- LoginPage.tsx           # JWT auth login
 |        |- StatsHeader.tsx         # Stats bar
-|        |- VideoPlayerModal.tsx    # Video playback
-|        |- VRVideoPlayer.tsx       # Three.js VR player
+|        |- VideoPlayerModal.tsx    # Modal chrome around VideoPlayer
+|        |- VideoPlayer.tsx         # The player: one <video>, flat/VR switch, subtitle + view pickers
+|        |- VRVideoPlayer.tsx       # Three.js 180/360 mono/SBS/TB renderer, WebXR, subtitle plane
 |        |- Toast.tsx               # Toast notifications
 |        |- Tooltip.tsx             # Tooltip component
 |        '- ConfirmDialog.tsx       # Confirmation dialog
@@ -331,6 +333,7 @@ Live filesystem access - every call reads the disk, nothing is indexed or cached
 ### Video Streaming
 - `GET /api/video/check/<id>` - What is on disk for a download: `{exists, kind: 'video'|'dir'|'file', path, parent, size}`. The downloads list's view button uses `kind` to decide - play a video inline, or send a folder pull / non-video file to the file explorer (`/files?path=...`, plus `&select=<path>` for a single file, which `ExplorerPage` highlights and scrolls to, then drops). Keeps `file_deleted` honest for folders too, which the old video-only check always marked as missing.
 - `GET /api/video/stream/<id>` - Range-request video streaming
+- `GET /api/video/subtitles/<id>` - Subtitle tracks of a finished download (see **Video player** below); `GET /api/video/subtitle/<id>?track=` serves one as WebVTT (`@media_token_required` - it is a `<track src>`). The explorer twins are `POST /api/files/subtitles` `{path}` and `GET /api/files/subtitle?path=&track=`
 - `GET /api/video/thumbs/<id>` - Thumbnail list
 - `GET /api/video/thumb/<id>/<filename>` - Single thumbnail
 
@@ -761,6 +764,48 @@ a pulled USB drive disappears from the sidebar.
   Ctrl+A/C/X/V, Enter to open, Backspace for up, drag-and-drop upload. On coarse
   pointers the native contextmenu is suppressed (the hold is the select gesture)
   and the row's ⋮ button opens the menu instead.
+
+## Video player (flat + VR + subtitles)
+
+`components/VideoPlayer.tsx` is the one player everything uses - the downloads
+list (`VideoPlayerModal`), the transfer-files modal and the explorer preview.
+**One `<video>` element carries the stream, the subtitle `<track>`s and the
+position across a flat/VR switch**: VR mode hides it and hands it to
+`VRVideoPlayer` as a three.js `VideoTexture`, so switching never reloads or
+rewinds, and the same `TextTrack` feeds both views.
+
+- **Projection** (`utils/vr.ts`): `flat`, or `180|360` × `mono|sbs|tb`.
+  `detectProjection(name, aspect)` guesses from the filename tags VR files
+  carry (`_180`, `_LR`/`_SBS`/`_3DH`, `_TB`/`_OU`, `_360`, `MKX200`, `FISHEYE`,
+  `VR`); the aspect ratio only settles the layout once the name says VR at all
+  - a square untagged clip is not a 180° film. A manual pick is remembered per
+  filename in `localStorage` (`rememberProjection`), cleared by picking the
+  detected one again. The toolbar select marks the guess with "· auto".
+- **The sphere** (`VRVideoPlayer.tsx`): an inverted `SphereGeometry` with
+  `phiStart = 3π/2 - phiLength/2` so the middle of the frame is straight ahead
+  (-Z, where a headset looks at session start); 180° is half a sphere. Stereo
+  is two meshes with the UVs halved onto each eye's part of the frame (left
+  eye = left half / top half), on three's WebXR layers (left 1, right 2); the
+  desktop camera also takes layer 1 so it shows the left eye. Mono sits on
+  layer 0.
+- **WebXR**: `renderer.xr.enabled`, `setAnimationLoop` (not rAF), a Glasses
+  button shown only when `navigator.xr.isSessionSupported('immersive-vr')`
+  resolves true. Drag (OrbitControls) outside a session, head tracking inside.
+- **Subtitles**: the backend lists tracks - sidecars next to the file whose
+  name starts with its stem (`Movie.en.srt`, `Movie.de.forced.ass`) plus the
+  container's text tracks via ffprobe (bitmap PGS/DVD are left out) - and
+  serves any of them as **WebVTT**, the only format a `<track>` takes:
+  `.srt` converted in pure Python (`srt_to_vtt`), `.ass`/`.ssa` and embedded
+  tracks through ffmpeg, cached under `SCREENSHOTS_DIR/.subs` keyed by the
+  file's identity + track (demuxing a 50 GB MKV once is fine, every play is
+  not). Track ids are `f:<sidecar name>` / `s:<n>` (n-th subtitle stream,
+  bitmap ones counted so `-map 0:s:n` lands); a sidecar id is validated
+  against the video's folder and stem before anything is read. In the flat
+  view the chosen track is `showing` (browser-rendered); in VR it is `hidden`
+  - still firing `cuechange`, not painted onto a `<video>` nobody sees - and
+  the cue text is drawn on a canvas plane parented to the camera, so it stays
+  in front of you however you turn, headset included. `backend/subtitles.py`
+  owns it; `web_app/helpers.subtitle_response()` is shared by both route pairs.
 
 ## The VPS as an explorer drive
 

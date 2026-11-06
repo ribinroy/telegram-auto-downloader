@@ -76,11 +76,11 @@ export function TransferFilesModal({ download, onClose }: { download: Download; 
 
   // View a finished file: a video plays here, anything else opens in the explorer
   const navigate = useNavigate();
-  const [playing, setPlaying] = useState<{ url: string; title: string } | null>(null);
+  const [playing, setPlaying] = useState<{ url: string; title: string; path: string } | null>(null);
   const view = (localPath: string, name: string) => {
     if (VIDEO_EXTENSIONS.test(localPath)) {
       void ensureMediaToken().then(() =>
-        setPlaying({ url: getFileStreamUrl(localPath), title: name }));
+        setPlaying({ url: getFileStreamUrl(localPath), title: name, path: localPath }));
       return;
     }
     const parent = localPath.replace(/\/[^/]*$/, '') || '/';
@@ -241,7 +241,10 @@ export function TransferFilesModal({ download, onClose }: { download: Download; 
       </div>
     </div>
     {playing && (
-      <VideoPlayerModal isOpen onClose={() => setPlaying(null)} videoUrl={playing.url} title={playing.title} />
+      <VideoPlayerModal
+        isOpen onClose={() => setPlaying(null)} videoUrl={playing.url} title={playing.title}
+        subtitles={{ path: playing.path }}
+      />
     )}
     </>,
     document.body,

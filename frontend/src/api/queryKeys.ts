@@ -11,6 +11,7 @@ export const qk = {
   // Not under ['downloads']: the realtime layer patches every key there as
   // an infinite-query list.
   transferFiles: (downloadId: number) => ['transfer-files', downloadId] as const,
+  subtitles: (sourceKey: string) => ['subtitles', sourceKey] as const,
   analytics: (days: number, groupBy: 'day' | 'hour', includeDeleted: boolean) =>
     ['analytics', days, groupBy, includeDeleted] as const,
   mappings: () => ['mappings'] as const,
