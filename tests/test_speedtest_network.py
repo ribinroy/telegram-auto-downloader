@@ -13,6 +13,18 @@ import pytest
 from backend import speedtest as inet
 
 
+def own_time(monkeypatch, module, **overrides):
+    """Give `module` its own copy of the time module with some functions
+    replaced, so the patch is invisible to every other thread in the process."""
+    import time as _time
+    import types as _types
+    ns = _types.SimpleNamespace(**{k: getattr(_time, k) for k in dir(_time) if not k.startswith('_')})
+    for k, v in overrides.items():
+        setattr(ns, k, v)
+    monkeypatch.setattr(module, 'time', ns)
+    return ns
+
+
 # --- the scripted connection ----------------------------------------------
 
 class FakeResponse:
@@ -80,7 +92,7 @@ def clock(monkeypatch):
         state['t'] += state['step']
         return state['t']
 
-    monkeypatch.setattr(inet.time, 'perf_counter', tick)
+    own_time(monkeypatch, inet, perf_counter=tick)
     return state
 
 
@@ -154,7 +166,7 @@ def test_the_directory_is_filtered_and_cached_for_an_hour(conn, monkeypatch):
     assert len(conn.instances) == 1
 
     # An hour on, it is fetched again
-    monkeypatch.setattr(inet.time, 'time', lambda: inet._servers_cache['at'] + 3601)
+    own_time(monkeypatch, inet, time=lambda: inet._servers_cache['at'] + 3601)
     inet.fetch_servers()
     assert len(conn.instances) == 2
 

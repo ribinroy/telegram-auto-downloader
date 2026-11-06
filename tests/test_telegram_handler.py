@@ -983,13 +983,13 @@ def test_post_restart_meta_fills_in_what_is_missing(tg, db, monkeypatch):
     run(go())
     assert calls == [('meta', '21'), ('thumbs', rec['id'], '/media/v.mp4', 12.5)]
 
-    # A record deleted while metadata was being probed gets no thumbnails
+    # A record that can no longer be found after the probe gets no thumbnails
     async def extract_then_delete(message_id):
         calls.append(('meta', message_id))
-        db.delete_download_by_message_id(message_id)
+        db.update_download_by_id(moved['id'], message_id='re-keyed')
         return True
     monkeypatch.setattr('backend.file_meta.extract_and_store_meta', extract_then_delete)
-    db.add_download(file='w.mp4', status='done', message_id=23)
+    moved = db.add_download(file='w.mp4', status='done', message_id=23)
 
     async def again():
         await tg._post_restart_meta(23, asyncio.create_task(finished()))
@@ -1048,13 +1048,13 @@ def test_run_connects_authorizes_and_exits_on_stop(tg):
     assert len(tg.client.sent) == 1                                  # greeted on authorization
 
 
-def test_run_waits_for_credentials_and_survives_client_errors(tg, fast_sleep):
+def test_run_waits_for_credentials_and_survives_client_errors(tg, fast_sleep, monkeypatch):
     tg.client = None
 
     async def stop_on_sleep(seconds):
         fast_sleep.append(seconds)
         tg._stopping = True
-    th.asyncio.sleep = stop_on_sleep
+    monkeypatch.setattr(th.asyncio, 'sleep', stop_on_sleep)
     run(tg._run())
     assert fast_sleep == [2]
 

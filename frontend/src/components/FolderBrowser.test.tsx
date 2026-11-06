@@ -22,7 +22,8 @@ const tree: Record<string, VpsBrowseResult> = {
 };
 const browse = () => vi.fn(async (path?: string) => tree[path ?? ''] ?? { error: `no such folder: ${path}` });
 
-const row = (name: string) => screen.getByTitle(tree[''].entries!.find(e => e.name === name)?.path ?? name).parentElement as HTMLElement;
+// A folder's row: the div around its name button (the footer repeats the path as a title, so not by title)
+const row = (name: string) => screen.getByRole('button', { name }).parentElement as HTMLElement;
 
 describe('FolderBrowser', () => {
   it('renders nothing while closed', () => {

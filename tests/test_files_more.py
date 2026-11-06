@@ -21,6 +21,18 @@ not_root = pytest.mark.skipif(os.geteuid() == 0, reason='root ignores permission
 FFMPEG = shutil.which('ffmpeg') and shutil.which('ffprobe')
 
 
+def own_time(monkeypatch, module, **overrides):
+    """Give `module` its own copy of the time module with some functions
+    replaced, so the patch is invisible to every other thread in the process."""
+    import time as _time
+    import types as _types
+    ns = _types.SimpleNamespace(**{k: getattr(_time, k) for k in dir(_time) if not k.startswith('_')})
+    for k, v in overrides.items():
+        setattr(ns, k, v)
+    monkeypatch.setattr(module, 'time', ns)
+    return ns
+
+
 # --- mounts / roots ---------------------------------------------------------
 
 def test_read_mounts_decodes_spaces_and_skips_short_lines(monkeypatch):
@@ -296,7 +308,7 @@ def test_search_and_dir_size_stop_at_their_deadline(tmp_tree, monkeypatch):
     with pytest.raises(FsError):
         fs.search(str(tmp_tree / 'notes.txt'), 'mkv')
     clock = iter([0.0, 100.0, 200.0, 300.0, 400.0])
-    monkeypatch.setattr(fs.time, 'monotonic', lambda: next(clock))
+    own_time(monkeypatch, fs, monotonic=lambda: next(clock))
     got = fs.search(str(tmp_tree), 'zzz-nothing', timeout=10)
     assert got['truncated'] is True and got['entries'] == []
 
@@ -555,7 +567,7 @@ def test_the_upgrade_loop_ticks_and_survives_a_failing_step(monkeypatch):
         if isinstance(o, Exception):
             raise o
         return o
-    monkeypatch.setattr(fs.time, 'sleep', sleep)
+    own_time(monkeypatch, fs, sleep=sleep)
     monkeypatch.setattr(fs, '_upgrade_step', step)
     with pytest.raises(Stop):
         fs._upgrade_loop()

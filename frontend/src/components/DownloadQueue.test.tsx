@@ -132,14 +132,16 @@ describe('queue modal - controls', () => {
     const toggle = screen.getByTitle('Limits per source');
     fireEvent.click(toggle);
     expect(toggle).toHaveAttribute('aria-expanded', 'true');
-    const vps = screen.getByText('VPS').closest('label')!;
+    // The rows' source chips say "VPS"/"Telegram" too, so go by the cap labels
+    const cap = (name: string) => screen.getByText(name, { selector: 'label span.block' }).closest('label')!;
+    const vps = cap('VPS');
     expect(within(vps).getByText('0 running')).toBeInTheDocument();
     const select = within(vps).getByRole('combobox') as HTMLSelectElement;
     expect(select.value).toBe('2');
     expect(within(select).getAllByRole('option')).toHaveLength(5);   // No cap + 1..4
     fireEvent.change(select, { target: { value: '' } });
     await waitFor(() => expect(api.setQueueLimits).toHaveBeenCalledWith({ vps: null }));
-    const tg = within(screen.getByText('Telegram').closest('label')!).getByRole('combobox');
+    const tg = within(cap('Telegram')).getByRole('combobox');
     fireEvent.change(tg, { target: { value: '1' } });
     await waitFor(() => expect(api.setQueueLimits).toHaveBeenCalledWith({ telegram: 1 }));
   });

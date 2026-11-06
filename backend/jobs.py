@@ -280,6 +280,8 @@ def _persist(schedules):
 
 def parse_time(value):
     """'HH:MM' -> (hour, minute). Raises ValueError on anything else."""
+    if value is not None and not isinstance(value, str):
+        raise ValueError('Time must look like HH:MM')
     hour, _, minute = (value or '').partition(':')
     try:
         hour, minute = int(hour), int(minute)

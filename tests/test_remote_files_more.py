@@ -12,6 +12,18 @@ from backend.files import FsError
 from tests.conftest import FakeSFTP
 
 
+def own_time(monkeypatch, module, **overrides):
+    """Give `module` its own copy of the time module with some functions
+    replaced, so the patch is invisible to every other thread in the process."""
+    import time as _time
+    import types as _types
+    ns = _types.SimpleNamespace(**{k: getattr(_time, k) for k in dir(_time) if not k.startswith('_')})
+    for k, v in overrides.items():
+        setattr(ns, k, v)
+    monkeypatch.setattr(module, 'time', ns)
+    return ns
+
+
 class LinkySFTP(FakeSFTP):
     """FakeSFTP with symlinks: `links` maps name -> target path (None for a
     dangling link), listed with S_IFLNK and resolved through stat()."""
@@ -162,7 +174,7 @@ def test_search_skips_unlistable_folders_and_stops_at_the_deadline(remote, monke
     assert got['truncated'] is False
 
     clock = iter([0.0, 100.0, 200.0])
-    monkeypatch.setattr(rfs.time, 'monotonic', lambda: next(clock))
+    own_time(monkeypatch, rfs, monotonic=lambda: next(clock))
     got = rfs.search('vps:~', 'mkv', timeout=10)
     assert got['truncated'] is True and got['entries'] == []
 

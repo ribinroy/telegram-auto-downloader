@@ -13,6 +13,18 @@ from backend import vps_handler
 from backend.vps_handler import VpsDownloader, _Cancelled
 from tests.conftest import FakeSFTP
 
+
+def own_time(monkeypatch, module, **overrides):
+    """Give `module` its own copy of the time module with some functions
+    replaced, so the patch is invisible to every other thread in the process."""
+    import time as _time
+    import types as _types
+    ns = _types.SimpleNamespace(**{k: getattr(_time, k) for k in dir(_time) if not k.startswith('_')})
+    for k, v in overrides.items():
+        setattr(ns, k, v)
+    monkeypatch.setattr(module, 'time', ns)
+    return ns
+
 REMOTE = '/home6/tester/downloads/Show'
 TREE = {
     '/home6/tester/downloads': {'Show': None, 'movie.mkv': 6, 'stream.bin': 0},
@@ -371,7 +383,7 @@ def test_a_file_another_transfer_is_writing_is_waited_for_then_finished(db, hand
         with open(ep02, 'ab') as f:
             f.write(b'o' * 3)                              # the other pull wrote 3 more
         handler.threads.pop('other', None)                 # ...and exited
-    monkeypatch.setattr(vps_handler.time, 'sleep', other_finishes)
+    own_time(monkeypatch, vps_handler, sleep=other_finishes)
     sftp = ReadableSFTP(TREE)
     wire(handler, sftp)
     handler._download(REMOTE, 'p-1', pull['dest_base'])
@@ -387,7 +399,7 @@ def test_a_stop_while_waiting_for_the_claim_is_honoured(db, handler, pull, monke
     ep02 = Path(pull['dest_base']) / 'Show' / 'ep02.mkv'
     handler.threads['other'] = threading.Thread(target=lambda: None)
     handler.writing[str(ep02)] = 'other'
-    monkeypatch.setattr(vps_handler.time, 'sleep', lambda _s: handler.cancelled.add('p-1'))
+    own_time(monkeypatch, vps_handler, sleep=lambda _s: handler.cancelled.add('p-1'))
     sftp = ReadableSFTP(TREE)
     wire(handler, sftp)
     handler._download(REMOTE, 'p-1', pull['dest_base'])
@@ -635,7 +647,7 @@ def test_the_sync_loop_sleeps_then_scans_and_survives_a_failing_scan(handler, mo
     def failing_scan():
         scanned.append(1)
         raise RuntimeError('scan blew up')
-    monkeypatch.setattr(vps_handler.time, 'sleep', sleep)
+    own_time(monkeypatch, vps_handler, sleep=sleep)
     monkeypatch.setattr(handler, 'sync_once', failing_scan)
     with pytest.raises(Stop):
         handler._sync_loop()
