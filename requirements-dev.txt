@@ -1,0 +1,3 @@
+# Test tooling - not needed to run DownLee.
+-r requirements.txt
+pytest>=8
