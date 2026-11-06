@@ -1,14 +1,13 @@
 import { useEffect, useMemo, useRef, useState, lazy, Suspense, type ReactNode } from 'react';
 import { Captions, Globe, Maximize, Minimize } from 'lucide-react';
 import { useSubtitleTracks } from '../hooks/useMisc';
+import { loadVRPlayer, preloadVRPlayer } from '../lib/vrPreload';
 import { getSubtitleUrl, type SubtitleSource } from '../api/subtitles';
 import {
   PROJECTIONS, detectProjection, recallProjection, rememberProjection, type Projection,
 } from '../utils/vr';
 
-const VRVideoPlayer = lazy(() =>
-  import('./VRVideoPlayer').then((m) => ({ default: m.VRVideoPlayer }))
-);
+const VRVideoPlayer = lazy(() => loadVRPlayer().then((m) => ({ default: m.VRVideoPlayer })));
 
 export interface VideoPlayerProps {
   src: string;
@@ -49,6 +48,8 @@ export function VideoPlayer({ src, name, subtitles, onError, autoPlay = true, ex
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
   const canFullscreen = typeof document !== 'undefined' && !!document.fullscreenEnabled;
+
+  useEffect(() => { preloadVRPlayer(); }, []);
 
   const { data: tracks = [] } = useSubtitleTracks(subtitles ?? null);
   const detected = useMemo(() => detectProjection(name, aspect), [name, aspect]);

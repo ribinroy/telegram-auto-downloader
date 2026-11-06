@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Routes, Route } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import { verifyToken, clearToken, getToken, logout, ensureMediaToken, setSessionExpiredHandler, startMediaTokenKeeper } from './api';
+import { preloadVRPlayer } from './lib/vrPreload';
 import { LoginPage } from './components/LoginPage';
 import { Layout } from './components/Layout';
 import { DownloadsPage } from './pages/DownloadsPage';
@@ -52,6 +53,16 @@ function App() {
   useEffect(() => {
     if (!isAuthenticated) return;
     return startMediaTokenKeeper();
+  }, [isAuthenticated]);
+
+  // Fetch the VR player's chunk while the tab is idle, so the first switch
+  // to a 180/360 view doesn't wait on a download.
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    const idle = window.requestIdleCallback ?? ((cb: () => void) => window.setTimeout(cb, 2000));
+    const cancel = window.cancelIdleCallback ?? window.clearTimeout;
+    const id = idle(() => { preloadVRPlayer(); });
+    return () => cancel(id);
   }, [isAuthenticated]);
 
   const handleLogin = () => setIsAuthenticated(true);

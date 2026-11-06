@@ -788,6 +788,12 @@ rewinds, and the same `TextTrack` feeds both views.
   eye = left half / top half), on three's WebXR layers (left 1, right 2); the
   desktop camera also takes layer 1 so it shows the left eye. Mono sits on
   layer 0.
+- **The three.js renderer is a lazy chunk** (~0.5 MB) that the list and the
+  login page never load. Fetching it at the moment VR is switched on is what
+  the "Loading VR player" screen was, so `lib/vrPreload.ts` fetches it early
+  instead: on `requestIdleCallback` after sign-in (`App`) and when any
+  `VideoPlayer` mounts. The `Suspense` fallback is still there for a cold
+  cache on a slow link.
 - **Fullscreen** is the whole player's (`wrapRef` in `VideoPlayer`), toolbar
   included, so the subtitle/view pickers stay reachable; the VR overlay's
   button only mirrors it (`fullscreen`/`onToggleFullscreen` props). `F`
