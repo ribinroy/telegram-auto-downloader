@@ -71,3 +71,9 @@ cookies.txt
 
 # Deployment-specific security assessment - never publish
 SECURITY_FINDINGS.txt
+
+# Coverage reports (generated locally and in CI)
+.coverage
+coverage-backend.json
+htmlcov/
+frontend/coverage/
