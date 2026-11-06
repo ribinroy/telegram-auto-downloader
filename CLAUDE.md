@@ -823,10 +823,24 @@ a pulled USB drive disappears from the sidebar.
 
 `components/VideoPlayer.tsx` is the one player everything uses - the downloads
 list (`VideoPlayerModal`), the transfer-files modal and the explorer preview.
-**One `<video>` element carries the stream, the subtitle `<track>`s and the
-position across a flat/VR switch**: VR mode hides it and hands it to
-`VRVideoPlayer` as a three.js `VideoTexture`, so switching never reloads or
-rewinds, and the same `TextTrack` feeds both views.
+**One hidden `<video>` element carries the stream, the subtitle `<track>`s and
+the position; the three.js renderer (`VRVideoPlayer`) draws it for every
+projection, flat included**, as a `VideoTexture` - so every file opens in the
+same player with the same overlay controls, and a projection switch never
+reloads or rewinds. The browser's native controls are never shown.
+
+- **Flat is a fitted plane, not a sphere.** `fitFlatPlane()` (`utils/vr.ts`)
+  sizes a unit plane `FLAT_DISTANCE` in front of the camera to the video's
+  aspect ratio within the view (`object-fit: contain` in world units),
+  refitted on resize and on `loadedmetadata`. OrbitControls are reset to the
+  straight-ahead pose and disabled while flat - a sphere may have left the
+  camera turned, and dragging a flat picture around makes no sense.
+- **The overlay carries what the native controls used to**: play/pause, seek,
+  mute + volume (hover/focus reveals the slider on small screens), a playback
+  speed select (`PLAYBACK_RATES`), the headset button and fullscreen. Keys:
+  space/K play, ←/→ ±5s, M mute, F fullscreen. The chosen subtitle track is
+  always `hidden` (firing `cuechange`, never painted) and drawn on the
+  renderer's subtitle plane.
 
 - **Projection** (`utils/vr.ts`): `flat`, or `180|360` × `mono|sbs|tb`.
   `detectProjection(name, aspect)` guesses from the filename tags VR files
