@@ -229,6 +229,10 @@ class BrowserDownloader:
                             response = await download_page.goto(video_url, timeout=120000, wait_until='commit')
                             if response:
                                 status = response.status
+                                # The content type must come from this
+                                # response too, or the challenge page's
+                                # text/html is what gets checked below.
+                                content_type = response.headers.get('content-type', '')
 
                     if status == 200 and 'video' in content_type:
                         # Stream the response body to file

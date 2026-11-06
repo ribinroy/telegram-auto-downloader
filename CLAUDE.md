@@ -1060,7 +1060,13 @@ calls `logsafe.install(LOG_FILE)`.
 ```bash
 ./venv/bin/python -m pytest      # backend  (tests/)
 cd frontend && npm test          # frontend (src/**/*.test.ts)
+make coverage                    # both, with reports: htmlcov/ and frontend/coverage/
 ```
+
+Test tooling is in `requirements-dev.txt` (pytest, pytest-cov) and the
+frontend's devDependencies (`@vitest/coverage-v8`); `.coveragerc` omits
+`backend/main.py` (the thread wiring can't run under a test) and
+`vitest.config.ts` scopes coverage to `src/**` minus tests and the entry.
 
 - **Nothing in the suite touches the real deployment.** `tests/conftest.py`
   redirects `DOWNLOAD_DIR`, `SCREENSHOTS_DIR` and `DATABASE_URL` to a temp

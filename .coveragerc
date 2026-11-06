@@ -1,0 +1,9 @@
+[run]
+source = backend
+# The entry point only wires threads together; it can't run under a test.
+omit =
+    backend/main.py
+
+[report]
+skip_covered = False
+show_missing = True

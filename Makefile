@@ -21,7 +21,7 @@ SERVICE ?= downlee
 FRONTEND_SRC := $(shell find frontend/src frontend/public -type f 2>/dev/null) \
                 frontend/index.html frontend/vite.config.ts frontend/package.json
 
-.PHONY: help up install check env db frontend run dev test service restart logs update clean
+.PHONY: help up install check env db frontend run dev test coverage service restart logs update clean
 
 help: ## Show this help
 	@echo "DownLee - make targets:"
@@ -79,6 +79,11 @@ dev: install env ## Backend + Vite dev server with hot reload (Ctrl+C stops both
 test: install ## Run the backend and frontend tests
 	$(PY) -m pytest -q
 	cd frontend && npm test
+
+coverage: install ## Both suites with coverage reports (htmlcov/, frontend/coverage/)
+	$(PY) -m pip install -q -r requirements-dev.txt
+	$(PY) -m pytest -q --cov --cov-report=term-missing --cov-report=html
+	cd frontend && npm run test:coverage
 
 # Writes the unit for this checkout and this user, then enables it on boot.
 service: install env ## Install + start as a systemd service (SERVICE=downlee)

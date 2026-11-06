@@ -178,7 +178,8 @@ def resolve_path(raw, must_exist=True, follow=True):
         raise FsError('Path must be absolute')
     try:
         p = p.resolve() if follow else (p.parent.resolve() / p.name)
-    except OSError as e:
+    except (OSError, RuntimeError) as e:
+        # Python < 3.13 reports a symlink loop as RuntimeError, not OSError
         raise FsError(str(e))
     if must_exist and not os.path.lexists(p):
         raise FsError('Path not found', 404)
