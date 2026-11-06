@@ -164,7 +164,8 @@ def test_a_finished_pull_whose_copy_is_gone_is_retired_and_pulled_again(db, hand
     new = handler.start_download('/home6/tester/downloads/movie.mkv', size=6, dest=str(tmp_path / 'vps'))
     assert new.get('error') is None and new['message_id'] != 'old'
     handler.threads[new['message_id']].join(5)
-    assert db.get_download_by_message_id('old') is None     # soft-deleted
+    assert db.get_download_by_message_id('old')['deleted_at'] is not None     # soft-deleted
+    assert db.get_vps_downloads_for_path('/home6/tester/downloads/movie.mkv')[0]['message_id'] != 'old'
     from backend.web_app import base
     assert base._web_app.deleted == ['old']
     assert socket[0][0] == 'download:new'

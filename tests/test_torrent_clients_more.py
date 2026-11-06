@@ -798,3 +798,8 @@ def test_load_torrent_config_decrypts_and_rejects_unknown_clients(monkeypatch):
     assert cfg['client'] == 'transmission'
     assert tor.load_torrent_config('qbittorrent') is None
     assert tor.load_torrent_config('deluge') is None
+
+
+def test_details_of_a_torrent_qbittorrent_no_longer_has_is_none(qb):
+    qb.routes['/api/v2/torrents/info'] = []
+    assert qbit.qbit_details(QCFG, 'gone') is None

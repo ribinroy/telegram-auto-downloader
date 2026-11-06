@@ -406,3 +406,27 @@ def test_loadavg_rejects_non_numeric_loads():
 def test_netdev_skips_malformed_rows():
     text = ' eth0: not numbers\n eth1: 1 2 3\n eth2: 5 0 0 0 0 0 0 0 7 0 0 0 0 0 0 0\n : 1 1 1 1 1 1 1 1 1'
     assert vps._parse_netdev(text) == {'iface': 'eth2', 'rx_bytes': 5, 'tx_bytes': 7}
+
+
+def test_the_pool_tolerates_a_client_that_fails_to_close(pool):
+    def bad_close():
+        raise OSError('already gone')
+    # ...when reconnecting over a stale one
+    with vps.vps_session() as (c1, _):
+        pass
+    c1.transport.active = False
+    c1.close = bad_close
+    with vps.vps_session() as (c2, _):
+        pass
+    assert c2 is not c1
+    # ...and when dropping it after a transport error in the body
+    c2.close = bad_close
+    with pytest.raises(OSError, match='socket'):
+        with vps.vps_session():
+            raise OSError('socket closed')
+    assert pool['client'] is None
+
+
+def test_netdev_skips_a_row_whose_counters_are_not_numbers():
+    text = ' eth0: a b c d e f g h i j\n eth2: 5 0 0 0 0 0 0 0 7 0 0 0 0 0 0 0'
+    assert vps._parse_netdev(text)['iface'] == 'eth2'

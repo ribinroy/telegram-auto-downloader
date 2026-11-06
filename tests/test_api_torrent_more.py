@@ -394,3 +394,23 @@ def test_action_coerces_hashes_to_strings(client, db, configured, monkeypatch):
                       json={'client': 'transmission', 'action': 'start', 'ids': [12, 'abc']})
     assert res.get_json() == {'status': 'ok', 'action': 'start', 'hashes': ['12', 'abc']}
     assert seen == [['12', 'abc']]
+
+
+def test_listing_matches_a_single_file_torrent_and_skips_a_dangling_link(
+        client, db, configured, monkeypatch):
+    from backend.config import DOWNLOAD_DIR
+    base = DOWNLOAD_DIR / 'VPS'
+    base.mkdir(parents=True, exist_ok=True)
+    (base / 'Single.mkv').write_bytes(b'x' * 10)
+    folder = base / 'Linked'
+    folder.mkdir(exist_ok=True)
+    (folder / 'a.mkv').write_bytes(b'x' * 10)
+    (folder / 'gone').symlink_to(base / 'does-not-exist')      # os.walk lists it, getsize fails
+    monkeypatch.setattr(troute, 'torrent_list', lambda c: [
+        {'hash': 'h1', 'name': 'Single.mkv', 'download_dir': '/dl', 'percent_done': 100,
+         'status': 'completed', 'total_size': 10},
+        {'hash': 'h2', 'name': 'Linked', 'download_dir': '/dl', 'percent_done': 100,
+         'status': 'completed', 'total_size': 10},
+    ])
+    body = client.get('/api/torrent/list?client=transmission', headers=configured).get_json()
+    assert all(t['downlee']['on_disk'] for t in body['torrents'])

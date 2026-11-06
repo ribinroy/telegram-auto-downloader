@@ -822,3 +822,21 @@ def test_usage_sums_the_torrent_clients_and_isolates_a_failing_one(
     by_client = {c['client']: c for c in body['clients']}
     assert by_client['transmission']['downloaded'] == 300
     assert by_client['qbittorrent']['error'] == 'Cannot reach qBittorrent'
+
+
+def test_dot_entries_are_dropped_from_both_listings(client, db, connected, sftp):
+    sftp.tree['/home6/tester/downloads']['.'] = None
+    sftp.tree['/home6/tester/downloads']['..'] = None
+    body = client.post('/api/settings/vps/browse', headers=connected,
+                       json={'path': '/home6/tester/downloads'}).get_json()
+    assert [e['name'] for e in body['entries']] == ['Show.S01', 'movie.mkv']
+    client.post('/api/settings/vps/folders', headers=connected, json={'path': '/home6/tester/downloads'})
+    group = client.get('/api/vps/files', headers=connected).get_json()['folders'][0]
+    assert [e['name'] for e in group['entries']] == ['Show.S01', 'movie.mkv']
+
+
+def test_local_browse_reports_an_unexpected_failure_as_500(client, db, auth, tmp_path, monkeypatch):
+    import os
+    monkeypatch.setattr(os, 'scandir', lambda p: (_ for _ in ()).throw(RuntimeError('boom')))
+    res = client.post('/api/settings/local/browse', headers=auth, json={'path': str(tmp_path)})
+    assert res.status_code == 500 and 'boom' in res.get_json()['error']
