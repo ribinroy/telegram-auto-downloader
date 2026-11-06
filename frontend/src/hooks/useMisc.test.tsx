@@ -105,7 +105,7 @@ describe('internet speed test', () => {
     vi.mocked(speed.fetchInternetSpeed).mockResolvedValue(status('upload'));
     const { result } = renderHookWithClient(() => useInternetSpeed(true));
     await waitFor(() => expect(result.current.data?.phase).toBe('upload'));
-    await waitFor(() => expect(speed.fetchInternetSpeed.mock.calls.length).toBeGreaterThanOrEqual(3), { timeout: 3000 });
+    await waitFor(() => expect(vi.mocked(speed.fetchInternetSpeed).mock.calls.length).toBeGreaterThanOrEqual(3), { timeout: 3000 });
   });
 
   it('is not fetched while disabled', async () => {

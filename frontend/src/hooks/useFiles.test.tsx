@@ -126,13 +126,14 @@ describe('copy/move jobs', () => {
     vi.mocked(files.fetchTransfers).mockResolvedValue({ transfers: [job()] });
     const { result } = renderHookWithClient(() => useFileTransfers());
     await waitFor(() => expect(result.current.data?.transfers).toHaveLength(1));
-    await waitFor(() => expect(files.fetchTransfers.mock.calls.length).toBeGreaterThanOrEqual(2), { timeout: 3000 });
+    const fetcher = vi.mocked(files.fetchTransfers);
+    await waitFor(() => expect(fetcher.mock.calls.length).toBeGreaterThanOrEqual(2), { timeout: 3000 });
 
-    vi.mocked(files.fetchTransfers).mockResolvedValue({ transfers: [job({ status: 'done' })] });
+    fetcher.mockResolvedValue({ transfers: [job({ status: 'done' })] });
     await waitFor(() => expect(result.current.data?.transfers[0].status).toBe('done'), { timeout: 3000 });
-    const calls = files.fetchTransfers.mock.calls.length;
+    const calls = fetcher.mock.calls.length;
     await new Promise(r => setTimeout(r, 1300));
-    expect(files.fetchTransfers.mock.calls.length).toBe(calls);
+    expect(fetcher.mock.calls.length).toBe(calls);
   });
 
   it('cancel / dismiss / ack refresh the job list', async () => {

@@ -83,7 +83,7 @@ describe('useTransferFiles', () => {
     vi.mocked(api.fetchTransferFiles).mockResolvedValue({ source: 'live', error: null, is_dir: true, files: [] });
     const { result } = renderHookWithClient(() => useTransferFiles(7, true));
     await waitFor(() => expect(result.current.data).toBeDefined());
-    await waitFor(() => expect(api.fetchTransferFiles.mock.calls.length).toBeGreaterThanOrEqual(2), { timeout: 5000 });
+    await waitFor(() => expect(vi.mocked(api.fetchTransferFiles).mock.calls.length).toBeGreaterThanOrEqual(2), { timeout: 5000 });
   });
 });
 
