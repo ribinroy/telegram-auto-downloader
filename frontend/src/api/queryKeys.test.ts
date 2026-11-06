@@ -56,6 +56,16 @@ describe('query keys', () => {
     expect(under(qk.fileTransferFiles('j1'), qk.fileTransfers())).toBe(true);
   });
 
+  it('give every single-resource key its own top-level name', () => {
+    const singles = {
+      authors: qk.authors(), stats: qk.stats(), queue: qk.queue(), mappings: qk.mappings(), cookies: qk.cookies(),
+      ytdlp: qk.ytdlpVersion(), jobs: qk.jobSchedules(), users: qk.users(), bot: qk.botQueries(), 'rename-rules': qk.renameRules(),
+    };
+    for (const [name, key] of Object.entries(singles)) expect(key[0]).toBe(name);
+    const tops = Object.values(singles).map(k => k[0]);
+    expect(new Set(tops).size).toBe(tops.length);
+  });
+
   it('tell keys with different parameters apart', () => {
     expect(qk.torrentList('transmission')).not.toEqual(qk.torrentList('qbittorrent'));
     expect(qk.fileList('/a', false)).not.toEqual(qk.fileList('/a', true));
