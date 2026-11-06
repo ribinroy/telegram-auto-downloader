@@ -10,12 +10,19 @@ interface VRVideoPlayerProps {
   projection: Exclude<Projection, 'flat'>;
   /** Current subtitle cue, drawn on a plane in front of the viewer. */
   subtitle: string;
+  /** Fullscreen is the parent player's (toolbar included); the overlay only mirrors it. */
+  fullscreen?: boolean;
+  onToggleFullscreen?: () => void;
 }
 
 // Layers: three's WebXR camera enables layer 1 on the left eye and 2 on the
 // right, so a stereo file is two hemispheres, one per layer, each mapped to
 // its half of the frame. Mono content sits on layer 0, which every camera
 // sees. The desktop camera also takes layer 1, so it shows the left eye.
+// Imperative <video> writes live here: the element arrives as a prop, and the
+// React compiler's lint treats a write to a prop as a mutation.
+const seekTo = (v: HTMLVideoElement, t: number) => { v.currentTime = t; };
+
 const LEFT = 1;
 const RIGHT = 2;
 const RADIUS = 500;
@@ -71,7 +78,7 @@ function drawSubtitle(canvas: HTMLCanvasElement, text: string) {
   });
 }
 
-export function VRVideoPlayer({ video, projection, subtitle }: VRVideoPlayerProps) {
+export function VRVideoPlayer({ video, projection, subtitle, fullscreen = false, onToggleFullscreen }: VRVideoPlayerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<{
     renderer: THREE.WebGLRenderer;
@@ -89,7 +96,6 @@ export function VRVideoPlayer({ video, projection, subtitle }: VRVideoPlayerProp
   const [duration, setDuration] = useState(video.duration || 0);
   const [xrSupported, setXrSupported] = useState(false);
   const [inXr, setInXr] = useState(false);
-  const [fullscreen, setFullscreen] = useState(false);
 
   // Scene, renderer, controls - built once per video element.
   useEffect(() => {
@@ -239,19 +245,13 @@ export function VRVideoPlayer({ video, projection, subtitle }: VRVideoPlayerProp
     };
   }, [video]);
 
-  useEffect(() => {
-    const onChange = () => setFullscreen(document.fullscreenElement === containerRef.current?.parentElement);
-    document.addEventListener('fullscreenchange', onChange);
-    return () => document.removeEventListener('fullscreenchange', onChange);
-  }, []);
-
   const togglePlayPause = useCallback(() => {
     if (video.paused) void video.play().catch(() => {});
     else video.pause();
   }, [video]);
 
   const handleSeek = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    video.currentTime = parseFloat(e.target.value);
+    seekTo(video, parseFloat(e.target.value));
   }, [video]);
 
   const enterXr = useCallback(async () => {
@@ -275,13 +275,6 @@ export function VRVideoPlayer({ video, projection, subtitle }: VRVideoPlayerProp
     sceneRef.current?.renderer.xr.getSession()?.end().catch(() => {});
   }, []);
 
-  const toggleFullscreen = useCallback(() => {
-    const el = containerRef.current?.parentElement;
-    if (!el) return;
-    if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
-    else void el.requestFullscreen().catch(() => {});
-  }, []);
-
   // Space and arrows - the flat view's native controls do this themselves.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -289,10 +282,10 @@ export function VRVideoPlayer({ video, projection, subtitle }: VRVideoPlayerProp
       if (t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA')) return;
       if (e.key === 'ArrowLeft') {
         e.preventDefault();
-        video.currentTime = Math.max(0, video.currentTime - 5);
+        seekTo(video, Math.max(0, video.currentTime - 5));
       } else if (e.key === 'ArrowRight') {
         e.preventDefault();
-        video.currentTime = Math.min(video.duration || 0, video.currentTime + 5);
+        seekTo(video, Math.min(video.duration || 0, video.currentTime + 5));
       } else if (e.key === ' ' || e.key === 'k') {
         e.preventDefault();
         togglePlayPause();
@@ -345,13 +338,15 @@ export function VRVideoPlayer({ video, projection, subtitle }: VRVideoPlayerProp
               <Glasses className="w-5 h-5" />
             </button>
           )}
-          <button
-            onClick={toggleFullscreen}
-            className="p-2 text-white hover:text-cyan-400 transition-colors"
-            title={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}
-          >
-            {fullscreen ? <Minimize className="w-5 h-5" /> : <Maximize className="w-5 h-5" />}
-          </button>
+          {onToggleFullscreen && (
+            <button
+              onClick={onToggleFullscreen}
+              className="p-2 text-white hover:text-cyan-400 transition-colors"
+              title={fullscreen ? 'Exit fullscreen (F)' : 'Fullscreen (F)'}
+            >
+              {fullscreen ? <Minimize className="w-5 h-5" /> : <Maximize className="w-5 h-5" />}
+            </button>
+          )}
         </div>
       </div>
     </div>

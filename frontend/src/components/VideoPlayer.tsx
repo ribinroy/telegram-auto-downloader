@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, lazy, Suspense, type ReactNode } from 'react';
-import { Captions, Globe } from 'lucide-react';
+import { Captions, Globe, Maximize, Minimize } from 'lucide-react';
 import { useSubtitleTracks } from '../hooks/useMisc';
 import { getSubtitleUrl, type SubtitleSource } from '../api/subtitles';
 import {
@@ -25,6 +25,10 @@ export interface VideoPlayerProps {
 
 const OFF = '';
 
+// TextTrack.mode is the browser's switch, written imperatively (the element
+// is React state, so the write is kept out of the component body).
+const setTrackMode = (t: TextTrack, mode: TextTrackMode) => { t.mode = mode; };
+
 /**
  * One player for every video DownLee shows: the download list, the transfer
  * files modal and the file explorer. A single <video> element carries the
@@ -38,19 +42,30 @@ export function VideoPlayer({ src, name, subtitles, onError, autoPlay = true, ex
   const [aspect, setAspect] = useState<number | undefined>();
   const [manual, setManual] = useState<Projection | null>(() => recallProjection(name));
   const [trackId, setTrackId] = useState<string>(OFF);
-  const [cue, setCue] = useState('');
+  // The cue remembers which track it was read for, so a stale line from the
+  // previous track is never shown after a switch.
+  const [cueFor, setCueFor] = useState<{ track: string; text: string }>({ track: OFF, text: '' });
+  const cue = cueFor.track === trackId ? cueFor.text : '';
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const [fullscreen, setFullscreen] = useState(false);
+  const canFullscreen = typeof document !== 'undefined' && !!document.fullscreenEnabled;
 
   const { data: tracks = [] } = useSubtitleTracks(subtitles ?? null);
   const detected = useMemo(() => detectProjection(name, aspect), [name, aspect]);
   const projection: Projection = manual ?? detected;
   const vr = projection !== 'flat';
 
-  useEffect(() => {
+  // A new file resets the per-file state; done during render (React's
+  // "adjusting state when a prop changes") rather than in an effect, so the
+  // old file's pick never renders for a frame.
+  const fileKey = `${src}\n${name}`;
+  const [seenFile, setSeenFile] = useState(fileKey);
+  if (seenFile !== fileKey) {
+    setSeenFile(fileKey);
     setManual(recallProjection(name));
     setAspect(undefined);
     setTrackId(OFF);
-    setCue('');
-  }, [name, src]);
+  }
 
   const pickProjection = (p: Projection) => {
     const next = p === detected ? null : p;
@@ -69,27 +84,52 @@ export function VideoPlayer({ src, name, subtitles, onError, autoPlay = true, ex
     for (let i = 0; i < list.length; i++) {
       const t = list[i];
       const mine = t.id === `sub-${trackId}` && trackId !== OFF;
-      t.mode = mine ? (vr ? 'hidden' : 'showing') : 'disabled';
+      setTrackMode(t, mine ? (vr ? 'hidden' : 'showing') : 'disabled');
       if (mine) chosen = t;
     }
-    if (!chosen) {
-      setCue('');
-      return;
-    }
+    if (!chosen) return;
+    const track = chosen;
     const read = () => {
-      const cues = chosen!.activeCues;
-      if (!cues) return setCue('');
+      const cues = track.activeCues;
       const parts: string[] = [];
-      for (let i = 0; i < cues.length; i++) {
+      for (let i = 0; cues && i < cues.length; i++) {
         const c = cues[i] as VTTCue;
         parts.push(typeof c.getCueAsHTML === 'function' ? (c.getCueAsHTML().textContent ?? '') : c.text);
       }
-      setCue(parts.join('\n'));
+      setCueFor({ track: trackId, text: parts.join('\n') });
     };
-    read();
-    chosen.addEventListener('cuechange', read);
-    return () => chosen!.removeEventListener('cuechange', read);
+    track.addEventListener('cuechange', read);
+    return () => track.removeEventListener('cuechange', read);
   }, [video, trackId, vr, tracks]);
+
+  // Fullscreen takes the whole player - toolbar included - so the subtitle
+  // and view pickers stay reachable, and the VR canvas resizes with the box.
+  useEffect(() => {
+    const onChange = () => setFullscreen(!!wrapRef.current && document.fullscreenElement === wrapRef.current);
+    document.addEventListener('fullscreenchange', onChange);
+    return () => document.removeEventListener('fullscreenchange', onChange);
+  }, []);
+
+  const toggleFullscreen = () => {
+    const el = wrapRef.current;
+    if (!el) return;
+    if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
+    else void el.requestFullscreen().catch(() => {});
+  };
+
+  useEffect(() => {
+    if (!canFullscreen) return;
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA')) return;
+      if (e.key === 'f' || e.key === 'F') {
+        e.preventDefault();
+        toggleFullscreen();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
 
   const setVideoEl = (el: HTMLVideoElement | null) => {
     videoRef.current = el;
@@ -97,9 +137,9 @@ export function VideoPlayer({ src, name, subtitles, onError, autoPlay = true, ex
   };
 
   return (
-    <div className={className}>
-      {/* Toolbar: view + subtitles. Native controls stay on the flat <video>. */}
-      <div className="flex items-center justify-end gap-2 mb-2 flex-wrap">
+    <div ref={wrapRef} className={`${className ?? ''} ${fullscreen ? 'bg-black flex flex-col h-full w-full' : ''}`}>
+      {/* Toolbar: view + subtitles + fullscreen. Native controls stay on the flat <video>. */}
+      <div className={`flex items-center justify-end gap-2 flex-wrap ${fullscreen ? 'p-2 shrink-0' : 'mb-2'}`}>
         {extraControls}
         {tracks.length > 0 && (
           <label className="flex items-center gap-1.5 text-xs text-slate-300 bg-slate-800/80 rounded-lg px-2 py-1.5" title="Subtitles">
@@ -137,16 +177,26 @@ export function VideoPlayer({ src, name, subtitles, onError, autoPlay = true, ex
             ))}
           </select>
         </label>
+        {canFullscreen && (
+          <button
+            onClick={toggleFullscreen}
+            className={`p-1.5 rounded-lg transition-colors ${fullscreen ? 'bg-cyan-500/20 text-cyan-300' : 'bg-slate-800/80 text-slate-300 hover:text-white'}`}
+            title={fullscreen ? 'Exit fullscreen (F)' : 'Fullscreen (F)'}
+            aria-label={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+          >
+            {fullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
+          </button>
+        )}
       </div>
 
-      <div className="relative bg-black rounded-xl overflow-hidden shadow-2xl">
+      <div className={`relative bg-black overflow-hidden ${fullscreen ? 'flex-1 min-h-0' : 'rounded-xl shadow-2xl'}`}>
         <video
           ref={setVideoEl}
           src={src}
           controls={!vr}
           autoPlay={autoPlay}
           playsInline
-          className={vr ? 'hidden' : 'w-full max-h-[80vh]'}
+          className={vr ? 'hidden' : fullscreen ? 'w-full h-full object-contain' : 'w-full max-h-[80vh]'}
           controlsList="nodownload"
           crossOrigin="anonymous"
           onError={onError}
@@ -169,7 +219,7 @@ export function VideoPlayer({ src, name, subtitles, onError, autoPlay = true, ex
         </video>
 
         {vr && video && (
-          <div className="w-full" style={{ height: '70vh' }}>
+          <div className="w-full" style={{ height: fullscreen ? '100%' : '70vh' }}>
             <Suspense
               fallback={
                 <div className="w-full h-full flex items-center justify-center text-slate-400">
@@ -177,7 +227,7 @@ export function VideoPlayer({ src, name, subtitles, onError, autoPlay = true, ex
                 </div>
               }
             >
-              <VRVideoPlayer video={video} projection={projection} subtitle={cue} />
+              <VRVideoPlayer video={video} projection={projection} subtitle={cue} fullscreen={fullscreen} onToggleFullscreen={canFullscreen ? toggleFullscreen : undefined} />
             </Suspense>
           </div>
         )}

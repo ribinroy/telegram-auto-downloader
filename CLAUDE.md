@@ -788,6 +788,10 @@ rewinds, and the same `TextTrack` feeds both views.
   eye = left half / top half), on three's WebXR layers (left 1, right 2); the
   desktop camera also takes layer 1 so it shows the left eye. Mono sits on
   layer 0.
+- **Fullscreen** is the whole player's (`wrapRef` in `VideoPlayer`), toolbar
+  included, so the subtitle/view pickers stay reachable; the VR overlay's
+  button only mirrors it (`fullscreen`/`onToggleFullscreen` props). `F`
+  toggles it; hidden where `document.fullscreenEnabled` is false (iOS Safari).
 - **WebXR**: `renderer.xr.enabled`, `setAnimationLoop` (not rAF), a Glasses
   button shown only when `navigator.xr.isSessionSupported('immersive-vr')`
   resolves true. Drag (OrbitControls) outside a session, head tracking inside.
