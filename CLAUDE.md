@@ -882,7 +882,9 @@ doesn't have. `backend/vr.py` builds that JSON from the finished downloads;
 - **The key is the credential.** The apps can't do a JWT login, so a 16-char
   url-safe key lives in the `vr_feed` setting (`{key, username,
   include_secured, created_at}`) and sits in the URL: `/vr/<key>/heresphere`
-  and `/vr/<key>/deovr`. Media URLs inside the feed carry a media token
+  and `/vr/<key>/deovr` (a bare `/vr/<key>` answers in HereSphere's format
+  when the request carries its `HereSphere-JSON-Version` header, else
+  DeoVR's). Media URLs inside the feed carry a media token
   minted per response as the key's owner (`mint_media_token`, same `typ:
   'media'` claims the browser uses, `MEDIA_TOKEN_HOURS`), so the stream /
   thumb / subtitle routes need no change, a disabled key stops new feeds at
