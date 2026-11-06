@@ -31,10 +31,11 @@ function LocationProbe() {
   return <output data-testid="location">{loc.pathname}{loc.search}</output>;
 }
 
-type Handlers = { onRetry: ReturnType<typeof vi.fn>; onStop: ReturnType<typeof vi.fn>; onPause: ReturnType<typeof vi.fn>; onResume: ReturnType<typeof vi.fn>; onDelete: ReturnType<typeof vi.fn> };
-
 const renderItem = (download: Download) => {
-  const h: Handlers = { onRetry: vi.fn(), onStop: vi.fn(), onPause: vi.fn(), onResume: vi.fn(), onDelete: vi.fn() };
+  const h = {
+    onRetry: vi.fn<(id: number) => void>(), onStop: vi.fn<(id: string) => void>(), onPause: vi.fn<(id: string) => void>(),
+    onResume: vi.fn<(id: string) => void>(), onDelete: vi.fn<(id: string, deleteFile?: boolean) => void>(),
+  };
   const utils = renderWithClient(<><DownloadItem download={download} {...h} /><LocationProbe /></>, { router: true });
   return { ...utils, ...h };
 };
@@ -155,8 +156,7 @@ describe('DownloadItem - chips and meta', () => {
     expect(screen.getAllByText('bob').length).toBe(2);
   });
 
-  it.each(['youtube.com', 'twitter.com', 'instagram.com', 'tiktok.com', 'reddit.com', 'twitch.tv', 'facebook.com', 'vimeo.com'])
-  ('draws a brand icon for %s', (source) => {
+  it.each(['youtube.com', 'twitter.com', 'instagram.com', 'tiktok.com', 'reddit.com', 'twitch.tv', 'facebook.com', 'vimeo.com'])('draws a brand icon for %s', (source) => {
     const { container } = renderItem(makeDownload({ downloaded_from: source }));
     expect(container.querySelector('svg.w-5.h-5[viewBox]')).not.toBeNull();
   });
@@ -187,7 +187,7 @@ describe('DownloadItem - actions', () => {
     fireEvent.click(tipButton('Pause'));
     expect(onPause).toHaveBeenCalledWith('m1');
     fireEvent.click(tipButton('Stop'));
-    const dialog = screen.getByText('Stop Download?').closest('.fixed')!;
+    const dialog = screen.getByText('Stop Download?').closest('.fixed') as HTMLElement;
     expect(within(dialog).getByText('This will stop the download and discard progress.')).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
     expect(onStop).not.toHaveBeenCalled();

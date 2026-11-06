@@ -102,7 +102,10 @@ const row = (path: string) => document.querySelector(`[data-path="${path}"]`) as
 const rowNames = () => Array.from(document.querySelectorAll('[data-path]')).map(el => el.getAttribute('data-path')!.split('/').pop());
 const loc = () => screen.getByTestId('loc').textContent;
 const decodedLoc = () => decodeURIComponent(loc() ?? '');
-const bar = () => screen.getByText(/selected|ready to|transfers?|Deleting|Moving/, { selector: 'span' }).closest('.rounded-2xl') as HTMLElement;
+const bar = () => document.querySelector('.backdrop-blur-md') as HTMLElement;
+// The bar stays mounted (inert) while it fades out, still showing its last content.
+const barHidden = () => bar().parentElement!.hasAttribute('inert');
+const drawer = () => screen.getByLabelText('Close places').closest('.fixed') as HTMLElement;
 const menuButton = (path: string) => within(row(path)).getByTitle('Actions');
 const openMenu = (path: string) => {
   fireEvent.click(menuButton(path), { clientX: 10, clientY: 10 });
@@ -140,7 +143,8 @@ describe('ExplorerPage - the folder in the URL', () => {
     expect(rowNames()).toEqual(['Docs', 'clip.mp4', 'notes.txt', 'photo.jpg']);
     // The desktop sidebar and the phone drawer both list the places
     expect(screen.getAllByText('disk')).toHaveLength(2);
-    expect(screen.getAllByRole('button', { name: 'Deleted files' })).toHaveLength(2);
+    expect(screen.getAllByText('Deleted files')).toHaveLength(2);
+    expect(barHidden()).toBe(true);
     expect(screen.queryByText('read-only mode')).toBeNull();
     expect(screen.getByText('600.00 B free of 1000.00 B')).toBeInTheDocument();
   });
@@ -156,7 +160,7 @@ describe('ExplorerPage - the folder in the URL', () => {
     await renderPage(`/files?path=${X}&select=${X}/photo.jpg`);
     expect(row(`${X}/photo.jpg`)).toHaveClass('bg-cyan-500/15');
     expect(screen.getByText('1 selected')).toBeInTheDocument();
-    expect(decodedLoc()).toBe(`/files?path=${X}`);
+    await waitFor(() => expect(decodedLoc()).toBe(`/files?path=${X}`));
     await waitFor(() => expect(scroll).toHaveBeenCalledWith({ block: 'center' }));
   });
 
@@ -223,14 +227,13 @@ describe('ExplorerPage - navigation', () => {
 
   it('the places list navigates, and the phone drawer closes behind it', async () => {
     await renderPage();
-    const drawer = screen.getByRole('button', { name: 'Close places' }).closest('.fixed') as HTMLElement;
-    expect(drawer).toHaveAttribute('inert');
+    expect(drawer()).toHaveAttribute('inert');
     fireEvent.click(screen.getByRole('button', { name: 'Open places' }));
-    expect(drawer).not.toHaveAttribute('inert');
+    expect(drawer()).not.toHaveAttribute('inert');
     expect(document.body.style.overflow).toBe('hidden');
-    fireEvent.click(within(drawer).getByText('Home').closest('button')!);
+    fireEvent.click(within(drawer()).getByText('Home').closest('button')!);
     await waitFor(() => expect(decodedLoc()).toBe('/files?path=/home/hs'));
-    expect(drawer).toHaveAttribute('inert');
+    expect(drawer()).toHaveAttribute('inert');
     expect(document.body.style.overflow).toBe('');
   });
 
@@ -239,13 +242,15 @@ describe('ExplorerPage - navigation', () => {
     fireEvent.click(row(`${X}/Docs`), { ctrlKey: true });
     fireEvent.click(screen.getByRole('button', { name: 'Open places' }));
     key('Escape');
-    expect(screen.getByRole('button', { name: 'Close places' }).closest('.fixed')).toHaveAttribute('inert');
+    expect(drawer()).toHaveAttribute('inert');
     expect(screen.getByText('1 selected')).toBeInTheDocument();
+    expect(barHidden()).toBe(false);
     key('Escape');
-    expect(screen.queryByText('1 selected')).toBeNull();
+    expect(barHidden()).toBe(true);
     fireEvent.click(screen.getByRole('button', { name: 'Open places' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Close places' }));
-    expect(screen.getByRole('button', { name: 'Close places' }).closest('.fixed')).toHaveAttribute('inert');
+    expect(drawer()).not.toHaveAttribute('inert');
+    fireEvent.click(screen.getByLabelText('Close places'));
+    expect(drawer()).toHaveAttribute('inert');
   });
 });
 
@@ -299,8 +304,9 @@ describe('ExplorerPage - click opens, press-and-hold selects', () => {
     expect(screen.getByText('2 selected')).toBeInTheDocument();
     expect(decodedLoc()).toBe(`/files?path=${X}`);
     fireEvent.click(row(`${X}/Docs`));
+    expect(screen.getByText('1 selected')).toBeInTheDocument();
     fireEvent.click(row(`${X}/clip.mp4`));
-    expect(screen.queryByText(/selected/)).toBeNull();
+    expect(barHidden()).toBe(true);
     // Out of selection mode: a click opens again
     fireEvent.click(row(`${X}/photo.jpg`));
     expect(screen.getByTestId('preview')).toBeInTheDocument();
@@ -313,10 +319,12 @@ describe('ExplorerPage - click opens, press-and-hold selects', () => {
     expect(screen.getByText('3 selected')).toBeInTheDocument();
     expect(row(`${X}/clip.mp4`)).toHaveClass('bg-cyan-500/15');
     expect(row(`${X}/photo.jpg`)).not.toHaveClass('bg-cyan-500/15');
-    // Shift without an anchor falls back to a toggle
+    // The anchor outlives a Clear, so the next shift-click ranges from it again
     fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
-    fireEvent.click(row(`${X}/photo.jpg`), { shiftKey: true, ctrlKey: true });
-    expect(screen.getByText('1 selected')).toBeInTheDocument();
+    expect(barHidden()).toBe(true);
+    fireEvent.click(row(`${X}/photo.jpg`), { shiftKey: true });
+    expect(screen.getByText('4 selected')).toBeInTheDocument();
+    expect(barHidden()).toBe(false);
   });
 
   it('Ctrl+A selects everything, Escape and Clear drop it, and the bar sums the sizes', async () => {
@@ -325,9 +333,10 @@ describe('ExplorerPage - click opens, press-and-hold selects', () => {
     expect(screen.getByText('4 selected')).toBeInTheDocument();
     expect(screen.getByText('· 3.50 KB')).toBeInTheDocument();
     key('Escape');
-    expect(screen.queryByText('4 selected')).toBeNull();
+    expect(barHidden()).toBe(true);
     // The bar keeps its last content while it fades out
-    expect(screen.getByText('4 selected', { selector: 'span' })).toBeInTheDocument();
+    expect(within(bar()).getByText('4 selected')).toBeInTheDocument();
+    expect(row(`${X}/Docs`)).not.toHaveClass('bg-cyan-500/15');
   });
 
   it('shortcuts are ignored while typing in a text box', async () => {
@@ -351,7 +360,7 @@ describe('ExplorerPage - clipboard', () => {
     expect(screen.getByText('2 item(s) ready to copy')).toBeInTheDocument();
     ctrl('v');
     await waitFor(() => expect(files.transferPaths).toHaveBeenCalledWith([`${X}/clip.mp4`, `${X}/notes.txt`], X, false));
-    await waitFor(() => expect(files.ackTransfers).toHaveBeenCalledWith(['j1']));
+    await waitFor(() => expect(files.ackTransfers).toHaveBeenCalledWith(['j1'], expect.anything()));
     expect(screen.getByText('2 item(s) ready to copy')).toBeInTheDocument();
     expect(toasts.titles()).toEqual([]);
   });
@@ -388,9 +397,9 @@ describe('ExplorerPage - clipboard', () => {
     await renderPage();
     fireEvent.click(row(`${X}/photo.jpg`), { ctrlKey: true });
     ctrl('c');
-    fireEvent.click(screen.getByRole('button', { name: 'Open places' }));
-    fireEvent.click(screen.getAllByText('Home')[1].closest('button')!);
     vi.mocked(files.listFiles).mockImplementation(async (path) => path === '/home/hs' ? listing('/home/hs', [], { writable: false }) : LISTINGS[path ?? '']);
+    fireEvent.click(screen.getByRole('button', { name: 'Open places' }));
+    fireEvent.click(within(drawer()).getByText('Home').closest('button')!);
     await screen.findByText('This folder is empty');
     expect(screen.getByRole('button', { name: 'Paste here' })).toBeDisabled();
     ctrl('v');
@@ -494,17 +503,18 @@ describe('ExplorerPage - delete', () => {
     expect(screen.getByText('Move to trash?')).toBeInTheDocument();
     expect(screen.getByText('2 item(s) will be moved to .downlee-trash on the same disk, where you can still recover them.')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Move to trash' }));
-    expect(files.deletePaths).toHaveBeenCalledWith([`${X}/clip.mp4`, `${X}/notes.txt`], false);
+    await waitFor(() => expect(files.deletePaths).toHaveBeenCalledWith([`${X}/clip.mp4`, `${X}/notes.txt`], false));
     expect(screen.getByRole('status')).toHaveTextContent('Moving 2 item(s) to the trash…');
-    expect(screen.queryByText('2 selected')).toBeNull();
+    expect(within(bar()).queryByText('2 selected')).toBeNull();
+    expect(barHidden()).toBe(false);
     // A second delete is refused while one runs
     key('Delete');
     expect(screen.queryByText('Move to trash?')).toBeNull();
     await act(async () => { pending.resolve({ results: [{ path: `${X}/clip.mp4`, trashed: true }, { path: `${X}/notes.txt`, trashed: true }], errors: [] }); });
     await waitFor(() => expect(toasts.titles()).toEqual(['Moved to trash']));
     expect(toasts.toasts[0].message).toBe('2 item(s), in the trash folder on this disk');
-    expect(screen.queryByRole('status')).toBeNull();
-    expect(screen.queryByText('2 selected')).toBeNull();
+    expect(barHidden()).toBe(true);
+    expect(row(`${X}/clip.mp4`)).not.toHaveClass('bg-cyan-500/15');
   });
 
   it('Shift+Delete deletes for good, with its own wording', async () => {
@@ -515,7 +525,7 @@ describe('ExplorerPage - delete', () => {
     expect(screen.getByText('Delete permanently?')).toBeInTheDocument();
     expect(screen.getByText('1 item(s) will be erased from the disk. This cannot be undone.')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Delete forever' }));
-    expect(files.deletePaths).toHaveBeenCalledWith([`${X}/clip.mp4`], true);
+    await waitFor(() => expect(files.deletePaths).toHaveBeenCalledWith([`${X}/clip.mp4`], true));
     await waitFor(() => expect(toasts.titles()).toEqual(['Deleted']));
     expect(toasts.toasts[0].message).toBe('1 item(s)');
   });
@@ -553,7 +563,7 @@ describe('ExplorerPage - delete', () => {
       fireEvent.click(row(`${X}/clip.mp4`), { ctrlKey: true });
       key('Delete');
       fireEvent.click(screen.getByRole('button', { name: 'Move to trash' }));
-      await waitFor(() => expect(screen.queryByRole('status')).toBeNull());
+      await waitFor(() => expect(barHidden()).toBe(true));
       key('Escape');
     };
     await run();
@@ -601,8 +611,8 @@ describe('ExplorerPage - the VPS as a drive', () => {
     fireEvent.click(del);
     expect(screen.getByText('Delete on the VPS?')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Delete forever' }));
-    expect(files.deletePaths).toHaveBeenCalledWith([`${VPS}/far.mkv`], true);
     expect(screen.getByRole('status')).toHaveTextContent('Deleting 1 item(s)…');
+    await waitFor(() => expect(files.deletePaths).toHaveBeenCalledWith([`${VPS}/far.mkv`], true));
     await waitFor(() => expect(toasts.titles()).toEqual(['Deleted']));
   });
 
@@ -721,7 +731,7 @@ describe('ExplorerPage - the transfers bar', () => {
     expect(pill).toHaveTextContent('Copied Movies to Films');
     expect(pill.querySelector('.text-yellow-400')).not.toBeNull();
     fireEvent.click(pill);
-    await waitFor(() => expect(files.ackTransfers).toHaveBeenCalledWith(['j1']));
+    await waitFor(() => expect(files.ackTransfers).toHaveBeenCalledWith(['j1'], expect.anything()));
     fireEvent.click(screen.getByRole('button', { name: 'close-transfers' }));
     // Dropped from the bar at once, before the refetch lands
     expect(screen.queryByTitle('Show details')).toBeNull();
@@ -741,7 +751,7 @@ describe('ExplorerPage - the transfers bar', () => {
     act(() => { client.setQueryData(qk.fileTransfers(), { transfers: [job({ status: 'done', finished_at: 160, done_bytes: 4000, done_files: 3 })] }); });
     await waitFor(() => expect(toasts.titles()).toEqual(['Copied Movies to Films']));
     expect(toasts.toasts[0]).toMatchObject({ type: 'success', message: '3.91 KB in 3 file(s)' });
-    expect(files.ackTransfers).toHaveBeenCalledWith(['j1']);
+    expect(files.ackTransfers).toHaveBeenCalledWith(['j1'], expect.anything());
     await waitFor(() => expect(vi.mocked(files.listFiles).mock.calls.length).toBeGreaterThan(listCalls));
     act(() => { toasts.toasts[0].onClick?.(); });
     expect(screen.getByTestId('transfers')).toBeInTheDocument();
@@ -837,12 +847,14 @@ describe('ExplorerPage - view, sort, filter and search', () => {
 
   it('starts from the remembered preferences, ignoring a corrupt entry', async () => {
     localStorage.setItem('explorer_prefs', JSON.stringify({ view: 'grid', sortKey: 'size', sortAsc: false }));
-    await renderPage();
-    expect(document.querySelectorAll('img')).toHaveLength(2);
+    const { unmount } = await renderPage(`/files?path=${X}`, null);
+    await waitFor(() => expect(document.querySelectorAll('img')).toHaveLength(2));
     expect(rowNames()).toEqual(['Docs', 'clip.mp4', 'photo.jpg', 'notes.txt']);
+    unmount();
     localStorage.setItem('explorer_prefs', '{not json');
     await renderPage();
-    expect(screen.getAllByTitle('Grid view')).toHaveLength(1);
+    expect(screen.getByTitle('Grid view')).toBeInTheDocument();
+    expect(rowNames()).toEqual(['Docs', 'clip.mp4', 'notes.txt', 'photo.jpg']);
   });
 
   it('the list header sorts by size and modified, flipping on a second click, folders always first', async () => {
@@ -860,10 +872,10 @@ describe('ExplorerPage - view, sort, filter and search', () => {
 
   it('the phone overflow menu sorts by type', async () => {
     await renderPage();
-    fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
+    fireEvent.click(screen.getByTitle('View and folder actions'));
     fireEvent.click(screen.getByRole('button', { name: 'Sort by type' }));
     expect(rowNames()).toEqual(['Docs', 'photo.jpg', 'notes.txt', 'clip.mp4']);
-    fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
+    fireEvent.click(screen.getByTitle('View and folder actions'));
     expect(screen.getByRole('button', { name: 'Sort by type (A-Z)' })).toHaveClass('text-cyan-400');
   });
 
