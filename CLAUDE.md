@@ -74,7 +74,7 @@ Main Thread
 |  |  |- helpers.py                 # Misc helpers (candidate_file_paths)
 |  |  '- routes/                    # Per-domain Flask route mixins (auth, downloads, url,
 |  |                                #   analytics, settings, vps_settings, torrent, vps_browse, media,
-|  |                                #   rename_rules, files, speedtest)
+|  |                                #   rename_rules, files, speedtest, vr)
 |  |- telegram_handler/__init__.py  # Telethon download handler (~436 lines)
 |  |- ytdlp_handler/__init__.py     # yt-dlp subprocess handler (~604 lines)
 |  |- vps_handler/__init__.py       # SFTP download handler + hourly autoSync
@@ -90,6 +90,7 @@ Main Thread
 |  |- download_queue.py             # Concurrency limits + the waiting line (QueueRunner thread)
 |  |- file_meta.py                  # Video metadata extraction (ffprobe)
 |  |- speedtest.py                  # Server -> internet speed test (LibreSpeed servers, own thread)
+|  |- vr.py                         # HereSphere/DeoVR library feed: key, projection guess, the two JSON shapes
 |  |- subtitles.py                  # Subtitle tracks (sidecar + embedded) served as WebVTT
 |  |- browser_downloader.py         # Playwright fallback for yt-dlp
 |  '- metrics/__init__.py           # Prometheus counters
@@ -124,6 +125,7 @@ Main Thread
 |        |                          #   ContextMenu, PreviewModal, PropertiesModal
 |        |- LoginPage.tsx           # JWT auth login
 |        |- StatsHeader.tsx         # Stats bar
+|        |- VrSettings.tsx          # Settings → VR headset: feed key + the two URLs
 |        |- VideoPlayerModal.tsx    # Modal chrome around VideoPlayer
 |        |- VideoPlayer.tsx         # The player: one <video>, flat/VR switch, subtitle + view pickers
 |        |- VRVideoPlayer.tsx       # Three.js 180/360 mono/SBS/TB renderer, WebXR, subtitle plane
@@ -147,6 +149,7 @@ Main Thread
 - `deleted_at` (soft delete), `file_deleted` (physical file removed)
 - `file_count` (files in a VPS folder pull - e.g. a multi-file torrent - set when the transfer plans its work, backfilled by the `check_files` job for older pulls; NULL for a single file)
 - `file_status` (JSON object `{path: 'paused'|'skipped'}` - per-file decisions in a VPS folder pull, paths relative to the pull's top folder; a file with no entry is fetched normally, and every run - resume, retry, queue start - honours it. Replaced the older `paused_files` list column; `_run_migrations()` copies those lists across as `{path: 'paused'}`, and the old column is left unused)
+- `vr_projection` (a manual VR projection pick from the web player - 'flat', '180-sbs', '360-mono', ... - shared with the headset feed; NULL = guess from the filename)
 - `queue_position` (rank in the download queue while `waiting` *or* `downloading` - running ones keep a rank so a reorder can put a waiting one ahead of them; cleared when it leaves both), `format_id` (the yt-dlp format picked, so a queued or resumed download fetches that quality)
 - `created_at`, `updated_at`
 
@@ -867,6 +870,51 @@ rewinds, and the same `TextTrack` feeds both views.
   the cue text is drawn on a canvas plane parented to the camera, so it stays
   in front of you however you turn, headset included. `backend/subtitles.py`
   owns it; `web_app/helpers.subtitle_response()` is shared by both route pairs.
+
+## VR headset feed (HereSphere / DeoVR)
+
+Settings → VR headset. HereSphere and DeoVR have a "Web stream" box: given a
+URL they fetch JSON describing a library and play the files themselves with
+the headset's hardware decoder - what an 8K HEVC file needs and a browser
+doesn't have. `backend/vr.py` builds that JSON from the finished downloads;
+`web_app/routes/vr.py` serves it.
+
+- **The key is the credential.** The apps can't do a JWT login, so a 16-char
+  url-safe key lives in the `vr_feed` setting (`{key, username,
+  include_secured, created_at}`) and sits in the URL: `/vr/<key>/heresphere`
+  and `/vr/<key>/deovr`. Media URLs inside the feed carry a media token
+  minted per response as the key's owner (`mint_media_token`, same `typ:
+  'media'` claims the browser uses, `MEDIA_TOKEN_HOURS`), so the stream /
+  thumb / subtitle routes need no change, a disabled key stops new feeds at
+  once, and "sign out everywhere" (token_version) kills every token already
+  handed out. A bad key answers 401 with the app's own denied shape
+  (`access: -1` / `authorized: '-1'`) so the headset shows a message, not a
+  spinner. `GET/POST /api/settings/vr` (`{action: regenerate|disable}` or
+  `{include_secured}`); secured sources are out unless the key was made to
+  include them.
+- **Two formats, one library.** Field names are from DeoVR's app doc and
+  XBVR's HereSphere implementation (the de-facto reference; the spec isn't
+  published), and the tests pin them. HereSphere: `{access, library:[{name,
+  list:[urls]}]}` + per video `projection` (perspective / equirectangular /
+  equirectangular360 / fisheye), `stereo`, `fov`, `lens` (Linear / MKX200 /
+  MKX220 / VRCA220), **`duration` in ms**, `media[].sources[]`,
+  `subtitles[{name, language, url}]` (the WebVTT routes), `tags`, every
+  `write*` false; the response carries `HereSphere-JSON-Version: 1`. DeoVR:
+  `{scenes:[{name, list:[{title, videoLength (s), thumbnailUrl,
+  video_url}]}], authorized}` + per video `encodings[0].videoSources`,
+  `screenType` (flat / dome / sphere / fisheye / mkx200 / rf52),
+  `stereoMode` (sbs / tb / off), `is3d` - and **no subtitle field**. Groups:
+  All videos · VR · one per source. Only finished single-file videos still on
+  disk (`library_downloads`); folder pulls are left out.
+- **Projection is shared with the web player.** `detect_projection` is a
+  port of `utils/vr.ts` plus the lens tags the web player can't render
+  (MKX200/220, VRCA220, RF52, FISHEYE190 → `fisheye` with the lens's fov).
+  A manual pick in the player is saved to **`downloads.vr_projection`**
+  (`GET/PUT /api/downloads/<id>/projection`, optimistic in
+  `useSaveDownloadProjection`) and wins over the guess in both the player
+  and the feed; an explorer path has no row, so it keeps the browser-only
+  memory. Absolute URLs honour `X-Forwarded-Proto/Host`.
+- PLAY'A and players without a web library read SMB/DLNA, not this feed.
 
 ## The VPS as an explorer drive
 

@@ -237,3 +237,13 @@ def test_projection_pick_is_shared_with_the_feed(client, db, auth, library):
     assert client.put(f'/api/downloads/{did}/projection', json={'projection': None}, headers=auth).status_code == 200
     assert client.get(f"/vr/{s['key']}/deovr/{did}").get_json()['screenType'] == 'flat'
     assert client.put('/api/downloads/999999/projection', json={'projection': 'flat'}, headers=auth).status_code == 404
+
+
+def test_bare_key_url_answers_in_the_asking_apps_format(client, db, auth, library):
+    s = _enable(client, auth)
+    hs = client.get(f"/vr/{s['key']}", headers={'HereSphere-JSON-Version': '1'})
+    assert hs.status_code == 200 and 'library' in hs.get_json()
+    assert hs.headers['HereSphere-JSON-Version'] == '1'
+    deo = client.get(f"/vr/{s['key']}")
+    assert deo.status_code == 200 and 'scenes' in deo.get_json()
+    assert client.get('/vr/nope').status_code == 401

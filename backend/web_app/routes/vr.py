@@ -64,6 +64,17 @@ class VrRoutesMixin:
             resp.headers['Cache-Control'] = 'no-store'
             return resp
 
+        # --- the bare key URL --------------------------------------------------
+
+        @app.route("/vr/<key>", methods=["GET", "POST", "HEAD"])
+        def vr_library_any(key):
+            """Typed without a suffix: HereSphere announces itself with its
+            JSON-version header, so it gets its format; anything else gets
+            DeoVR's, which is also what DeoVR requests verbatim."""
+            if request.headers.get('HereSphere-JSON-Version'):
+                return vr_heresphere_library(key)
+            return vr_deovr_library(key)
+
         # --- HereSphere -------------------------------------------------------
 
         @app.route("/vr/<key>/heresphere", methods=["GET", "POST", "HEAD"])
