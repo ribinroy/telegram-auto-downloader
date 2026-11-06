@@ -1,13 +1,14 @@
 import { useRef, useEffect, useState, useCallback } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { Play, Pause, Glasses, Maximize, Minimize } from 'lucide-react';
-import { splitProjection, wrapSubtitle, type Projection } from '../utils/vr';
+import { Play, Pause, Glasses, Maximize, Minimize, Volume2, Volume1, VolumeX } from 'lucide-react';
+import { splitProjection, wrapSubtitle, fitFlatPlane, type Projection } from '../utils/vr';
 
 interface VRVideoPlayerProps {
   /** The player's own <video>, kept playing across flat/VR switches. */
   video: HTMLVideoElement;
-  projection: Exclude<Projection, 'flat'>;
+  /** A sphere for 180°/360°, or - with the custom player on - a flat plane. */
+  projection: Projection;
   /** Current subtitle cue, drawn on a plane in front of the viewer. */
   subtitle: string;
   /** Fullscreen is the parent player's (toolbar included); the overlay only mirrors it. */
@@ -22,10 +23,21 @@ interface VRVideoPlayerProps {
 // Imperative <video> writes live here: the element arrives as a prop, and the
 // React compiler's lint treats a write to a prop as a mutation.
 const seekTo = (v: HTMLVideoElement, t: number) => { v.currentTime = t; };
+const setVolume = (v: HTMLVideoElement, vol: number) => { v.volume = vol; };
+const setMuted = (v: HTMLVideoElement, muted: boolean) => { v.muted = muted; };
+const setRate = (v: HTMLVideoElement, rate: number) => { v.playbackRate = rate; };
 
 const LEFT = 1;
 const RIGHT = 2;
 const RADIUS = 500;
+const FOV = 75;
+// A flat video is a plane this far in front of a fixed camera, sized to fit
+// the view (`fitFlatPlane`) - the renderer's `object-fit: contain`. Nearer
+// than the sphere, further than the subtitle plane (20, parented to the
+// camera, drawn on top regardless).
+const FLAT_DISTANCE = 30;
+
+export const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 2];
 
 function eyeGeometry(layout: '180' | '360', stereo: 'mono' | 'sbs' | 'tb', eye: 'left' | 'right') {
   const phiLength = layout === '180' ? Math.PI : Math.PI * 2;
@@ -84,16 +96,24 @@ export function VRVideoPlayer({ video, projection, subtitle, fullscreen = false,
     renderer: THREE.WebGLRenderer;
     scene: THREE.Scene;
     camera: THREE.PerspectiveCamera;
+    controls: OrbitControls;
     texture: THREE.VideoTexture;
     subPlane: THREE.Mesh;
     subCanvas: HTMLCanvasElement;
     subTexture: THREE.CanvasTexture;
+    /** Resize the flat plane (if any) to the current view and video shape. */
+    fitFlat: () => void;
   } | null>(null);
   const meshesRef = useRef<THREE.Mesh[]>([]);
+  const flatRef = useRef<THREE.Mesh | null>(null);
+  const flat = projection === 'flat';
 
   const [isPlaying, setIsPlaying] = useState(!video.paused);
   const [currentTime, setCurrentTime] = useState(video.currentTime);
   const [duration, setDuration] = useState(video.duration || 0);
+  const [volume, setVolumeState] = useState(video.volume);
+  const [muted, setMutedState] = useState(video.muted);
+  const [rate, setRateState] = useState(video.playbackRate || 1);
   const [xrSupported, setXrSupported] = useState(false);
   const [inXr, setInXr] = useState(false);
 
@@ -103,7 +123,7 @@ export function VRVideoPlayer({ video, projection, subtitle, fullscreen = false,
     if (!container) return;
 
     const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(75, container.clientWidth / container.clientHeight, 0.1, 1000);
+    const camera = new THREE.PerspectiveCamera(FOV, container.clientWidth / container.clientHeight, 0.1, 1000);
     camera.position.set(0, 0, 0.1);
     camera.layers.enable(LEFT);
     scene.add(camera);
@@ -138,12 +158,22 @@ export function VRVideoPlayer({ video, projection, subtitle, fullscreen = false,
     controls.enablePan = false;
     controls.rotateSpeed = -0.3;
     controls.target.set(0, 0, 0);
+    // The straight-ahead pose, restored when a flat plane replaces the sphere.
+    controls.saveState();
 
     // setAnimationLoop (not rAF) is what lets WebXR drive the frame rate.
     renderer.setAnimationLoop(() => {
-      if (!renderer.xr.isPresenting) controls.update();
+      if (!renderer.xr.isPresenting && controls.enabled) controls.update();
       renderer.render(scene, camera);
     });
+
+    const fitFlat = () => {
+      const plane = flatRef.current;
+      if (!plane) return;
+      const videoAspect = video.videoWidth && video.videoHeight ? video.videoWidth / video.videoHeight : 16 / 9;
+      const { width, height } = fitFlatPlane(FOV, FLAT_DISTANCE, camera.aspect, videoAspect);
+      plane.scale.set(width, height, 1);
+    };
 
     const resize = () => {
       const w = container.clientWidth;
@@ -152,11 +182,14 @@ export function VRVideoPlayer({ video, projection, subtitle, fullscreen = false,
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
       renderer.setSize(w, h);
+      fitFlat();
     };
     const ro = new ResizeObserver(resize);
     ro.observe(container);
+    // The plane's shape is the video's, known once the metadata is in.
+    video.addEventListener('loadedmetadata', fitFlat);
 
-    sceneRef.current = { renderer, scene, camera, texture, subPlane, subCanvas, subTexture };
+    sceneRef.current = { renderer, scene, camera, controls, texture, subPlane, subCanvas, subTexture, fitFlat };
 
     let cancelled = false;
     if (navigator.xr?.isSessionSupported) {
@@ -168,6 +201,7 @@ export function VRVideoPlayer({ video, projection, subtitle, fullscreen = false,
     return () => {
       cancelled = true;
       ro.disconnect();
+      video.removeEventListener('loadedmetadata', fitFlat);
       renderer.setAnimationLoop(null);
       const session = renderer.xr.getSession();
       if (session) session.end().catch(() => {});
@@ -177,6 +211,7 @@ export function VRVideoPlayer({ video, projection, subtitle, fullscreen = false,
         (m.material as THREE.Material).dispose();
       }
       meshesRef.current = [];
+      flatRef.current = null;
       subPlane.geometry.dispose();
       subMat.dispose();
       subTexture.dispose();
@@ -187,7 +222,7 @@ export function VRVideoPlayer({ video, projection, subtitle, fullscreen = false,
     };
   }, [video]);
 
-  // The sphere(s) follow the projection; everything else stays.
+  // The sphere(s) - or the flat plane - follow the projection; everything else stays.
   useEffect(() => {
     const s = sceneRef.current;
     if (!s) return;
@@ -196,18 +231,32 @@ export function VRVideoPlayer({ video, projection, subtitle, fullscreen = false,
       m.geometry.dispose();
       (m.material as THREE.Material).dispose();
     }
+    flatRef.current = null;
     const { layout, stereo } = splitProjection(projection);
-    if (layout === 'flat') return;
     const meshes: THREE.Mesh[] = [];
-    if (stereo === 'mono') {
-      const mesh = new THREE.Mesh(eyeGeometry(layout, 'mono', 'left'), new THREE.MeshBasicMaterial({ map: s.texture }));
-      meshes.push(mesh);
+    if (layout === 'flat') {
+      // A unit plane straight ahead, scaled to fit by fitFlat. Dragging
+      // a flat picture around makes no sense, so the camera is pinned
+      // back to its straight-ahead pose - a sphere may have left it turned.
+      const plane = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ map: s.texture }));
+      plane.position.set(0, 0, -FLAT_DISTANCE);
+      meshes.push(plane);
+      flatRef.current = plane;
+      s.controls.reset();
+      s.controls.enabled = false;
+      s.fitFlat();
     } else {
-      const left = new THREE.Mesh(eyeGeometry(layout, stereo, 'left'), new THREE.MeshBasicMaterial({ map: s.texture }));
-      left.layers.set(LEFT);
-      const right = new THREE.Mesh(eyeGeometry(layout, stereo, 'right'), new THREE.MeshBasicMaterial({ map: s.texture }));
-      right.layers.set(RIGHT);
-      meshes.push(left, right);
+      s.controls.enabled = true;
+      if (stereo === 'mono') {
+        const mesh = new THREE.Mesh(eyeGeometry(layout, 'mono', 'left'), new THREE.MeshBasicMaterial({ map: s.texture }));
+        meshes.push(mesh);
+      } else {
+        const left = new THREE.Mesh(eyeGeometry(layout, stereo, 'left'), new THREE.MeshBasicMaterial({ map: s.texture }));
+        left.layers.set(LEFT);
+        const right = new THREE.Mesh(eyeGeometry(layout, stereo, 'right'), new THREE.MeshBasicMaterial({ map: s.texture }));
+        right.layers.set(RIGHT);
+        meshes.push(left, right);
+      }
     }
     meshes.forEach(m => s.scene.add(m));
     meshesRef.current = meshes;
@@ -231,17 +280,23 @@ export function VRVideoPlayer({ video, projection, subtitle, fullscreen = false,
     const onPause = () => setIsPlaying(false);
     const onTime = () => setCurrentTime(video.currentTime);
     const onMeta = () => setDuration(video.duration || 0);
+    const onVolume = () => { setVolumeState(video.volume); setMutedState(video.muted); };
+    const onRate = () => setRateState(video.playbackRate || 1);
     video.addEventListener('play', onPlay);
     video.addEventListener('pause', onPause);
     video.addEventListener('timeupdate', onTime);
     video.addEventListener('loadedmetadata', onMeta);
     video.addEventListener('durationchange', onMeta);
+    video.addEventListener('volumechange', onVolume);
+    video.addEventListener('ratechange', onRate);
     return () => {
       video.removeEventListener('play', onPlay);
       video.removeEventListener('pause', onPause);
       video.removeEventListener('timeupdate', onTime);
       video.removeEventListener('loadedmetadata', onMeta);
       video.removeEventListener('durationchange', onMeta);
+      video.removeEventListener('volumechange', onVolume);
+      video.removeEventListener('ratechange', onRate);
     };
   }, [video]);
 
@@ -252,6 +307,21 @@ export function VRVideoPlayer({ video, projection, subtitle, fullscreen = false,
 
   const handleSeek = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     seekTo(video, parseFloat(e.target.value));
+  }, [video]);
+
+  const toggleMute = useCallback(() => {
+    setMuted(video, !video.muted);
+  }, [video]);
+
+  const handleVolume = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const v = parseFloat(e.target.value);
+    setVolume(video, v);
+    // Dragging the slider up is "I want to hear it", mute or not.
+    if (v > 0 && video.muted) setMuted(video, false);
+  }, [video]);
+
+  const handleRate = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
+    setRate(video, parseFloat(e.target.value));
   }, [video]);
 
   const enterXr = useCallback(async () => {
@@ -275,7 +345,7 @@ export function VRVideoPlayer({ video, projection, subtitle, fullscreen = false,
     sceneRef.current?.renderer.xr.getSession()?.end().catch(() => {});
   }, []);
 
-  // Space and arrows - the flat view's native controls do this themselves.
+  // Space, arrows and M - the flat view's native controls do this themselves.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
@@ -289,11 +359,14 @@ export function VRVideoPlayer({ video, projection, subtitle, fullscreen = false,
       } else if (e.key === ' ' || e.key === 'k') {
         e.preventDefault();
         togglePlayPause();
+      } else if (e.key === 'm' || e.key === 'M') {
+        e.preventDefault();
+        toggleMute();
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [video, togglePlayPause]);
+  }, [video, togglePlayPause, toggleMute]);
 
   const formatTime = (seconds: number) => {
     const h = Math.floor(seconds / 3600);
@@ -302,9 +375,16 @@ export function VRVideoPlayer({ video, projection, subtitle, fullscreen = false,
     return (h ? `${h}:${m.toString().padStart(2, '0')}` : `${m}`) + `:${s.toString().padStart(2, '0')}`;
   };
 
+  const silent = muted || volume === 0;
+  const VolumeIcon = silent ? VolumeX : volume < 0.5 ? Volume1 : Volume2;
+
   return (
     <div className="relative w-full h-full bg-black">
-      <div ref={containerRef} className="w-full h-full cursor-grab active:cursor-grabbing" onDoubleClick={togglePlayPause} />
+      <div
+        ref={containerRef}
+        className={`w-full h-full ${flat ? '' : 'cursor-grab active:cursor-grabbing'}`}
+        onDoubleClick={togglePlayPause}
+      />
 
       {/* Overlay controls */}
       <div className="absolute bottom-0 left-0 right-0 p-3 sm:p-4 bg-gradient-to-t from-black/80 to-transparent">
@@ -329,6 +409,37 @@ export function VRVideoPlayer({ video, projection, subtitle, fullscreen = false,
             className="flex-1 h-1 accent-cyan-400"
             aria-label="Seek"
           />
+          <div className="flex items-center gap-1 group">
+            <button
+              onClick={toggleMute}
+              className="p-2 text-white hover:text-cyan-400 transition-colors"
+              title={silent ? 'Unmute (M)' : 'Mute (M)'}
+              aria-label={silent ? 'Unmute' : 'Mute'}
+            >
+              <VolumeIcon className="w-5 h-5" />
+            </button>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={muted ? 0 : volume}
+              onChange={handleVolume}
+              className="w-0 group-hover:w-16 group-focus-within:w-16 sm:w-16 h-1 accent-cyan-400 transition-[width]"
+              aria-label="Volume"
+            />
+          </div>
+          <select
+            value={String(rate)}
+            onChange={handleRate}
+            className="bg-transparent text-white text-xs sm:text-sm outline-none cursor-pointer"
+            title="Playback speed"
+            aria-label="Playback speed"
+          >
+            {(PLAYBACK_RATES.includes(rate) ? PLAYBACK_RATES : [...PLAYBACK_RATES, rate].sort((a, b) => a - b)).map(r => (
+              <option key={r} value={String(r)} className="bg-slate-900">{r}×</option>
+            ))}
+          </select>
           {xrSupported && (
             <button
               onClick={inXr ? exitXr : enterXr}

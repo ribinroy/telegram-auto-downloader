@@ -97,6 +97,43 @@ export function rememberProjection(name: string, projection: Projection | null) 
   }
 }
 
+// "Always use the custom player": with it on, a flat video is drawn on a plane
+// by the three.js renderer instead of the browser's own <video>, so every file
+// opens in the same player with the same controls. A per-browser preference,
+// like the projection memory - it is about this screen, not the file.
+const CUSTOM_KEY = 'downlee:player:custom';
+
+export function recallCustomPlayer(): boolean {
+  try {
+    return localStorage.getItem(CUSTOM_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function rememberCustomPlayer(on: boolean) {
+  try {
+    if (on) localStorage.setItem(CUSTOM_KEY, '1');
+    else localStorage.removeItem(CUSTOM_KEY);
+  } catch {
+    // private window / blocked storage: the choice lasts for this player only
+  }
+}
+
+/**
+ * Size of a flat video plane that fills the camera's view at `distance`
+ * without cropping: the plane keeps the video's aspect ratio and touches
+ * either the top and bottom or the left and right of the viewport,
+ * whichever comes first - `object-fit: contain`, in world units.
+ */
+export function fitFlatPlane(fovDeg: number, distance: number, viewAspect: number, videoAspect: number): { width: number; height: number } {
+  const visH = 2 * distance * Math.tan((fovDeg * Math.PI) / 360);
+  const visW = visH * viewAspect;
+  const aspect = videoAspect > 0 ? videoAspect : 16 / 9;
+  if (aspect > viewAspect) return { width: visW, height: visW / aspect };
+  return { width: visH * aspect, height: visH };
+}
+
 /** Break subtitle text into lines that fit `maxChars`, keeping explicit breaks. */
 export function wrapSubtitle(text: string, maxChars = 42): string[] {
   const out: string[] = [];

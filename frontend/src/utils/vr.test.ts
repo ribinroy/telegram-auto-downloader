@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   detectProjection, splitProjection, wrapSubtitle, recallProjection, rememberProjection,
+  recallCustomPlayer, rememberCustomPlayer, fitFlatPlane,
 } from './vr';
 
 describe('detectProjection', () => {
@@ -66,6 +67,39 @@ describe('remembered projection', () => {
   it('ignores a stored value that is not a projection', () => {
     localStorage.setItem('downlee:projection:a.mp4', 'bogus');
     expect(recallProjection('a.mp4')).toBeNull();
+  });
+});
+
+describe('custom player preference', () => {
+  beforeEach(() => localStorage.clear());
+
+  it('is off until chosen, sticks once on and clears when turned off', () => {
+    expect(recallCustomPlayer()).toBe(false);
+    rememberCustomPlayer(true);
+    expect(recallCustomPlayer()).toBe(true);
+    expect(localStorage.getItem('downlee:player:custom')).toBe('1');
+    rememberCustomPlayer(false);
+    expect(recallCustomPlayer()).toBe(false);
+    expect(localStorage.getItem('downlee:player:custom')).toBeNull();
+  });
+});
+
+describe('fitFlatPlane', () => {
+  // 90° fov at distance 1 sees exactly 2 units top to bottom.
+  it('fills the height for a video narrower than the view', () => {
+    const { width, height } = fitFlatPlane(90, 1, 16 / 9, 4 / 3);
+    expect(height).toBeCloseTo(2);
+    expect(width).toBeCloseTo(2 * (4 / 3));
+  });
+
+  it('fills the width for a video wider than the view', () => {
+    const { width, height } = fitFlatPlane(90, 1, 1, 16 / 9);
+    expect(width).toBeCloseTo(2);
+    expect(height).toBeCloseTo(2 / (16 / 9));
+  });
+
+  it('assumes 16:9 before the video reports its size', () => {
+    expect(fitFlatPlane(90, 1, 16 / 9, 0)).toEqual({ width: expect.closeTo(2 * (16 / 9), 5), height: expect.closeTo(2, 5) });
   });
 });
 
