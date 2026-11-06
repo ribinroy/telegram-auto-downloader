@@ -1070,6 +1070,15 @@ large page-sized components (`DownloadItem`, `AddUrlModal`, `Layout`,
 `VpsSettings`, the pages). A change to a logic module should keep its file
 near full coverage; the big components are tested by use.
 
+**CI** (`.github/workflows/ci.yml`) runs on every push to a pull request and
+on `main`: three separate status checks - `Types` (`tsc -b --noEmit`),
+`Frontend tests` (vitest) and `Backend tests` (pytest, with ffmpeg
+installed so nothing is skipped). A new push to the same PR cancels the run
+for the old commit. Mergeability is enforced by **branch protection** on
+GitHub (Settings → Branches → `main` → require status checks), not by the
+workflow itself; ESLint is deliberately not a job while the 18 pre-existing
+lint errors in the big components stand, or every PR would be red.
+
 Test tooling is in `requirements-dev.txt` (pytest, pytest-cov) and the
 frontend's devDependencies (`@vitest/coverage-v8`); `.coveragerc` omits
 `backend/main.py` (the thread wiring can't run under a test) and
