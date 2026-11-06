@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   detectProjection, splitProjection, wrapSubtitle, recallProjection, rememberProjection,
-  recallCustomPlayer, rememberCustomPlayer, fitFlatPlane,
+  fitFlatPlane,
 } from './vr';
 
 describe('detectProjection', () => {
@@ -67,20 +67,6 @@ describe('remembered projection', () => {
   it('ignores a stored value that is not a projection', () => {
     localStorage.setItem('downlee:projection:a.mp4', 'bogus');
     expect(recallProjection('a.mp4')).toBeNull();
-  });
-});
-
-describe('custom player preference', () => {
-  beforeEach(() => localStorage.clear());
-
-  it('is off until chosen, sticks once on and clears when turned off', () => {
-    expect(recallCustomPlayer()).toBe(false);
-    rememberCustomPlayer(true);
-    expect(recallCustomPlayer()).toBe(true);
-    expect(localStorage.getItem('downlee:player:custom')).toBe('1');
-    rememberCustomPlayer(false);
-    expect(recallCustomPlayer()).toBe(false);
-    expect(localStorage.getItem('downlee:player:custom')).toBeNull();
   });
 });
 

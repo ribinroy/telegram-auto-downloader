@@ -563,7 +563,8 @@ describe('ExplorerPage - delete', () => {
       fireEvent.click(row(`${X}/clip.mp4`), { ctrlKey: true });
       key('Delete');
       fireEvent.click(screen.getByRole('button', { name: 'Move to trash' }));
-      await waitFor(() => expect(barHidden()).toBe(true));
+      expect(screen.getByRole('status')).toBeInTheDocument();
+      await waitFor(() => expect(screen.queryByRole('status')).toBeNull());
       key('Escape');
     };
     await run();
@@ -572,6 +573,8 @@ describe('ExplorerPage - delete', () => {
     expect(toasts.toasts[1]).toMatchObject({ type: 'warning', title: 'Partly deleted: Docs', message: '3 left (1 more item(s) had errors)' });
     await run();
     expect(toasts.toasts[2]).toMatchObject({ type: 'error', title: 'Delete failed', message: 'Network down' });
+    // A thrown delete keeps the selection (the Escape above cleared it); a reported one drops it
+    expect(files.deletePaths).toHaveBeenCalledTimes(3);
   });
 });
 
@@ -725,22 +728,32 @@ describe('ExplorerPage - the transfers bar', () => {
   });
 
   it('a job that ended while nobody watched stays in the bar until the details are opened', async () => {
-    vi.mocked(files.fetchTransfers).mockResolvedValue({ transfers: [job({ status: 'partial', finished_at: 200 })] });
-    await renderPage();
+    const ended = job({ status: 'partial', finished_at: 200 });
+    vi.mocked(files.fetchTransfers).mockResolvedValue({ transfers: [ended] });
+    // The server marks the job once it is acknowledged, and the next poll says so
+    vi.mocked(files.ackTransfers).mockImplementation(async () => {
+      vi.mocked(files.fetchTransfers).mockResolvedValue({ transfers: [{ ...ended, acknowledged: true }] });
+      return { acknowledged: 1 };
+    });
+    const { unmount } = await renderPage();
     const pill = await screen.findByTitle('Show details');
     expect(pill).toHaveTextContent('Copied Movies to Films');
     expect(pill.querySelector('.text-yellow-400')).not.toBeNull();
     fireEvent.click(pill);
     await waitFor(() => expect(files.ackTransfers).toHaveBeenCalledWith(['j1'], expect.anything()));
     fireEvent.click(screen.getByRole('button', { name: 'close-transfers' }));
-    // Dropped from the bar at once, before the refetch lands
-    expect(screen.queryByTitle('Show details')).toBeNull();
+    // Dropped from the bar once the ack's refetch lands
+    await waitFor(() => expect(barHidden()).toBe(true));
+    unmount();
     // Already acknowledged by another page: not shown at all
     vi.mocked(files.ackTransfers).mockClear();
+    vi.mocked(files.fetchTransfers).mockClear();
     vi.mocked(files.fetchTransfers).mockResolvedValue({ transfers: [job({ id: 'z', status: 'done', finished_at: 200, acknowledged: true })] });
     await renderPage();
     await waitFor(() => expect(files.fetchTransfers).toHaveBeenCalled());
+    expect(barHidden()).toBe(true);
     expect(screen.queryByTitle('Show details')).toBeNull();
+    expect(files.ackTransfers).not.toHaveBeenCalled();
   });
 
   it('a job seen running is toasted when it finishes - the toast opens the details - and the listing is re-read', async () => {

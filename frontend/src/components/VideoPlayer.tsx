@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useRef, useState, lazy, Suspense, type ReactNode } from 'react';
-import { Captions, Globe, Maximize, Minimize, MonitorPlay } from 'lucide-react';
+import { Captions, Globe, Maximize, Minimize } from 'lucide-react';
 import { useSubtitleTracks, useDownloadProjection, useSaveDownloadProjection } from '../hooks/useMisc';
 import { loadVRPlayer, preloadVRPlayer } from '../lib/vrPreload';
 import { getSubtitleUrl, type SubtitleSource } from '../api/subtitles';
 import {
-  PROJECTIONS, detectProjection, recallProjection, rememberProjection,
-  recallCustomPlayer, rememberCustomPlayer, type Projection,
+  PROJECTIONS, detectProjection, recallProjection, rememberProjection, type Projection,
 } from '../utils/vr';
 
 const VRVideoPlayer = lazy(() => loadVRPlayer().then((m) => ({ default: m.VRVideoPlayer })));
@@ -31,20 +30,18 @@ const setTrackMode = (t: TextTrack, mode: TextTrackMode) => { t.mode = mode; };
 
 /**
  * One player for every video DownLee shows: the download list, the transfer
- * files modal and the file explorer. A single <video> element carries the
- * stream, the subtitle tracks and the playback position; switching to VR
- * hides it and hands it to the three.js renderer as a texture, so nothing is
- * reloaded or rewound by the switch and the same TextTrack feeds both views.
+ * files modal and the file explorer. A hidden <video> element carries the
+ * stream, the subtitle tracks and the playback position, and the three.js
+ * renderer draws it - a flat video on a fitted plane, a VR one on a sphere -
+ * so every file opens in the same player with the same controls, and a
+ * projection switch never reloads or rewinds: the same element and the same
+ * TextTrack feed every view.
  */
 export function VideoPlayer({ src, name, subtitles, onError, autoPlay = true, extraControls, className }: VideoPlayerProps) {
   const [video, setVideo] = useState<HTMLVideoElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [aspect, setAspect] = useState<number | undefined>();
   const [manual, setManual] = useState<Projection | null>(() => recallProjection(name));
-  // "Always use the custom player": a flat video goes to the three.js
-  // renderer too, on a plane, so every file opens in the same player. A
-  // per-browser preference, not a per-file one.
-  const [customPlayer, setCustomPlayer] = useState(() => recallCustomPlayer());
   const [trackId, setTrackId] = useState<string>(OFF);
   // The cue remembers which track it was read for, so a stale line from the
   // previous track is never shown after a switch.
@@ -65,9 +62,6 @@ export function VideoPlayer({ src, name, subtitles, onError, autoPlay = true, ex
   const detected = useMemo(() => detectProjection(name, aspect), [name, aspect]);
   const projection: Projection = manual ?? serverPick.data?.projection ?? detected;
   const vr = projection !== 'flat';
-  // What draws the picture: the renderer for VR, or for anything with the
-  // custom player on; otherwise the browser's own <video>.
-  const canvas = vr || customPlayer;
 
   // A new file resets the per-file state; done during render (React's
   // "adjusting state when a prop changes") rather than in an effect, so the
@@ -81,12 +75,6 @@ export function VideoPlayer({ src, name, subtitles, onError, autoPlay = true, ex
     setTrackId(OFF);
   }
 
-  const toggleCustomPlayer = () => {
-    const next = !customPlayer;
-    setCustomPlayer(next);
-    rememberCustomPlayer(next);
-  };
-
   const pickProjection = (p: Projection) => {
     const next = p === detected ? null : p;
     setManual(next);
@@ -94,11 +82,9 @@ export function VideoPlayer({ src, name, subtitles, onError, autoPlay = true, ex
     if (downloadId != null) savePick.mutate(next);
   };
 
-  // Drive the <track> modes from the picker. On the native <video> the
-  // browser renders the chosen track; on the canvas (VR or the custom
-  // player) it is 'hidden' - still firing cuechange, not painted onto a
-  // <video> nobody can see - and the cue text goes to the renderer's
-  // subtitle plane.
+  // Drive the <track> modes from the picker. The chosen track is 'hidden' -
+  // still firing cuechange, not painted onto the <video>, which nobody sees -
+  // and the cue text goes to the renderer's subtitle plane.
   useEffect(() => {
     if (!video) return;
     const list = video.textTracks;
@@ -106,7 +92,7 @@ export function VideoPlayer({ src, name, subtitles, onError, autoPlay = true, ex
     for (let i = 0; i < list.length; i++) {
       const t = list[i];
       const mine = t.id === `sub-${trackId}` && trackId !== OFF;
-      setTrackMode(t, mine ? (canvas ? 'hidden' : 'showing') : 'disabled');
+      setTrackMode(t, mine ? 'hidden' : 'disabled');
       if (mine) chosen = t;
     }
     if (!chosen) return;
@@ -122,7 +108,7 @@ export function VideoPlayer({ src, name, subtitles, onError, autoPlay = true, ex
     };
     track.addEventListener('cuechange', read);
     return () => track.removeEventListener('cuechange', read);
-  }, [video, trackId, canvas, tracks]);
+  }, [video, trackId, tracks]);
 
   // Fullscreen takes the whole player - toolbar included - so the subtitle
   // and view pickers stay reachable, and the VR canvas resizes with the box.
@@ -160,7 +146,7 @@ export function VideoPlayer({ src, name, subtitles, onError, autoPlay = true, ex
 
   return (
     <div ref={wrapRef} className={`${className ?? ''} ${fullscreen ? 'bg-black flex flex-col h-full w-full' : ''}`}>
-      {/* Toolbar: view + subtitles + custom player + fullscreen. Native controls stay on the flat <video> unless the custom player is on. */}
+      {/* Toolbar: view + subtitles + fullscreen. The renderer's overlay carries the playback controls. */}
       <div className={`flex items-center justify-end gap-2 flex-wrap ${fullscreen ? 'p-2 shrink-0' : 'mb-2'}`}>
         {extraControls}
         {tracks.length > 0 && (
@@ -199,17 +185,6 @@ export function VideoPlayer({ src, name, subtitles, onError, autoPlay = true, ex
             ))}
           </select>
         </label>
-        <button
-          onClick={toggleCustomPlayer}
-          aria-pressed={customPlayer}
-          aria-label="Custom player"
-          className={`p-1.5 rounded-lg transition-colors ${customPlayer ? 'bg-cyan-500/20 text-cyan-300' : 'bg-slate-800/80 text-slate-300 hover:text-white'}`}
-          title={customPlayer
-            ? 'Custom player for every video (on) - click for the browser\'s player on flat videos'
-            : 'Use the custom player for every video, flat ones included (remembered on this device)'}
-        >
-          <MonitorPlay className="w-4 h-4" />
-        </button>
         {canFullscreen && (
           <button
             onClick={toggleFullscreen}
@@ -226,10 +201,9 @@ export function VideoPlayer({ src, name, subtitles, onError, autoPlay = true, ex
         <video
           ref={setVideoEl}
           src={src}
-          controls={!canvas}
           autoPlay={autoPlay}
           playsInline
-          className={canvas ? 'hidden' : fullscreen ? 'w-full h-full object-contain' : 'w-full max-h-[80vh]'}
+          className="hidden"
           controlsList="nodownload"
           crossOrigin="anonymous"
           onError={onError}
@@ -251,7 +225,7 @@ export function VideoPlayer({ src, name, subtitles, onError, autoPlay = true, ex
           Your browser does not support the video tag.
         </video>
 
-        {canvas && video && (
+        {video && (
           <div className="w-full" style={{ height: fullscreen ? '100%' : '70vh' }}>
             <Suspense
               fallback={

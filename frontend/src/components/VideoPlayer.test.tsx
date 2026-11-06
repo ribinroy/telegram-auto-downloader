@@ -65,14 +65,14 @@ const enableFullscreen = () => {
 const projectionSelect = () => screen.getByRole('combobox', { name: 'View' }) as HTMLSelectElement;
 
 describe('VideoPlayer - view picker', () => {
-  it('shows a flat video with native controls and no VR renderer', () => {
+  it('draws a flat video in the renderer too, on a plane, with the native element hidden', async () => {
     renderWithClient(<VideoPlayer src="/v.mp4" name="holiday.mp4" />);
     const video = document.querySelector('video')!;
     expect(video).toHaveAttribute('src', '/v.mp4');
-    expect(video).toHaveAttribute('controls');
-    expect(video).not.toHaveClass('hidden');
+    expect(video).not.toHaveAttribute('controls');
+    expect(video).toHaveClass('hidden');
     expect(projectionSelect().value).toBe('flat');
-    expect(screen.queryByTestId('vr-player')).toBeNull();
+    expect(await screen.findByTestId('vr-player')).toHaveAttribute('data-projection', 'flat');
     // Nothing is marked auto when the guess is flat
     expect(screen.getByRole('option', { name: 'Flat' })).toBeInTheDocument();
     expect(screen.queryByRole('option', { name: /· auto/ })).toBeNull();
@@ -130,63 +130,6 @@ describe('VideoPlayer - view picker', () => {
   });
 });
 
-describe('VideoPlayer - custom player', () => {
-  const toggle = () => screen.getByRole('button', { name: 'Custom player' });
-
-  it('is off by default; switching it on hands a flat video to the renderer as a plane and remembers it', async () => {
-    renderWithClient(<VideoPlayer src="/v.mp4" name="holiday.mp4" />);
-    expect(toggle()).toHaveAttribute('aria-pressed', 'false');
-    fireEvent.click(toggle());
-    expect(toggle()).toHaveAttribute('aria-pressed', 'true');
-    expect(localStorage.getItem('downlee:player:custom')).toBe('1');
-    const video = document.querySelector('video')!;
-    expect(video).toHaveClass('hidden');
-    expect(video).not.toHaveAttribute('controls');
-    expect(await screen.findByTestId('vr-player')).toHaveAttribute('data-projection', 'flat');
-    // The view picker still says flat - the custom player is not a projection
-    expect(projectionSelect().value).toBe('flat');
-
-    fireEvent.click(toggle());
-    expect(localStorage.getItem('downlee:player:custom')).toBeNull();
-    expect(video).not.toHaveClass('hidden');
-    expect(video).toHaveAttribute('controls');
-    expect(screen.queryByTestId('vr-player')).toBeNull();
-  });
-
-  it('starts in the custom player when that was chosen before, for every file', async () => {
-    localStorage.setItem('downlee:player:custom', '1');
-    const { rerender } = renderWithClient(<VideoPlayer src="/a.mp4" name="a.mp4" />);
-    expect(toggle()).toHaveAttribute('aria-pressed', 'true');
-    expect(await screen.findByTestId('vr-player')).toHaveAttribute('data-projection', 'flat');
-    rerender(<VideoPlayer src="/b.mp4" name="b_180_sbs.mp4" />);
-    expect(await screen.findByTestId('vr-player')).toHaveAttribute('data-projection', '180-sbs');
-    expect(toggle()).toHaveAttribute('aria-pressed', 'true');
-  });
-
-  it('a VR file is unaffected by the toggle - the renderer draws it either way', async () => {
-    renderWithClient(<VideoPlayer src="/v.mp4" name="trip_360.mp4" />);
-    expect(await screen.findByTestId('vr-player')).toHaveAttribute('data-projection', '360-mono');
-    fireEvent.click(toggle());
-    expect(screen.getByTestId('vr-player')).toHaveAttribute('data-projection', '360-mono');
-    expect(document.querySelector('video')).toHaveClass('hidden');
-  });
-
-  it('with the custom player on, subtitles go to the renderer rather than the hidden <video>', async () => {
-    localStorage.setItem('downlee:player:custom', '1');
-    vi.mocked(subtitles.listSubtitleTracks).mockResolvedValue([
-      { id: 't1', label: 'English', lang: 'en', kind: 'sidecar', format: 'srt', forced: false, default: false },
-    ]);
-    renderWithClient(<VideoPlayer src="/v.mp4" name="a.mp4" subtitles={{ path: '/x/a.mp4' }} />);
-    const select = await screen.findByRole('combobox', { name: 'Subtitles' });
-    fireEvent.change(select, { target: { value: 't1' } });
-    const track = trackOf(document.querySelector('track#sub-t1')!);
-    await waitFor(() => expect(track.mode).toBe('hidden'));
-    track.activeCues = [{ text: 'Hi' }];
-    act(() => { track.listeners.forEach(f => f()); });
-    expect(await screen.findByTestId('vr-player')).toHaveAttribute('data-subtitle', 'Hi');
-  });
-});
-
 describe('VideoPlayer - subtitles', () => {
   const tracks: subtitles.SubtitleTrack[] = [
     { id: 't1', label: 'English', lang: 'en', kind: 'sidecar', format: 'srt', forced: false, default: false },
@@ -202,7 +145,7 @@ describe('VideoPlayer - subtitles', () => {
     expect(screen.queryByRole('combobox', { name: 'Subtitles' })).toBeNull();
   });
 
-  it('lists the tracks (sidecars with their format), renders <track> elements and switches the chosen one on', async () => {
+  it('lists the tracks (sidecars with their format), renders <track> elements and switches the chosen one on (hidden: the renderer paints it)', async () => {
     vi.mocked(subtitles.listSubtitleTracks).mockResolvedValue(tracks);
     renderWithClient(<VideoPlayer src="/v.mp4" name="a.mp4" subtitles={{ path: '/x/a.mp4' }} />);
     const select = await screen.findByRole('combobox', { name: 'Subtitles' }) as HTMLSelectElement;
@@ -218,13 +161,13 @@ describe('VideoPlayer - subtitles', () => {
     await waitFor(() => expect(trackOf(els[0]).mode).toBe('disabled'));
 
     fireEvent.change(select, { target: { value: 't2' } });
-    await waitFor(() => expect(trackOf(els[1]).mode).toBe('showing'));
+    await waitFor(() => expect(trackOf(els[1]).mode).toBe('hidden'));
     expect(trackOf(els[0]).mode).toBe('disabled');
     fireEvent.change(select, { target: { value: '' } });
     await waitFor(() => expect(trackOf(els[1]).mode).toBe('disabled'));
   });
 
-  it('in VR the track is hidden (not painted) and its cues go to the renderer', async () => {
+  it('the track is hidden (not painted) and its cues go to the renderer', async () => {
     vi.mocked(subtitles.listSubtitleTracks).mockResolvedValue(tracks);
     renderWithClient(<VideoPlayer src="/v.mp4" name="a_180_sbs.mp4" subtitles={{ path: '/x/a.mp4' }} />);
     const select = await screen.findByRole('combobox', { name: 'Subtitles' });

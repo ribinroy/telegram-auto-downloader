@@ -5,9 +5,9 @@ import { Play, Pause, Glasses, Maximize, Minimize, Volume2, Volume1, VolumeX } f
 import { splitProjection, wrapSubtitle, fitFlatPlane, type Projection } from '../utils/vr';
 
 interface VRVideoPlayerProps {
-  /** The player's own <video>, kept playing across flat/VR switches. */
+  /** The player's own <video>, kept playing across projection switches. */
   video: HTMLVideoElement;
-  /** A sphere for 180°/360°, or - with the custom player on - a flat plane. */
+  /** A sphere for 180°/360°, a fitted plane for a flat video. */
   projection: Projection;
   /** Current subtitle cue, drawn on a plane in front of the viewer. */
   subtitle: string;
