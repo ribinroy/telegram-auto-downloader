@@ -12,6 +12,8 @@ export const qk = {
   // an infinite-query list.
   transferFiles: (downloadId: number) => ['transfer-files', downloadId] as const,
   subtitles: (sourceKey: string) => ['subtitles', sourceKey] as const,
+  internetSpeed: () => ['speedtest', 'internet'] as const,
+  speedResults: (kind: string) => ['speedtest', 'results', kind] as const,
   analytics: (days: number, groupBy: 'day' | 'hour', includeDeleted: boolean) =>
     ['analytics', days, groupBy, includeDeleted] as const,
   mappings: () => ['mappings'] as const,

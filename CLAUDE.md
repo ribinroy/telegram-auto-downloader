@@ -89,6 +89,7 @@ Main Thread
 |  |- resume.py                     # Single resume path shared by /api/retry and the watchdog
 |  |- download_queue.py             # Concurrency limits + the waiting line (QueueRunner thread)
 |  |- file_meta.py                  # Video metadata extraction (ffprobe)
+|  |- speedtest.py                  # Server -> internet speed test (LibreSpeed servers, own thread)
 |  |- subtitles.py                  # Subtitle tracks (sidecar + embedded) served as WebVTT
 |  |- browser_downloader.py         # Playwright fallback for yt-dlp
 |  '- metrics/__init__.py           # Prometheus counters
@@ -176,6 +177,12 @@ Main Thread
 - `user_agent`, `ip`, `created_at`, `last_used_at`
 
 Note: legacy `labels`/`source_labels` tables and `downloads.label_id` may still exist in older DBs but are unused (the labels feature was reverted; see `_migrate_labels_to_specs()`).
+
+**`speed_tests`** - One row per speed-test run (see *Network speed tests*)
+- `id` (PK), `kind` ('browser' = a device ↔ this box, 'internet' = this box → the internet), `at`
+- `ping_min`/`ping_avg`/`ping_max`/`ping_jitter` (ms), `download_mbps`, `upload_mbps`, `download_bytes`, `upload_bytes`
+- `client` (browser: the user agent; internet: the ISP), `ip` (browser: the device; internet: the box's public address), `meta` (JSON: test server, location)
+- Hard-deleted on request; no soft delete - a measurement is not a record anyone depends on
 
 **`bot_queries`** - Bot chat commands
 - `id` (PK), `key` (unique among live rows), `command`, `deleted_at` (soft delete; renaming onto a live key soft-deletes the one replaced)
@@ -344,23 +351,49 @@ Live filesystem access - every call reads the disk, nothing is indexed or cached
 - `GET /api/jobs/schedules` - Every job with its schedule, last outcome and next fire time (plus the server's `tz`)
 - `PUT /api/jobs/schedules/<job_id>` - `{enabled?, time? 'HH:MM', days?: [0-6]}` (Monday = 0)
 
-### Network speed test (Settings → Network)
-Browser ↔ server throughput, so a stuttering stream can be blamed on the
-Wi-Fi or on the box. `web_app/routes/speedtest.py` is deliberately dumb and
-behind `@token_required` (an open bandwidth sink is a gift to anyone who finds
-the port): `GET /api/speedtest/ping` (answers at once, `no-store`),
-`GET /api/speedtest/download?size=` (streams one reused 1 MB block of
-`os.urandom` noise up to 4 GB - generating noise per chunk would make the CPU
-the bottleneck), `POST /api/speedtest/upload` (reads the body in 1 MB chunks
-and discards it, returns `{bytes, seconds}`). **The browser does all the
-timing** (`api/speedtest.ts`): 8 pings after an uncounted warm-up request; a
-download read through a `ReadableStream` for up to 8 s then aborted; an
-upload of a 256 MB noise `Blob` via XHR (fetch has no upload progress), same
-deadline. `utils/speedtest.ts` turns samples into figures - `throughputMbps`
-skips the first 0.3 s (TCP slow start), `recentMbps` is the live number - and
-keeps the last 8 runs in `localStorage`, per browser. UI:
-`components/SpeedTestSettings.tsx`. The Python server itself tops out around
-a few Gbit/s, which the page says.
+### Network speed tests (Settings → Network)
+Two links, measured separately, both recorded in the **`speed_tests`** table
+so every device sees one shared history.
+
+- **This device ↔ server** - the ceiling for streaming and the explorer.
+  `web_app/routes/speedtest.py` is deliberately dumb and behind
+  `@token_required` (an open bandwidth sink is a gift to anyone who finds the
+  port): `GET /api/speedtest/ping` (answers at once, `no-store`),
+  `GET /api/speedtest/download?size=` (streams one reused 1 MB block of
+  `os.urandom` noise up to 4 GB - generating noise per chunk would make the
+  CPU the bottleneck), `POST /api/speedtest/upload` (reads the body in 1 MB
+  chunks and discards it, returns `{bytes, seconds}`). **The browser does all
+  the timing** (`api/speedtest.ts`): 8 pings after an uncounted warm-up
+  request; a download read through a `ReadableStream` for up to 8 s then
+  aborted; an upload of a 256 MB noise `Blob` via XHR (fetch has no upload
+  progress), same deadline. `utils/speedtest.ts` turns samples into figures -
+  `throughputMbps` skips the first 0.3 s (TCP slow start), `recentMbps` is the
+  live number. The outcome is posted to `POST /api/speedtest/results`; the
+  device (`User-Agent`) and its address come from the request, not the body.
+  The Python server itself tops out around a few Gbit/s, which the page says.
+- **Server → internet** - what downloads can reach. `backend/speedtest.py`
+  runs it on a daemon thread (`InternetSpeedTest`, one at a time); the page
+  starts it with `POST /api/speedtest/internet`, polls `GET` every 500 ms for
+  `{phase, live_mbps, progress, result, error, meta}` and can `DELETE` to
+  cancel. It goes against the **public LibreSpeed servers**
+  (`librespeed.org/backend-servers/servers.php`, cached an hour, three
+  built in as a fallback) - *not* `speed.cloudflare.com`, which sits behind
+  bot protection, 403s `/meta` and stalls non-browser callers mid-transfer.
+  The nearest server is picked by pinging them all in parallel (phase
+  `servers`), `getIP.php?isp=true` names the ISP, then 8 pings on one
+  kept-alive connection, `garbage.php?ckSize=100` read in 1 MB chunks and
+  re-requested until the 8 s deadline, and back-to-back **4 MB** POSTs to
+  `empty.php` - the biggest body every public server accepts (some sit
+  behind an 8 MB nginx limit; a bigger blob 413s). All stdlib
+  `http.client`, each network function monkeypatchable so the tests fake
+  them. The result row carries the ISP as `client`, the public IP, and
+  `{server, server_url, location}` as `meta`.
+- `GET /api/speedtest/results?kind=browser|internet&limit=` (newest first) and
+  `DELETE /api/speedtest/results/<id>`. `DatabaseManager.add_speed_test /
+  get_speed_tests / delete_speed_test`.
+- UI: `components/SpeedTestSettings.tsx` - a card per link with a live
+  Mbit/s figure and progress bar, and one history table (filter by link,
+  device named from the user agent by `describeClient()`, delete per row).
 
 ### Monitoring
 - `GET /metrics` - Prometheus (no auth)

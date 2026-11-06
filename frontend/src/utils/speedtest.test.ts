@@ -1,7 +1,6 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import {
-  toMbps, throughputMbps, recentMbps, pingStats, formatMbps, formatMBps,
-  loadHistory, pushHistory, HISTORY_SIZE, type Sample,
+  toMbps, throughputMbps, recentMbps, pingStats, formatMbps, formatMBps, type Sample,
 } from './speedtest';
 
 const ramp = (seconds: number, bytesPerSec: number, step = 0.1): Sample[] => {
@@ -64,28 +63,5 @@ describe('formatting', () => {
     expect(formatMbps(4.567)).toBe('4.57 Mbit/s');
     expect(formatMBps(800)).toBe('100 MB/s');
     expect(formatMBps(80)).toBe('10.0 MB/s');
-  });
-});
-
-describe('history', () => {
-  beforeEach(() => localStorage.clear());
-  const result = (n: number) => ({
-    at: `2026-01-0${n}T00:00:00Z`, ping: pingStats([n]),
-    downloadMbps: n, uploadMbps: n, downloadBytes: n, uploadBytes: n,
-  });
-
-  it('keeps the newest runs first, capped', () => {
-    expect(loadHistory()).toEqual([]);
-    for (let i = 1; i <= HISTORY_SIZE + 2; i++) pushHistory(result(i % 10));
-    const h = loadHistory();
-    expect(h).toHaveLength(HISTORY_SIZE);
-    expect(h[0].downloadMbps).toBe((HISTORY_SIZE + 2) % 10);
-  });
-
-  it('survives garbage in storage', () => {
-    localStorage.setItem('downlee:speedtest:history', '{not json');
-    expect(loadHistory()).toEqual([]);
-    localStorage.setItem('downlee:speedtest:history', '{"a":1}');
-    expect(loadHistory()).toEqual([]);
   });
 });

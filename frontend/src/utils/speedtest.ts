@@ -68,35 +68,3 @@ export function formatMBps(mbps: number): string {
   const mb = mbps / 8;
   return mb >= 100 ? `${Math.round(mb)} MB/s` : `${mb.toFixed(1)} MB/s`;
 }
-
-export interface SpeedTestResult {
-  at: string;
-  ping: PingStats;
-  downloadMbps: number;
-  uploadMbps: number;
-  downloadBytes: number;
-  uploadBytes: number;
-}
-
-const HISTORY_KEY = 'downlee:speedtest:history';
-export const HISTORY_SIZE = 8;
-
-export function loadHistory(): SpeedTestResult[] {
-  try {
-    const raw = localStorage.getItem(HISTORY_KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-export function pushHistory(result: SpeedTestResult): SpeedTestResult[] {
-  const next = [result, ...loadHistory()].slice(0, HISTORY_SIZE);
-  try {
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
-  } catch {
-    // private window: the run still shows, it just isn't kept
-  }
-  return next;
-}

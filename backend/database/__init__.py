@@ -393,6 +393,51 @@ def _apply_download_update(download, changes):
         download.queue_position = None
 
 
+class SpeedTest(Base):
+    """One speed-test run, either kind: `browser` (a device <-> this box,
+    timed by that device and posted here) or `internet` (this box -> the
+    internet, run by the backend). Shared history, so a phone and a desktop
+    see the same list and the box's uplink has one record over time."""
+    __tablename__ = 'speed_tests'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    kind = Column(String(16), nullable=False, index=True)
+    at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    ping_min = Column(Float, nullable=True)
+    ping_avg = Column(Float, nullable=True)
+    ping_max = Column(Float, nullable=True)
+    ping_jitter = Column(Float, nullable=True)
+    download_mbps = Column(Float, nullable=False, default=0.0)
+    upload_mbps = Column(Float, nullable=False, default=0.0)
+    download_bytes = Column(BigInteger, nullable=False, default=0)
+    upload_bytes = Column(BigInteger, nullable=False, default=0)
+    # browser: the device (user agent); internet: the ISP the box sits behind
+    client = Column(String(300), nullable=True)
+    # browser: the device's address; internet: the box's public address
+    ip = Column(String(64), nullable=True)
+    # extra per kind as JSON (Cloudflare site, city, ASN ...)
+    meta = Column(Text, nullable=True)
+
+    def to_dict(self):
+        try:
+            meta = json.loads(self.meta) if self.meta else None
+        except ValueError:
+            meta = None
+        return {
+            'id': self.id,
+            'kind': self.kind,
+            'at': f"{self.at.isoformat()}Z" if self.at else None,
+            'ping': {'min': self.ping_min, 'avg': self.ping_avg, 'max': self.ping_max, 'jitter': self.ping_jitter},
+            'download_mbps': self.download_mbps,
+            'upload_mbps': self.upload_mbps,
+            'download_bytes': self.download_bytes,
+            'upload_bytes': self.upload_bytes,
+            'client': self.client,
+            'ip': self.ip,
+            'meta': meta,
+        }
+
+
 class DatabaseManager:
     """Database manager for handling all database operations"""
 
@@ -1144,6 +1189,52 @@ class DatabaseManager:
             if row.revoked_at is None:
                 row.revoked_at = datetime.utcnow()
                 session.commit()
+            return True
+        finally:
+            self.close_session()
+
+    # --- speed tests -----------------------------------------------------
+    def add_speed_test(self, kind, ping=None, download_mbps=0.0, upload_mbps=0.0,
+                       download_bytes=0, upload_bytes=0, client=None, ip=None, meta=None):
+        """Record one run. `ping` is {min, avg, max, jitter}; `meta` any dict."""
+        session = self.get_session()
+        try:
+            ping = ping or {}
+            row = SpeedTest(
+                kind=kind, at=datetime.utcnow(),
+                ping_min=ping.get('min'), ping_avg=ping.get('avg'),
+                ping_max=ping.get('max'), ping_jitter=ping.get('jitter'),
+                download_mbps=float(download_mbps or 0), upload_mbps=float(upload_mbps or 0),
+                download_bytes=int(download_bytes or 0), upload_bytes=int(upload_bytes or 0),
+                client=(client or None) and str(client)[:300], ip=(ip or None) and str(ip)[:64],
+                meta=json.dumps(meta) if meta else None,
+            )
+            session.add(row)
+            session.commit()
+            return row.to_dict()
+        finally:
+            self.close_session()
+
+    def get_speed_tests(self, kind=None, limit=20):
+        """Newest first, optionally one kind."""
+        session = self.get_session()
+        try:
+            q = session.query(SpeedTest)
+            if kind:
+                q = q.filter(SpeedTest.kind == kind)
+            rows = q.order_by(SpeedTest.at.desc(), SpeedTest.id.desc()).limit(limit).all()
+            return [r.to_dict() for r in rows]
+        finally:
+            self.close_session()
+
+    def delete_speed_test(self, test_id):
+        session = self.get_session()
+        try:
+            row = session.query(SpeedTest).filter_by(id=test_id).first()
+            if not row:
+                return False
+            session.delete(row)
+            session.commit()
             return True
         finally:
             self.close_session()
