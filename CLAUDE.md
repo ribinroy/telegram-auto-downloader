@@ -1063,6 +1063,13 @@ cd frontend && npm test          # frontend (src/**/*.test.ts)
 make coverage                    # both, with reports: htmlcov/ and frontend/coverage/
 ```
 
+Coverage as of November 2026: backend **97%** (every module above 80% except
+`subtitles.py`/`routes/files.py` at 72-83%); frontend **39%** overall but
+~99% on the logic layers (`api/`, `hooks/`, `utils/`) - what is left is the
+large page-sized components (`DownloadItem`, `AddUrlModal`, `Layout`,
+`VpsSettings`, the pages). A change to a logic module should keep its file
+near full coverage; the big components are tested by use.
+
 Test tooling is in `requirements-dev.txt` (pytest, pytest-cov) and the
 frontend's devDependencies (`@vitest/coverage-v8`); `.coveragerc` omits
 `backend/main.py` (the thread wiring can't run under a test) and
