@@ -26,7 +26,7 @@ const format = (format_id: string, resolution: string, over: Partial<VideoFormat
 });
 const checkResult = (over: Partial<UrlCheckResult> = {}): UrlCheckResult => ({
   supported: true, title: 'A video', duration: 65, uploader: 'someone', ext: 'mp4', filesize: 3 * 1024 ** 2,
-  formats: [format('f1080', '1080p'), format('f720', '720p', { filesize: null }), format('best', 'best')],
+  formats: [format('f1080', '1080p'), format('f720', '720p', { filesize: null }), format('best', 'best', { filesize: null })],
   ...over,
 });
 const mapping = (over: Partial<SourceMapping> = {}): SourceMapping => ({
