@@ -637,28 +637,36 @@ describe('ExplorerPage - the VPS as a drive', () => {
 // --- context menu -----------------------------------------------------------
 
 describe('ExplorerPage - context menu', () => {
-  it('a file\'s menu: preview, download, clipboard, rename, both deletes, properties', async () => {
-    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
-    const writeText = vi.fn();
-    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+  it('a file\'s menu: preview, download, clipboard, rename, both deletes, properties - and opening it selects the row', async () => {
     await renderPage();
     expect(openMenu(`${X}/clip.mp4`).getAllByRole('button').map(b => b.textContent)).toEqual([
       'Preview', 'Download', 'Copy', 'Cut', 'Copy path', 'Rename', 'Move to trash', 'Delete permanently', 'Properties',
     ]);
-    // Opening the menu selects the row
     expect(screen.getByText('1 selected')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Download' }));
+    expect(row(`${X}/clip.mp4`)).toHaveClass('bg-cyan-500/15');
+  });
+
+  it('Download opens the file in a new tab; Copy path puts the path on the system clipboard', async () => {
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    const writeText = vi.fn();
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    await renderPage();
+    fireEvent.click(openMenu(`${X}/clip.mp4`).getByText('Download'));
     expect(open).toHaveBeenCalledWith(expect.stringContaining('/api/files/download?path=%2Fmnt%2Fx%2Fclip.mp4'), '_blank');
-    fireEvent.click(openMenu(`${X}/clip.mp4`).getByRole('button', { name: 'Copy path' }));
+    fireEvent.click(openMenu(`${X}/clip.mp4`).getByText('Copy path'));
     expect(writeText).toHaveBeenCalledWith(`${X}/clip.mp4`);
-    fireEvent.click(openMenu(`${X}/clip.mp4`).getByRole('button', { name: 'Preview' }));
+  });
+
+  it('Preview, Properties and Move to trash open their dialogs', async () => {
+    await renderPage();
+    fireEvent.click(openMenu(`${X}/clip.mp4`).getByText('Preview'));
     expect(screen.getByTestId('preview')).toHaveAttribute('data-name', 'clip.mp4');
-    fireEvent.click(screen.getByRole('button', { name: 'close-preview' }));
-    fireEvent.click(openMenu(`${X}/clip.mp4`).getByRole('button', { name: 'Properties' }));
+    fireEvent.click(screen.getByText('close-preview'));
+    fireEvent.click(openMenu(`${X}/clip.mp4`).getByText('Properties'));
     expect(screen.getByTestId('properties')).toHaveAttribute('data-name', 'clip.mp4');
-    fireEvent.click(screen.getByRole('button', { name: 'close-props' }));
+    fireEvent.click(screen.getByText('close-props'));
     expect(screen.queryByTestId('properties')).toBeNull();
-    fireEvent.click(openMenu(`${X}/clip.mp4`).getByRole('button', { name: 'Move to trash' }));
+    fireEvent.click(openMenu(`${X}/clip.mp4`).getByText('Move to trash'));
     expect(screen.getByText('Move to trash?')).toBeInTheDocument();
   });
 

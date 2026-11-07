@@ -863,8 +863,9 @@ reloads or rewinds. The browser's native controls are never shown.
   `VideoPlayer` mounts. The `Suspense` fallback is still there for a cold
   cache on a slow link.
 - **Fullscreen** is the whole player's (`wrapRef` in `VideoPlayer`), toolbar
-  included, so the subtitle/view pickers stay reachable; the VR overlay's
-  button only mirrors it (`fullscreen`/`onToggleFullscreen` props). `F`
+  included, so the subtitle/view pickers stay reachable. The only button is
+  the overlay's, next to the playback controls (`fullscreen`/
+  `onToggleFullscreen` props - the toolbar used to carry a twin). `F`
   toggles it; hidden where `document.fullscreenEnabled` is false (iOS Safari).
 - **WebXR**: `renderer.xr.enabled`, `setAnimationLoop` (not rAF), a Glasses
   button shown only when `navigator.xr.isSessionSupported('immersive-vr')`
