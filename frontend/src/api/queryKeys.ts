@@ -12,6 +12,7 @@ export const qk = {
   // an infinite-query list.
   transferFiles: (downloadId: number) => ['transfer-files', downloadId] as const,
   subtitles: (sourceKey: string) => ['subtitles', sourceKey] as const,
+  mediaInfo: (sourceKey: string) => ['media-info', sourceKey] as const,
   internetSpeed: () => ['speedtest', 'internet'] as const,
   speedResults: (kind: string) => ['speedtest', 'results', kind] as const,
   vrSettings: () => ['vr', 'settings'] as const,

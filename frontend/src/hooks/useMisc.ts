@@ -11,6 +11,7 @@ import {
   fetchDownloadProjection, saveDownloadProjection, type VrFeedSettings,
 } from '../api/vr';
 import type { Projection } from '../utils/vr';
+import { fetchMediaInfo } from '../api/mediaInfo';
 
 // --- Auth (imperative) ---
 export function useLogin() {
@@ -44,6 +45,16 @@ export function useSubtitleTracks(source: SubtitleSource | null) {
     queryFn: () => listSubtitleTracks(source!),
     enabled: !!source,
     // Probing an MKV is cheap but not free; a track list doesn't change mid-play.
+    staleTime: 10 * 60 * 1000,
+  });
+}
+
+// The player's info modal: fetched only once it is opened (`source` null until then).
+export function useMediaInfo(source: SubtitleSource | null) {
+  return useQuery({
+    queryKey: qk.mediaInfo(source ? subtitleSourceKey(source) : ''),
+    queryFn: () => fetchMediaInfo(source!),
+    enabled: !!source,
     staleTime: 10 * 60 * 1000,
   });
 }

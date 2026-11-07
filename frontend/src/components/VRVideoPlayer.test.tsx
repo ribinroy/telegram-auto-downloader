@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
-import { VRVideoPlayer } from './VRVideoPlayer';
+import { VRVideoPlayer, VOLUME_SWIPE } from './VRVideoPlayer';
 
 // jsdom has no WebGL. three.js is replaced by stubs that only record what the
 // player does to them - which geometry it builds, on which layer, what it
@@ -487,7 +487,7 @@ describe('VRVideoPlayer - gestures on the picture', () => {
     }
   });
 
-  it('a vertical swipe on the right side sets the volume, taking the touch from the drag controls until it ends', () => {
+  it.skipIf(!VOLUME_SWIPE)('a vertical swipe on the right side sets the volume, taking the touch from the drag controls until it ends', () => {
     const { video } = renderPlayer();
     video.volume = 0.5;
     video.muted = true;
@@ -510,6 +510,18 @@ describe('VRVideoPlayer - gestures on the picture', () => {
     expect(video.play).not.toHaveBeenCalled();
   });
 
+  it.skipIf(VOLUME_SWIPE)('with the volume swipe switched off, a vertical drag on the right side leaves the volume alone', () => {
+    const { video } = renderPlayer();
+    video.volume = 0.5;
+    const picture = sizedPicture();
+    fireEvent.pointerDown(picture, { pointerId: 1, clientX: 280, clientY: 150 });
+    fireEvent.pointerMove(picture, { pointerId: 1, clientX: 281, clientY: 100 });
+    expect(controls().enabled).toBe(true);
+    fireEvent.pointerUp(picture, { pointerId: 1, clientX: 281, clientY: 100 });
+    expect(video.volume).toBe(0.5);
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
   it('a horizontal drag on the right side, or a vertical one elsewhere, is left to the drag controls', () => {
     const { video } = renderPlayer();
     video.volume = 0.5;
@@ -526,7 +538,7 @@ describe('VRVideoPlayer - gestures on the picture', () => {
     expect(screen.queryByRole('status')).toBeNull();
   });
 
-  it('on a flat video the volume swipe works the same and the drag controls stay off', () => {
+  it.skipIf(!VOLUME_SWIPE)('on a flat video the volume swipe works the same and the drag controls stay off', () => {
     const { video } = renderPlayer({ projection: 'flat' });
     video.volume = 0.5;
     const picture = sizedPicture();

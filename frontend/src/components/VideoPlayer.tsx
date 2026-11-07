@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState, lazy, Suspense, type ReactNode } from 'react';
-import { Captions, Globe } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense, type ReactNode } from 'react';
+import { Captions, Globe, Info } from 'lucide-react';
+import { VideoInfoPanel } from './VideoInfoPanel';
 import { useSubtitleTracks, useDownloadProjection, useSaveDownloadProjection } from '../hooks/useMisc';
 import { loadVRPlayer, preloadVRPlayer } from '../lib/vrPreload';
 import { getSubtitleUrl, type SubtitleSource } from '../api/subtitles';
@@ -13,7 +14,7 @@ export interface VideoPlayerProps {
   src: string;
   /** Filename (or path); drives the VR projection guess and the remembered pick. */
   name: string;
-  /** Where to look for subtitle tracks. Omit for a video with none to offer. */
+  /** Where to look for subtitle tracks - and the file the info (i) panel probes. Omit for a video with none to offer. */
   subtitles?: SubtitleSource;
   onError?: () => void;
   autoPlay?: boolean;
@@ -49,6 +50,7 @@ export function VideoPlayer({ src, name, subtitles, onError, autoPlay = true, ex
   const cue = cueFor.track === trackId ? cueFor.text : '';
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
+  const [infoOpen, setInfoOpen] = useState(false);
   const canFullscreen = typeof document !== 'undefined' && !!document.fullscreenEnabled;
 
   useEffect(() => { preloadVRPlayer(); }, []);
@@ -73,6 +75,7 @@ export function VideoPlayer({ src, name, subtitles, onError, autoPlay = true, ex
     setManual(recallProjection(name));
     setAspect(undefined);
     setTrackId(OFF);
+    setInfoOpen(false);
   }
 
   const pickProjection = (p: Projection) => {
@@ -141,16 +144,29 @@ export function VideoPlayer({ src, name, subtitles, onError, autoPlay = true, ex
     return () => window.removeEventListener('keydown', onKey);
   });
 
+  const closeInfo = useCallback(() => setInfoOpen(false), []);
+
   const setVideoEl = (el: HTMLVideoElement | null) => {
     videoRef.current = el;
     setVideo(el);
   };
 
   return (
-    <div ref={wrapRef} className={`${className ?? ''} ${fullscreen ? 'bg-black flex flex-col h-full w-full' : ''}`}>
+    <div ref={wrapRef} className={`relative ${className ?? ''} ${fullscreen ? 'bg-black flex flex-col h-full w-full' : ''}`}>
       {/* Toolbar: view + subtitles. The renderer's overlay carries the playback controls, fullscreen included. */}
       <div className={`flex items-center justify-end gap-2 flex-wrap ${fullscreen ? 'p-2 shrink-0' : 'mb-2'}`}>
         {extraControls}
+        {subtitles && (
+          <button
+            type="button"
+            onClick={() => setInfoOpen(true)}
+            className="flex items-center gap-1.5 text-xs text-slate-300 hover:text-white bg-slate-800/80 hover:bg-slate-700 rounded-lg px-2 py-1.5"
+            title="Video details"
+            aria-label="Video details"
+          >
+            <Info className="w-4 h-4" />
+          </button>
+        )}
         {tracks.length > 0 && (
           <label className="flex items-center gap-1.5 text-xs text-slate-300 bg-slate-800/80 rounded-lg px-2 py-1.5" title="Subtitles">
             <Captions className="w-4 h-4 text-slate-400" />
@@ -231,6 +247,10 @@ export function VideoPlayer({ src, name, subtitles, onError, autoPlay = true, ex
           </div>
         )}
       </div>
+
+      {infoOpen && subtitles && (
+        <VideoInfoPanel source={subtitles} name={name} onClose={closeInfo} />
+      )}
     </div>
   );
 }
