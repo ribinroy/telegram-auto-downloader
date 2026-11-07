@@ -456,6 +456,7 @@ export function VRVideoPlayer({ video, projection, subtitle, fullscreen = false,
               onClick={onToggleFullscreen}
               className="p-2 text-white hover:text-cyan-400 transition-colors"
               title={fullscreen ? 'Exit fullscreen (F)' : 'Fullscreen (F)'}
+              aria-label={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}
             >
               {fullscreen ? <Minimize className="w-5 h-5" /> : <Maximize className="w-5 h-5" />}
             </button>

@@ -8,8 +8,14 @@ import { VideoPlayer } from './VideoPlayer';
 // jsdom cannot decode video; the three.js renderer is replaced by a stub that
 // only reports what it was handed. Nothing here asserts on playback.
 vi.mock('./VRVideoPlayer', () => ({
-  VRVideoPlayer: ({ projection, subtitle }: { projection: string; subtitle: string }) =>
-    <div data-testid="vr-player" data-projection={projection} data-subtitle={subtitle} />,
+  VRVideoPlayer: ({ projection, subtitle, fullscreen, onToggleFullscreen }: { projection: string; subtitle: string; fullscreen?: boolean; onToggleFullscreen?: () => void }) => (
+    <div data-testid="vr-player" data-projection={projection} data-subtitle={subtitle}>
+      {/* The overlay's fullscreen button is the only one; the real overlay renders it the same way */}
+      {onToggleFullscreen && (
+        <button onClick={onToggleFullscreen} title={fullscreen ? 'Exit fullscreen (F)' : 'Fullscreen (F)'} aria-label={fullscreen ? 'Exit fullscreen' : 'Fullscreen'} />
+      )}
+    </div>
+  ),
 }));
 vi.mock('../api/subtitles', async (orig) => ({
   ...(await orig<typeof subtitles>()),
@@ -186,22 +192,24 @@ describe('VideoPlayer - subtitles', () => {
 });
 
 describe('VideoPlayer - fullscreen', () => {
-  it('has no fullscreen button where the browser does not allow it', () => {
+  it('has no fullscreen button where the browser does not allow it', async () => {
     renderWithClient(<VideoPlayer src="/v.mp4" name="a.mp4" />);
+    await screen.findByTestId('vr-player');
     expect(screen.queryByRole('button', { name: /fullscreen/i })).toBeNull();
     fireEvent.keyDown(window, { key: 'f' });
     expect(Element.prototype.requestFullscreen).toBeUndefined();
   });
 
-  it('the button and the F key both toggle fullscreen on the whole player', async () => {
+  it('the overlay button (the only one) and the F key both toggle fullscreen on the whole player', async () => {
     const { request, exit } = enableFullscreen();
     renderWithClient(<VideoPlayer src="/v.mp4" name="a.mp4" />);
-    const button = screen.getByRole('button', { name: 'Fullscreen' });
+    const button = await screen.findByRole('button', { name: 'Fullscreen' });
+    expect(screen.getAllByRole('button', { name: /fullscreen/i })).toHaveLength(1);
     fireEvent.click(button);
     expect(request).toHaveBeenCalledTimes(1);
     const wrap = request.mock.instances[0] as Element;
     expect(wrap.contains(document.querySelector('video'))).toBe(true);
-    expect(wrap.contains(button)).toBe(true);   // toolbar included
+    expect(wrap.contains(projectionSelect())).toBe(true);   // toolbar included
 
     fireEvent.keyDown(window, { key: 'F' });
     expect(request).toHaveBeenCalledTimes(2);

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, lazy, Suspense, type ReactNode } from 'react';
-import { Captions, Globe, Maximize, Minimize } from 'lucide-react';
+import { Captions, Globe } from 'lucide-react';
 import { useSubtitleTracks, useDownloadProjection, useSaveDownloadProjection } from '../hooks/useMisc';
 import { loadVRPlayer, preloadVRPlayer } from '../lib/vrPreload';
 import { getSubtitleUrl, type SubtitleSource } from '../api/subtitles';
@@ -112,6 +112,8 @@ export function VideoPlayer({ src, name, subtitles, onError, autoPlay = true, ex
 
   // Fullscreen takes the whole player - toolbar included - so the subtitle
   // and view pickers stay reachable, and the VR canvas resizes with the box.
+  // The button lives in the renderer's overlay (`onToggleFullscreen`); F
+  // toggles it from here.
   useEffect(() => {
     const onChange = () => setFullscreen(!!wrapRef.current && document.fullscreenElement === wrapRef.current);
     document.addEventListener('fullscreenchange', onChange);
@@ -146,7 +148,7 @@ export function VideoPlayer({ src, name, subtitles, onError, autoPlay = true, ex
 
   return (
     <div ref={wrapRef} className={`${className ?? ''} ${fullscreen ? 'bg-black flex flex-col h-full w-full' : ''}`}>
-      {/* Toolbar: view + subtitles + fullscreen. The renderer's overlay carries the playback controls. */}
+      {/* Toolbar: view + subtitles. The renderer's overlay carries the playback controls, fullscreen included. */}
       <div className={`flex items-center justify-end gap-2 flex-wrap ${fullscreen ? 'p-2 shrink-0' : 'mb-2'}`}>
         {extraControls}
         {tracks.length > 0 && (
@@ -185,16 +187,6 @@ export function VideoPlayer({ src, name, subtitles, onError, autoPlay = true, ex
             ))}
           </select>
         </label>
-        {canFullscreen && (
-          <button
-            onClick={toggleFullscreen}
-            className={`p-1.5 rounded-lg transition-colors ${fullscreen ? 'bg-cyan-500/20 text-cyan-300' : 'bg-slate-800/80 text-slate-300 hover:text-white'}`}
-            title={fullscreen ? 'Exit fullscreen (F)' : 'Fullscreen (F)'}
-            aria-label={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}
-          >
-            {fullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
-          </button>
-        )}
       </div>
 
       <div className={`relative bg-black overflow-hidden ${fullscreen ? 'flex-1 min-h-0' : 'rounded-xl shadow-2xl'}`}>
