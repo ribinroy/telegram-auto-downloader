@@ -98,8 +98,8 @@ describe('FileList - click opens, press-and-hold selects', () => {
     fireEvent.pointerUp(row('Docs'));
     fireEvent.click(row('Docs'), { ctrlKey: true });
     expect(props.onActivate).toHaveBeenCalledTimes(1);
-    expect(props.onActivate.mock.calls[0][0]).toBe(ENTRIES[0]);
-    expect(props.onActivate.mock.calls[0][1].ctrlKey).toBe(true);
+    expect(vi.mocked(props.onActivate).mock.calls[0][0]).toBe(ENTRIES[0]);
+    expect(vi.mocked(props.onActivate).mock.calls[0][1].ctrlKey).toBe(true);
     expect(props.onLongPress).not.toHaveBeenCalled();
   });
 

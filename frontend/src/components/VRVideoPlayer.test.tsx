@@ -33,11 +33,16 @@ vi.mock('three', () => {
   class Scene extends Object3D { constructor() { super(); made.scenes.push(this); } }
   class PerspectiveCamera extends Object3D {
     updateProjectionMatrix = vi.fn();
-    constructor(public fov: number, public aspect: number, public near: number, public far: number) { super(); }
+    fov: number; aspect: number; near: number; far: number;
+    constructor(fov: number, aspect: number, near: number, far: number) {
+      super();
+      this.fov = fov; this.aspect = aspect; this.near = near; this.far = far;
+    }
   }
   class BufferAttribute {
     needsUpdate = false;
-    constructor(public array: Float32Array, public itemSize: number) {}
+    array: Float32Array; itemSize: number;
+    constructor(array: Float32Array, itemSize: number) { this.array = array; this.itemSize = itemSize; }
     get count() { return this.array.length / this.itemSize; }
     getX(i: number) { return this.array[i * this.itemSize]; }
     setX(i: number, v: number) { this.array[i * this.itemSize] = v; }
@@ -54,11 +59,11 @@ vi.mock('three', () => {
       this.attributes = { uv: new BufferAttribute(new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]), 2) };
     }
   }
-  class PlaneGeometry { dispose = vi.fn(); constructor(public width: number, public height: number) {} }
+  class PlaneGeometry { dispose = vi.fn(); width: number; height: number; constructor(width: number, height: number) { this.width = width; this.height = height; } }
   class MeshBasicMaterial { map: unknown; transparent = false; depthTest = true; dispose = vi.fn(); constructor(p: Record<string, unknown>) { Object.assign(this, p); } }
-  class Mesh extends Object3D { constructor(public geometry: unknown, public material: unknown) { super(); } }
-  class VideoTexture { minFilter: unknown; magFilter: unknown; colorSpace: unknown; dispose = vi.fn(); constructor(public video: HTMLVideoElement) { made.videoTextures.push(this); } }
-  class CanvasTexture { needsUpdate = false; colorSpace: unknown; dispose = vi.fn(); constructor(public canvas: HTMLCanvasElement) { made.canvasTextures.push(this); } }
+  class Mesh extends Object3D { geometry: unknown; material: unknown; constructor(geometry: unknown, material: unknown) { super(); this.geometry = geometry; this.material = material; } }
+  class VideoTexture { minFilter: unknown; magFilter: unknown; colorSpace: unknown; dispose = vi.fn(); video: HTMLVideoElement; constructor(video: HTMLVideoElement) { this.video = video; made.videoTextures.push(this); } }
+  class CanvasTexture { needsUpdate = false; colorSpace: unknown; dispose = vi.fn(); canvas: HTMLCanvasElement; constructor(canvas: HTMLCanvasElement) { this.canvas = canvas; made.canvasTextures.push(this); } }
   class WebGLRenderer {
     domElement = document.createElement('canvas');
     loop: (() => void) | null = null;
@@ -80,7 +85,8 @@ vi.mock('three/addons/controls/OrbitControls.js', () => ({
   OrbitControls: class {
     enabled = true; enableZoom = true; enablePan = true; rotateSpeed = 1; target = { set: vi.fn() };
     update = vi.fn(); dispose = vi.fn(); saveState = vi.fn(); reset = vi.fn();
-    constructor(public camera: unknown, public dom: unknown) { made.controls.push(this); }
+    camera: unknown; dom: unknown;
+    constructor(camera: unknown, dom: unknown) { this.camera = camera; this.dom = dom; made.controls.push(this); }
   },
 }));
 
@@ -118,7 +124,7 @@ let ctx: { clearRect: ReturnType<typeof vi.fn>; strokeText: ReturnType<typeof vi
 beforeEach(() => {
   made.renderers.length = 0; made.scenes.length = 0; made.controls.length = 0; made.videoTextures.length = 0; made.canvasTextures.length = 0;
   ctx = { clearRect: vi.fn(), strokeText: vi.fn(), fillText: vi.fn(), font: '', lineWidth: 0 };
-  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(ctx as unknown as CanvasRenderingContext2D);
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(ctx as never);
 });
 afterEach(() => {
   delete (navigator as { xr?: unknown }).xr;
