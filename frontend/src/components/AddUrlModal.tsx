@@ -1,7 +1,9 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { X, Link, Loader2, AlertCircle, CheckCircle, Download, Folder, Magnet, Send, Upload } from 'lucide-react';
-import { type TorrentClient } from '../api';
+import { useQueryClient } from '@tanstack/react-query';
+import { fetchMappings, type TorrentClient } from '../api';
+import { qk } from '../api/queryKeys';
 import type { UrlCheckResult, VideoFormat, SourceMapping } from '../types';
 import { formatBytes } from '../utils/format';
 import { useTorrentConfig, useAddTorrent, useAddTorrentFile } from '../hooks/useTorrents';
@@ -86,6 +88,7 @@ export function AddUrlModal({ isOpen, onClose, initialUrl, initialFiles, showSec
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Data + mutation hooks
+  const qc = useQueryClient();
   const { data: torrentConfig } = useTorrentConfig();
   const { data: allFolders } = useVpsFolders();
   const { data: mappings } = useMappings();
@@ -106,8 +109,10 @@ export function AddUrlModal({ isOpen, onClose, initialUrl, initialFiles, showSec
 
   // Files (uploaded torrent) and magnets share the same submit UI.
   const inTorrentMode = magnetMode || torrentFiles.length > 0;
-  // Either send finished: the footer swaps to "Done".
-  const finished = !!magnetResult || batchDone;
+  // Either send finished: the footer swaps to "Done". A batch with failures
+  // is not finished - the summary says "send again to retry those", so the
+  // send button has to stay.
+  const finished = !!magnetResult || (batchDone && !torrentFiles.some(u => u.state === 'error'));
   const sending = addTorrentMut.isPending || addTorrentFileMut.isPending || batchRunning;
   const checking = checkUrlMut.isPending;
   const downloading = downloadUrlMut.isPending;
@@ -201,9 +206,13 @@ export function AddUrlModal({ isOpen, onClose, initialUrl, initialFiles, showSec
         setError(result.error || 'URL not supported');
       }
 
-      // Resolve the source's spec (for folder display + default quality)
+      // Resolve the source's spec (for folder display + default quality). The
+      // mappings query may still be in flight on a fresh page - a pasted URL is
+      // checked the moment the modal opens - so wait for it rather than read
+      // the closure's not-yet-loaded value.
       const source = getSourceFromUrl(urlToCheck);
-      const mapping: SourceMapping | undefined = (mappings ?? []).find(m => m.downloaded_from === source);
+      const list = mappings ?? await qc.ensureQueryData({ queryKey: qk.mappings(), queryFn: fetchMappings }).catch(() => [] as SourceMapping[]);
+      const mapping: SourceMapping | undefined = list.find(m => m.downloaded_from === source);
       setSourceMapping(mapping ?? null);
 
       if (result.formats && result.formats.length > 0) {

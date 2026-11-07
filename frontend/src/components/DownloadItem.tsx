@@ -1077,6 +1077,7 @@ export function DownloadItem({ download, onRetry, onStop, onPause, onResume, onD
           onClose={() => setVideoPlayerOpen(false)}
           videoUrl={videoUrl}
           title={download.file}
+          subtitles={{ downloadId: download.id }}
         />
       )}
       </div>

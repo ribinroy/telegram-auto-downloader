@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Loader2, CheckCircle, Key, Globe, Cookie, Wrench, Server, Send, TerminalSquare, Users, Wand2 } from 'lucide-react';
+import { Loader2, CheckCircle, Key, Globe, Cookie, Wrench, Server, Send, TerminalSquare, Users, Wand2, Gauge, Glasses } from 'lucide-react';
 import type { SyncThumbnailsResult } from '../api';
 import {
   useCookies, useSaveCookies, useSyncThumbnails, useYtdlpVersion, useUpgradeYtdlp,
@@ -17,12 +17,14 @@ import { useLayoutContext } from '../components/Layout';
 import { settingsTab } from '../routes';
 import { RenameRulesSettings } from '../components/RenameRulesSettings';
 import { SessionsSettings } from '../components/SessionsSettings';
+import { SpeedTestSettings } from '../components/SpeedTestSettings';
+import { VrSettings } from '../components/VrSettings';
 import { clearToken } from '../api';
 import { formatBytes } from '../utils/format';
 import { useErrorToast, useSuccessToast, notify } from '../lib/notify';
 
-type TabType = 'password' | 'sources' | 'renaming' | 'cookies' | 'jobs' | 'vps' | 'telegram' | 'queries' | 'users';
-const TAB_IDS: TabType[] = ['password', 'sources', 'renaming', 'cookies', 'telegram', 'queries', 'users', 'vps', 'jobs'];
+type TabType = 'password' | 'sources' | 'renaming' | 'cookies' | 'jobs' | 'vps' | 'telegram' | 'queries' | 'users' | 'network' | 'vr';
+const TAB_IDS: TabType[] = ['password', 'sources', 'renaming', 'cookies', 'telegram', 'queries', 'users', 'vps', 'vr', 'jobs', 'network'];
 
 export function SettingsPage() {
   const { refreshDownloads } = useLayoutContext();
@@ -178,7 +180,9 @@ export function SettingsPage() {
     { id: 'queries', label: 'Queries', description: 'Bot chat commands', icon: TerminalSquare, show: true },
     { id: 'users', label: 'Users', description: 'Roles & bot access', icon: Users, show: true },
     { id: 'vps', label: 'VPS Connection', description: 'Remote SSH/SFTP server', icon: Server, show: true },
+    { id: 'vr', label: 'VR headset', description: 'HereSphere & DeoVR library feed', icon: Glasses, show: true },
     { id: 'jobs', label: 'Jobs', description: 'Maintenance & tools', icon: Wrench, show: true },
+    { id: 'network', label: 'Network', description: 'Speed test to this device', icon: Gauge, show: true },
   ];
   const visibleTabs = tabs.filter(t => t.show);
   const activeTabMeta = visibleTabs.find(t => t.id === activeTab) ?? visibleTabs[0];
@@ -353,6 +357,10 @@ export function SettingsPage() {
         {activeTab === 'users' && <UsersSettings />}
 
         {activeTab === 'vps' && <VpsSettings onChange={refreshDownloads} />}
+
+        {activeTab === 'network' && <SpeedTestSettings />}
+
+        {activeTab === 'vr' && <VrSettings />}
 
         {activeTab === 'jobs' && (
           <>

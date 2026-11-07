@@ -105,3 +105,9 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .thumb-cell:hover .thumb-sheet { animation: none; }
 }
+
+/* The video player's gesture label ("+5 s", "Volume 60%"): holds, then fades. */
+@keyframes hud-fade {
+  0%, 55% { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; transform: scale(0.95); }
+}

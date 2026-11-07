@@ -48,7 +48,7 @@ Main Thread
 - **Tailwind CSS 4** - Styling
 - **Socket.IO client** - WebSocket
 - **Recharts** - Analytics charts
-- **Three.js** - VR video player
+- **Three.js** - 180/360 VR renderer (WebXR) inside the shared video player
 - **Lucide React** - Icons
 
 ## Project Structure
@@ -74,7 +74,7 @@ Main Thread
 |  |  |- helpers.py                 # Misc helpers (candidate_file_paths)
 |  |  '- routes/                    # Per-domain Flask route mixins (auth, downloads, url,
 |  |                                #   analytics, settings, vps_settings, torrent, vps_browse, media,
-|  |                                #   rename_rules, files)
+|  |                                #   rename_rules, files, speedtest, vr)
 |  |- telegram_handler/__init__.py  # Telethon download handler (~436 lines)
 |  |- ytdlp_handler/__init__.py     # yt-dlp subprocess handler (~604 lines)
 |  |- vps_handler/__init__.py       # SFTP download handler + hourly autoSync
@@ -89,6 +89,9 @@ Main Thread
 |  |- resume.py                     # Single resume path shared by /api/retry and the watchdog
 |  |- download_queue.py             # Concurrency limits + the waiting line (QueueRunner thread)
 |  |- file_meta.py                  # Video metadata extraction (ffprobe)
+|  |- speedtest.py                  # Server -> internet speed test (LibreSpeed servers, own thread)
+|  |- vr.py                         # HereSphere/DeoVR library feed: key, projection guess, the two JSON shapes
+|  |- subtitles.py                  # Subtitle tracks (sidecar + embedded) served as WebVTT
 |  |- browser_downloader.py         # Playwright fallback for yt-dlp
 |  '- metrics/__init__.py           # Prometheus counters
 |
@@ -122,8 +125,10 @@ Main Thread
 |        |                          #   ContextMenu, PreviewModal, PropertiesModal
 |        |- LoginPage.tsx           # JWT auth login
 |        |- StatsHeader.tsx         # Stats bar
-|        |- VideoPlayerModal.tsx    # Video playback
-|        |- VRVideoPlayer.tsx       # Three.js VR player
+|        |- VrSettings.tsx          # Settings → VR headset: feed key + the two URLs
+|        |- VideoPlayerModal.tsx    # Modal chrome around VideoPlayer
+|        |- VideoPlayer.tsx         # The player: one <video>, flat/VR switch, subtitle + view pickers
+|        |- VRVideoPlayer.tsx       # Three.js 180/360 mono/SBS/TB renderer, WebXR, subtitle plane
 |        |- Toast.tsx               # Toast notifications
 |        |- Tooltip.tsx             # Tooltip component
 |        '- ConfirmDialog.tsx       # Confirmation dialog
@@ -144,6 +149,7 @@ Main Thread
 - `deleted_at` (soft delete), `file_deleted` (physical file removed)
 - `file_count` (files in a VPS folder pull - e.g. a multi-file torrent - set when the transfer plans its work, backfilled by the `check_files` job for older pulls; NULL for a single file)
 - `file_status` (JSON object `{path: 'paused'|'skipped'}` - per-file decisions in a VPS folder pull, paths relative to the pull's top folder; a file with no entry is fetched normally, and every run - resume, retry, queue start - honours it. Replaced the older `paused_files` list column; `_run_migrations()` copies those lists across as `{path: 'paused'}`, and the old column is left unused)
+- `vr_projection` (a manual VR projection pick from the web player - 'flat', '180-sbs', '360-mono', ... - shared with the headset feed; NULL = guess from the filename)
 - `queue_position` (rank in the download queue while `waiting` *or* `downloading` - running ones keep a rank so a reorder can put a waiting one ahead of them; cleared when it leaves both), `format_id` (the yt-dlp format picked, so a queued or resumed download fetches that quality)
 - `created_at`, `updated_at`
 
@@ -174,6 +180,12 @@ Main Thread
 - `user_agent`, `ip`, `created_at`, `last_used_at`
 
 Note: legacy `labels`/`source_labels` tables and `downloads.label_id` may still exist in older DBs but are unused (the labels feature was reverted; see `_migrate_labels_to_specs()`).
+
+**`speed_tests`** - One row per speed-test run (see *Network speed tests*)
+- `id` (PK), `kind` ('browser' = a device ↔ this box, 'internet' = this box → the internet), `at`
+- `ping_min`/`ping_avg`/`ping_max`/`ping_jitter` (ms), `download_mbps`, `upload_mbps`, `download_bytes`, `upload_bytes`
+- `client` (browser: the user agent; internet: the ISP), `ip` (browser: the device; internet: the box's public address), `meta` (JSON: test server, location)
+- Hard-deleted on request; no soft delete - a measurement is not a record anyone depends on
 
 **`bot_queries`** - Bot chat commands
 - `id` (PK), `key` (unique among live rows), `command`, `deleted_at` (soft delete; renaming onto a live key soft-deletes the one replaced)
@@ -331,6 +343,7 @@ Live filesystem access - every call reads the disk, nothing is indexed or cached
 ### Video Streaming
 - `GET /api/video/check/<id>` - What is on disk for a download: `{exists, kind: 'video'|'dir'|'file', path, parent, size}`. The downloads list's view button uses `kind` to decide - play a video inline, or send a folder pull / non-video file to the file explorer (`/files?path=...`, plus `&select=<path>` for a single file, which `ExplorerPage` highlights and scrolls to, then drops). Keeps `file_deleted` honest for folders too, which the old video-only check always marked as missing.
 - `GET /api/video/stream/<id>` - Range-request video streaming
+- `GET /api/video/subtitles/<id>` - Subtitle tracks of a finished download (see **Video player** below); `GET /api/video/subtitle/<id>?track=` serves one as WebVTT (`@media_token_required` - it is a `<track src>`). The explorer twins are `POST /api/files/subtitles` `{path}` and `GET /api/files/subtitle?path=&track=`
 - `GET /api/video/thumbs/<id>` - Thumbnail list
 - `GET /api/video/thumb/<id>/<filename>` - Single thumbnail
 
@@ -340,6 +353,50 @@ Live filesystem access - every call reads the disk, nothing is indexed or cached
 - `POST /api/jobs/check-files` - Look on disk for every finished download's file/folder (`local_copy_exists`) and set `file_deleted` to match, both ways -> `{checked, present, missing, marked_missing, restored}` (job `check_files`, schedulable)
 - `GET /api/jobs/schedules` - Every job with its schedule, last outcome and next fire time (plus the server's `tz`)
 - `PUT /api/jobs/schedules/<job_id>` - `{enabled?, time? 'HH:MM', days?: [0-6]}` (Monday = 0)
+
+### Network speed tests (Settings → Network)
+Two links, measured separately, both recorded in the **`speed_tests`** table
+so every device sees one shared history.
+
+- **This device ↔ server** - the ceiling for streaming and the explorer.
+  `web_app/routes/speedtest.py` is deliberately dumb and behind
+  `@token_required` (an open bandwidth sink is a gift to anyone who finds the
+  port): `GET /api/speedtest/ping` (answers at once, `no-store`),
+  `GET /api/speedtest/download?size=` (streams one reused 1 MB block of
+  `os.urandom` noise up to 4 GB - generating noise per chunk would make the
+  CPU the bottleneck), `POST /api/speedtest/upload` (reads the body in 1 MB
+  chunks and discards it, returns `{bytes, seconds}`). **The browser does all
+  the timing** (`api/speedtest.ts`): 8 pings after an uncounted warm-up
+  request; a download read through a `ReadableStream` for up to 8 s then
+  aborted; an upload of a 256 MB noise `Blob` via XHR (fetch has no upload
+  progress), same deadline. `utils/speedtest.ts` turns samples into figures -
+  `throughputMbps` skips the first 0.3 s (TCP slow start), `recentMbps` is the
+  live number. The outcome is posted to `POST /api/speedtest/results`; the
+  device (`User-Agent`) and its address come from the request, not the body.
+  The Python server itself tops out around a few Gbit/s, which the page says.
+- **Server → internet** - what downloads can reach. `backend/speedtest.py`
+  runs it on a daemon thread (`InternetSpeedTest`, one at a time); the page
+  starts it with `POST /api/speedtest/internet`, polls `GET` every 500 ms for
+  `{phase, live_mbps, progress, result, error, meta}` and can `DELETE` to
+  cancel. It goes against the **public LibreSpeed servers**
+  (`librespeed.org/backend-servers/servers.php`, cached an hour, three
+  built in as a fallback) - *not* `speed.cloudflare.com`, which sits behind
+  bot protection, 403s `/meta` and stalls non-browser callers mid-transfer.
+  The nearest server is picked by pinging them all in parallel (phase
+  `servers`), `getIP.php?isp=true` names the ISP, then 8 pings on one
+  kept-alive connection, `garbage.php?ckSize=100` read in 1 MB chunks and
+  re-requested until the 8 s deadline, and back-to-back **4 MB** POSTs to
+  `empty.php` - the biggest body every public server accepts (some sit
+  behind an 8 MB nginx limit; a bigger blob 413s). All stdlib
+  `http.client`, each network function monkeypatchable so the tests fake
+  them. The result row carries the ISP as `client`, the public IP, and
+  `{server, server_url, location}` as `meta`.
+- `GET /api/speedtest/results?kind=browser|internet&limit=` (newest first) and
+  `DELETE /api/speedtest/results/<id>`. `DatabaseManager.add_speed_test /
+  get_speed_tests / delete_speed_test`.
+- UI: `components/SpeedTestSettings.tsx` - a card per link with a live
+  Mbit/s figure and progress bar, and one history table (filter by link,
+  device named from the user agent by `describeClient()`, delete per row).
 
 ### Monitoring
 - `GET /metrics` - Prometheus (no auth)
@@ -762,6 +819,142 @@ a pulled USB drive disappears from the sidebar.
   pointers the native contextmenu is suppressed (the hold is the select gesture)
   and the row's ⋮ button opens the menu instead.
 
+## Video player (flat + VR + subtitles)
+
+`components/VideoPlayer.tsx` is the one player everything uses - the downloads
+list (`VideoPlayerModal`), the transfer-files modal and the explorer preview.
+**One hidden `<video>` element carries the stream, the subtitle `<track>`s and
+the position; the three.js renderer (`VRVideoPlayer`) draws it for every
+projection, flat included**, as a `VideoTexture` - so every file opens in the
+same player with the same overlay controls, and a projection switch never
+reloads or rewinds. The browser's native controls are never shown.
+
+- **Flat is a fitted plane, not a sphere.** `fitFlatPlane()` (`utils/vr.ts`)
+  sizes a unit plane `FLAT_DISTANCE` in front of the camera to the video's
+  aspect ratio within the view (`object-fit: contain` in world units),
+  refitted on resize and on `loadedmetadata`. OrbitControls are reset to the
+  straight-ahead pose and disabled while flat - a sphere may have left the
+  camera turned, and dragging a flat picture around makes no sense.
+- **The overlay carries what the native controls used to**: play/pause, seek,
+  mute + volume (hover/focus reveals the slider on small screens), a playback
+  speed select (`PLAYBACK_RATES`), the headset button and fullscreen. Keys:
+  space/K play, ←/→ ±5s, M mute, F fullscreen. The chosen subtitle track is
+  always `hidden` (firing `cuechange`, never painted) and drawn on the
+  renderer's subtitle plane.
+- **Gestures on the picture** (`utils/playerGestures.ts` holds the decisions,
+  pure and tested; the renderer only wires pointer events to them):
+  - *Double tap* - left third seeks back 5 s, right third forward 5 s, the
+    middle toggles playback. `TapDetector` reads taps from raw pointer
+    down/up (any pointer type), since `dblclick` is unreliable on touch
+    screens; a drag, a long press or a second finger is never a tap.
+  - *Vertical swipe on the right third* sets the volume: half the picture's
+    height sweeps the full range, and raising it unmutes. The swipe is taken
+    from OrbitControls by setting `controls.enabled = false` for the rest of
+    that touch (it checks `enabled` on move, not on up, so it still cleans
+    up its pointer capture), re-enabled on the pointer's up unless flat. A
+    horizontal drag there still rotates the sphere; the direction is settled
+    once by the first 10 px of movement.
+  - *Wheel or two-finger pinch zooms a VR video* by changing the camera's
+    `fov` (30..110°; the camera sits at the sphere's centre, so OrbitControls'
+    dolly - moving it - would be wrong, and `enableZoom` stays off). The
+    wheel listener is native and non-passive (React's is passive) so the
+    page doesn't scroll under the player. A flat plane resets the fov to
+    `FOV` and ignores both.
+  - Each gesture flashes a label in its zone (`role="status"`: "+5 s",
+    "Volume 60%", "Zoom 1.5×") that fades on its own (`hud-fade` in
+    `index.css`). The picture is `touch-none` so the browser never scrolls
+    or double-tap-zooms instead.
+
+- **Projection** (`utils/vr.ts`): `flat`, or `180|360` × `mono|sbs|tb`.
+  `detectProjection(name, aspect)` guesses from the filename tags VR files
+  carry (`_180`, `_LR`/`_SBS`/`_3DH`, `_TB`/`_OU`, `_360`, `MKX200`, `FISHEYE`,
+  `VR`); the aspect ratio only settles the layout once the name says VR at all
+  - a square untagged clip is not a 180° film. A manual pick is remembered per
+  filename in `localStorage` (`rememberProjection`), cleared by picking the
+  detected one again. The toolbar select marks the guess with "· auto".
+- **The sphere** (`VRVideoPlayer.tsx`): an inverted `SphereGeometry` with
+  `phiStart = 3π/2 - phiLength/2` so the middle of the frame is straight ahead
+  (-Z, where a headset looks at session start); 180° is half a sphere. Stereo
+  is two meshes with the UVs halved onto each eye's part of the frame (left
+  eye = left half / top half), on three's WebXR layers (left 1, right 2); the
+  desktop camera also takes layer 1 so it shows the left eye. Mono sits on
+  layer 0.
+- **The three.js renderer is a lazy chunk** (~0.5 MB) that the list and the
+  login page never load. Fetching it at the moment VR is switched on is what
+  the "Loading VR player" screen was, so `lib/vrPreload.ts` fetches it early
+  instead: on `requestIdleCallback` after sign-in (`App`) and when any
+  `VideoPlayer` mounts. The `Suspense` fallback is still there for a cold
+  cache on a slow link.
+- **Fullscreen** is the whole player's (`wrapRef` in `VideoPlayer`), toolbar
+  included, so the subtitle/view pickers stay reachable. The only button is
+  the overlay's, next to the playback controls (`fullscreen`/
+  `onToggleFullscreen` props - the toolbar used to carry a twin). `F`
+  toggles it; hidden where `document.fullscreenEnabled` is false (iOS Safari).
+- **WebXR**: `renderer.xr.enabled`, `setAnimationLoop` (not rAF), a Glasses
+  button shown only when `navigator.xr.isSessionSupported('immersive-vr')`
+  resolves true. Drag (OrbitControls) outside a session, head tracking inside.
+- **Subtitles**: the backend lists tracks - sidecars next to the file whose
+  name starts with its stem (`Movie.en.srt`, `Movie.de.forced.ass`) plus the
+  container's text tracks via ffprobe (bitmap PGS/DVD are left out) - and
+  serves any of them as **WebVTT**, the only format a `<track>` takes:
+  `.srt` converted in pure Python (`srt_to_vtt`), `.ass`/`.ssa` and embedded
+  tracks through ffmpeg, cached under `SCREENSHOTS_DIR/.subs` keyed by the
+  file's identity + track (demuxing a 50 GB MKV once is fine, every play is
+  not). Track ids are `f:<sidecar name>` / `s:<n>` (n-th subtitle stream,
+  bitmap ones counted so `-map 0:s:n` lands); a sidecar id is validated
+  against the video's folder and stem before anything is read. The chosen
+  track is `hidden` - still firing `cuechange`, not painted onto the `<video>`,
+  which nobody sees - and the cue text is drawn on a canvas plane parented to
+  the camera, so it stays in front of you however you turn, headset included. `backend/subtitles.py`
+  owns it; `web_app/helpers.subtitle_response()` is shared by both route pairs.
+
+## VR headset feed (HereSphere / DeoVR)
+
+Settings → VR headset. HereSphere and DeoVR have a "Web stream" box: given a
+URL they fetch JSON describing a library and play the files themselves with
+the headset's hardware decoder - what an 8K HEVC file needs and a browser
+doesn't have. `backend/vr.py` builds that JSON from the finished downloads;
+`web_app/routes/vr.py` serves it.
+
+- **The key is the credential.** The apps can't do a JWT login, so a 16-char
+  url-safe key lives in the `vr_feed` setting (`{key, username,
+  include_secured, created_at}`) and sits in the URL: `/vr/<key>/heresphere`
+  and `/vr/<key>/deovr` (a bare `/vr/<key>` answers in HereSphere's format
+  when the request carries its `HereSphere-JSON-Version` header, else
+  DeoVR's). Media URLs inside the feed carry a media token
+  minted per response as the key's owner (`mint_media_token`, same `typ:
+  'media'` claims the browser uses, `MEDIA_TOKEN_HOURS`), so the stream /
+  thumb / subtitle routes need no change, a disabled key stops new feeds at
+  once, and "sign out everywhere" (token_version) kills every token already
+  handed out. A bad key answers 401 with the app's own denied shape
+  (`access: -1` / `authorized: '-1'`) so the headset shows a message, not a
+  spinner. `GET/POST /api/settings/vr` (`{action: regenerate|disable}` or
+  `{include_secured}`); secured sources are out unless the key was made to
+  include them.
+- **Two formats, one library.** Field names are from DeoVR's app doc and
+  XBVR's HereSphere implementation (the de-facto reference; the spec isn't
+  published), and the tests pin them. HereSphere: `{access, library:[{name,
+  list:[urls]}]}` + per video `projection` (perspective / equirectangular /
+  equirectangular360 / fisheye), `stereo`, `fov`, `lens` (Linear / MKX200 /
+  MKX220 / VRCA220), **`duration` in ms**, `media[].sources[]`,
+  `subtitles[{name, language, url}]` (the WebVTT routes), `tags`, every
+  `write*` false; the response carries `HereSphere-JSON-Version: 1`. DeoVR:
+  `{scenes:[{name, list:[{title, videoLength (s), thumbnailUrl,
+  video_url}]}], authorized}` + per video `encodings[0].videoSources`,
+  `screenType` (flat / dome / sphere / fisheye / mkx200 / rf52),
+  `stereoMode` (sbs / tb / off), `is3d` - and **no subtitle field**. Groups:
+  All videos · VR · one per source. Only finished single-file videos still on
+  disk (`library_downloads`); folder pulls are left out.
+- **Projection is shared with the web player.** `detect_projection` is a
+  port of `utils/vr.ts` plus the lens tags the web player can't render
+  (MKX200/220, VRCA220, RF52, FISHEYE190 → `fisheye` with the lens's fov).
+  A manual pick in the player is saved to **`downloads.vr_projection`**
+  (`GET/PUT /api/downloads/<id>/projection`, optimistic in
+  `useSaveDownloadProjection`) and wins over the guess in both the player
+  and the feed; an explorer path has no row, so it keeps the browser-only
+  memory. Absolute URLs honour `X-Forwarded-Proto/Host`.
+- PLAY'A and players without a web library read SMB/DLNA, not this feed.
+
 ## The VPS as an explorer drive
 
 The seedbox shows up in the file explorer's sidebar as a drive alongside the
@@ -904,7 +1097,29 @@ calls `logsafe.install(LOG_FILE)`.
 ```bash
 ./venv/bin/python -m pytest      # backend  (tests/)
 cd frontend && npm test          # frontend (src/**/*.test.ts)
+make coverage                    # both, with reports: htmlcov/ and frontend/coverage/
 ```
+
+Coverage as of November 2026: backend **97%** (every module above 80% except
+`subtitles.py`/`routes/files.py` at 72-83%); frontend **39%** overall but
+~99% on the logic layers (`api/`, `hooks/`, `utils/`) - what is left is the
+large page-sized components (`DownloadItem`, `AddUrlModal`, `Layout`,
+`VpsSettings`, the pages). A change to a logic module should keep its file
+near full coverage; the big components are tested by use.
+
+**CI** (`.github/workflows/ci.yml`) runs on every push to a pull request and
+on `main`: three separate status checks - `Types` (`tsc -b --noEmit`),
+`Frontend tests` (vitest) and `Backend tests` (pytest, with ffmpeg
+installed so nothing is skipped). A new push to the same PR cancels the run
+for the old commit. Mergeability is enforced by **branch protection** on
+GitHub (Settings → Branches → `main` → require status checks), not by the
+workflow itself; ESLint is deliberately not a job while the 18 pre-existing
+lint errors in the big components stand, or every PR would be red.
+
+Test tooling is in `requirements-dev.txt` (pytest, pytest-cov) and the
+frontend's devDependencies (`@vitest/coverage-v8`); `.coveragerc` omits
+`backend/main.py` (the thread wiring can't run under a test) and
+`vitest.config.ts` scopes coverage to `src/**` minus tests and the entry.
 
 - **Nothing in the suite touches the real deployment.** `tests/conftest.py`
   redirects `DOWNLOAD_DIR`, `SCREENSHOTS_DIR` and `DATABASE_URL` to a temp

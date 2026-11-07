@@ -47,6 +47,8 @@ from backend.web_app.routes.vps_browse import VpsBrowseRoutesMixin
 from backend.web_app.routes.media import MediaRoutesMixin
 from backend.web_app.routes.rename_rules import RenameRulesRoutesMixin
 from backend.web_app.routes.files import FilesRoutesMixin
+from backend.web_app.routes.speedtest import SpeedTestRoutesMixin
+from backend.web_app.routes.vr import VrRoutesMixin
 
 
 # Python's mimetypes table predates .webmanifest on most distros; without this
@@ -83,7 +85,7 @@ class WebApp(
     AuthRoutesMixin, DownloadRoutesMixin, UrlRoutesMixin, AnalyticsRoutesMixin,
     SettingsRoutesMixin, VpsSettingsRoutesMixin, TorrentRoutesMixin,
     VpsBrowseRoutesMixin, MediaRoutesMixin, RenameRulesRoutesMixin,
-    FilesRoutesMixin,
+    FilesRoutesMixin, SpeedTestRoutesMixin, VrRoutesMixin,
 ):
     def __init__(self, download_tasks, ytdlp_downloader=None, event_loop=None, telegram_downloader=None, vps_downloader=None):
         self.download_tasks = download_tasks
@@ -412,6 +414,8 @@ class WebApp(
         self.register_media_routes()
         self.register_rename_rules_routes()
         self.register_files_routes()
+        self.register_speedtest_routes()
+        self.register_vr_routes()
 
         # Serve frontend
         @self.app.route('/')

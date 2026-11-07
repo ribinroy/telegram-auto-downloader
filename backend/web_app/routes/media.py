@@ -18,8 +18,9 @@ from backend.web_app.torrent import (
     transmission_rpc, normalize_transmission_url,
 )
 from backend.web_app.vps import load_vps_credentials, annotate_vps_folders, open_vps_sftp
-from backend.web_app.helpers import candidate_file_paths, range_response
+from backend.web_app.helpers import candidate_file_paths, range_response, subtitle_response
 from backend.jobs import JOBS, read_schedules, save_schedule, next_run, run_job
+from backend import subtitles
 
 
 class MediaRoutesMixin:
@@ -100,6 +101,37 @@ class MediaRoutesMixin:
                 return jsonify({"error": "File not found"}), 404
 
             return range_response(file_path)
+
+        def _finished_file(download_id):
+            """The on-disk file of a finished download, or None."""
+            download = get_db().get_download_by_id(download_id)
+            if not download or download.get("status") != "done" or not download.get("file"):
+                return None
+            for path in candidate_file_paths(download, download["file"]):
+                if path.is_file():
+                    return path
+            return None
+
+        @self.app.route("/api/video/subtitles/<int:download_id>", methods=["GET"])
+        @token_required
+        def video_subtitles(download_id):
+            """Subtitle tracks for a download: sidecar files + embedded text tracks."""
+            path = _finished_file(download_id)
+            if not path:
+                return jsonify({"error": "Video not available"}), 404
+            try:
+                return jsonify({"tracks": subtitles.list_tracks(path)})
+            except subtitles.SubtitleError as e:
+                return jsonify({"error": str(e)}), e.status
+
+        @self.app.route("/api/video/subtitle/<int:download_id>", methods=["GET"])
+        @media_token_required
+        def video_subtitle(download_id):
+            """One track as WebVTT (?track=<id>), loaded by a <track> element."""
+            path = _finished_file(download_id)
+            if not path:
+                return jsonify({"error": "Video not available"}), 404
+            return subtitle_response(path, request.args.get("track"))
 
         # Thumbnail API
         @self.app.route("/api/thumbs/<int:download_id>", methods=["GET"])

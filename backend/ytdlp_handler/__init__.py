@@ -404,12 +404,12 @@ class YtdlpDownloader:
                     if progress_info.get('total_bytes'):
                         final_total_bytes = progress_info['total_bytes']
 
-                    # Throttle updates to once per second
-                    if now - last_update >= 1:
+                    # Throttle updates to once per second. A completion line
+                    # carries no bytes to record, but it must still reach the
+                    # "already been downloaded" check below - a `continue`
+                    # here used to skip it whenever the throttle was open.
+                    if now - last_update >= 1 and not progress_info.get('complete'):
                         last_update = now
-
-                        if progress_info.get('complete'):
-                            continue
 
                         db.update_download_by_message_id(
                             message_id,

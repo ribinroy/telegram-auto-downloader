@@ -55,9 +55,13 @@ async function refreshAccessToken(): Promise<string | null> {
   if (refreshInFlight) return refreshInFlight;
 
   refreshInFlight = (async () => {
-    const refreshToken = getRefreshToken();
-    if (!refreshToken) return null;
     try {
+      // Inside the try so the slot below is always cleared: a 401 with no
+      // refresh token stored used to leave this null promise in place for
+      // good, and every later 401 - after signing in again in the same tab -
+      // reused it and ended the session instead of refreshing.
+      const refreshToken = getRefreshToken();
+      if (!refreshToken) return null;
       const response = await fetch(`${API_BASE}/api/auth/refresh`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

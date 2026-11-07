@@ -6,7 +6,7 @@ import jwt
 from datetime import datetime, timedelta
 from pathlib import Path
 from flask import jsonify, request, send_from_directory, Response
-from backend.config import JWT_SECRET
+from backend.config import JWT_SECRET, PROJECT_ROOT
 from backend.database import get_db
 from backend import metrics
 from backend.web_app.base import (
@@ -22,6 +22,12 @@ from backend.web_app.helpers import candidate_file_paths
 
 
 _NETSCAPE_HEADER = "# Netscape HTTP Cookie File"
+
+# The file yt-dlp is pointed at (YtdlpDownloader.COOKIES_FILE): the project
+# root, not relative to this module - routes moved a directory deeper when
+# they were split by domain, and a path computed from __file__ here silently
+# wrote the cookies where the downloader never looked.
+COOKIES_FILE = PROJECT_ROOT / 'cookies.txt'
 
 
 def _normalize_netscape_cookies(content: str) -> str:
@@ -49,7 +55,7 @@ class SettingsRoutesMixin:
         @token_required
         def get_cookies():
             """Get current cookies content"""
-            cookies_path = Path(__file__).parent.parent.parent / 'cookies.txt'
+            cookies_path = COOKIES_FILE
             if cookies_path.exists():
                 return jsonify({"cookies": cookies_path.read_text()})
             return jsonify({"cookies": ""})
@@ -60,7 +66,7 @@ class SettingsRoutesMixin:
             """Save cookies content"""
             data = request.json
             cookies_content = data.get("cookies", "")
-            cookies_path = Path(__file__).parent.parent.parent / 'cookies.txt'
+            cookies_path = COOKIES_FILE
 
             try:
                 if cookies_content.strip():

@@ -25,7 +25,7 @@ export function useRealtime(cb: RealtimeCallbacks = {}) {
   const { onConnectedChange, onNewDownload, onStatusChange } = cb;
 
   useEffect(() => {
-    const patchDownloads = (fn: (downloads: Download[]) => Download[], arriving = false) => {
+    const patchPages = (fn: (pages: DownloadsResponse[]) => DownloadsResponse[], arriving = false) => {
       qc.setQueriesData<DownloadsCache>({
         queryKey: ['downloads'],
         // A download that just arrived isn't on disk yet - keep it out of
@@ -33,9 +33,20 @@ export function useRealtime(cb: RealtimeCallbacks = {}) {
         predicate: q => !arriving || (q.queryKey[1] as { filter?: string } | undefined)?.filter !== 'on_disk',
       }, (old) => {
         if (!old) return old;
-        return { ...old, pages: old.pages.map(page => ({ ...page, downloads: fn(page.downloads) })) };
+        return { ...old, pages: fn(old.pages) };
       });
     };
+
+    const patchDownloads = (fn: (downloads: Download[]) => Download[]) =>
+      patchPages(pages => pages.map(page => ({ ...page, downloads: fn(page.downloads) })));
+
+    // A new download goes to the top of the list - the first page only. It
+    // used to be prepended to every page (the duplicate check was per page),
+    // so a list scrolled past one page showed each arrival twice.
+    const prependDownload = (download: Download) => patchPages(pages => {
+      if (pages.some(p => p.downloads.some(d => d.message_id === download.message_id))) return pages;
+      return pages.map((page, i) => (i === 0 ? { ...page, downloads: [download, ...page.downloads] } : page));
+    }, true);
 
     const findDownload = (messageId: string): Download | undefined => {
       const caches = qc.getQueriesData<DownloadsCache>({ queryKey: ['downloads'] });
@@ -55,7 +66,7 @@ export function useRealtime(cb: RealtimeCallbacks = {}) {
     connectSocket({
       onNew: (download) => {
         refreshQueue();
-        patchDownloads(list => (list.some(d => d.message_id === download.message_id) ? list : [download, ...list]), true);
+        prependDownload(download);
         onNewDownload?.(download);
       },
       onDeleted: ({ message_id }) => {

@@ -34,6 +34,7 @@ THUMB_POSITIONS = [0.05, 0.15, 0.25, 0.35, 0.45, 0.55, 0.65, 0.75, 0.85, 0.95]  
 
 async def probe_video(file_path: str) -> dict | None:
     """Run ffprobe on a video file and return parsed metadata."""
+    proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
             FFPROBE_PATH, '-v', 'quiet', '-print_format', 'json',
@@ -48,7 +49,7 @@ async def probe_video(file_path: str) -> dict | None:
         return json.loads(stdout.decode())
     except asyncio.TimeoutError:
         logger.warning("ffprobe timed out for %s", file_path)
-        if proc.returncode is None:
+        if proc and proc.returncode is None:
             proc.kill()
         return None
     except (json.JSONDecodeError, FileNotFoundError) as e:
@@ -191,6 +192,10 @@ async def generate_thumbnails(download_id, file_path: str, duration: float) -> i
     async def _extract_one(index: int, pos: float) -> bool:
         timestamp = duration * pos
         out_path = thumb_dir / f"{index}.jpg"
+        # Set before the try: with ffmpeg missing, create_subprocess_exec
+        # itself raises FileNotFoundError and the handler below would
+        # otherwise trip over an unassigned `proc`.
+        proc = None
         try:
             proc = await asyncio.create_subprocess_exec(
                 FFMPEG_PATH, '-ss', str(timestamp),

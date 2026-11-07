@@ -5,6 +5,7 @@ import { getFileStreamUrl, getFileDownloadUrl, type FileEntry } from '../../api/
 import { ensureMediaToken } from '../../api';
 import { useFileText } from '../../hooks/useFiles';
 import { formatBytes } from '../../utils/format';
+import { VideoPlayer } from '../VideoPlayer';
 
 /** Preview for one file, with arrow-key paging through the folder's siblings. */
 export function FilePreviewModal({
@@ -60,7 +61,10 @@ export function FilePreviewModal({
           </div>
         </div>
 
-        <div className="relative bg-black rounded-xl overflow-hidden shadow-2xl min-h-[240px] flex items-center justify-center">
+        {/* A video brings its own box (toolbar + player); everything else sits in this one. */}
+        <div className={entry.kind === 'video'
+          ? 'relative'
+          : 'relative bg-black rounded-xl overflow-hidden shadow-2xl min-h-[240px] flex items-center justify-center'}>
           <PreviewBody entry={entry} />
 
           {prev && (
@@ -103,7 +107,7 @@ function PreviewBody({ entry }: { entry: FileEntry }) {
 
   if (entry.kind === 'video') {
     return (
-      <video key={key} src={url} onError={onError} controls autoPlay playsInline className="w-full max-h-[78vh]" />
+      <VideoPlayer key={key} src={url} name={entry.name} subtitles={{ path: entry.path }} onError={onError} className="w-full" />
     );
   }
   if (entry.kind === 'image') {

@@ -74,7 +74,10 @@ class NetworkWatchdog(threading.Thread):
         self.interval = interval or NET_PROBE_INTERVAL
         self.stall_seconds = NET_STALL_SECONDS if stall_seconds is None else stall_seconds
         self._probe = probe or probe_connectivity
-        self._stop = threading.Event()
+        # Not `_stop`: threading.Thread has a private `_stop()` method that
+        # join()/is_alive() call once the thread ends, and shadowing it with
+        # an Event makes those raise "'Event' object is not callable".
+        self._stopping = threading.Event()
         # Assume a working link at startup: the first probe corrects it, and
         # starting "offline" would treat boot as an outage.
         self.online = True
@@ -85,17 +88,17 @@ class NetworkWatchdog(threading.Thread):
         self._orphan_attempts = 0
 
     def stop(self):
-        self._stop.set()
+        self._stopping.set()
 
     def run(self):
         # A moment's grace so the first tick doesn't race database init.
         time.sleep(10)
-        while not self._stop.is_set():
+        while not self._stopping.is_set():
             try:
                 self.tick()
             except Exception as e:  # noqa: BLE001 - the thread must survive
                 logger.warning("network watchdog tick failed: %s", e)
-            self._stop.wait(self.interval)
+            self._stopping.wait(self.interval)
 
     # --- The tick ---------------------------------------------------------
     def tick(self, now=None):

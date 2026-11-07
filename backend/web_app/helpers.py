@@ -107,3 +107,18 @@ def range_response(file_path, mime_type=None, download_name=None):
         response.headers['Content-Disposition'] = (
             f"attachment; filename*=UTF-8''{quote(download_name)}")
     return response
+
+
+def subtitle_response(video_path, track_id):
+    """One subtitle track of a video as a WebVTT response - shared by the
+    per-download route and the explorer's by-path route, so the two can't
+    serve a track differently."""
+    from flask import Response, jsonify
+    from backend import subtitles
+    try:
+        text = subtitles.render_vtt(video_path, track_id)
+    except subtitles.SubtitleError as e:
+        return jsonify({"error": str(e)}), e.status
+    resp = Response(text, mimetype='text/vtt')
+    resp.headers['Cache-Control'] = 'private, max-age=3600'
+    return resp
