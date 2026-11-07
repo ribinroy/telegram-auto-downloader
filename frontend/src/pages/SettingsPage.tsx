@@ -464,6 +464,9 @@ export function SettingsPage() {
                         {syncResult.explorer_freed > 0 && ` (${formatBytes(syncResult.explorer_freed)})`}
                       </div>
                     )}
+                    {(syncResult.explorer_migrated ?? 0) > 0 && (
+                      <div className="text-slate-400">Explorer thumbs carried over: {syncResult.explorer_migrated}</div>
+                    )}
                     {syncResult.generated === 0 && syncResult.orphan_deleted === 0 && syncResult.db_count_fixed === 0 && syncResult.meta_extracted === 0 && syncResult.failed === 0 && syncResult.explorer_pruned === 0 && (
                       <div className="col-span-2 text-slate-400">Everything is already in sync.</div>
                     )}

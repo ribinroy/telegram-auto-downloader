@@ -736,7 +736,9 @@ def read_text(raw_path, max_bytes=TEXT_PREVIEW_MAX):
 
 THUMB_CACHE = Path(SCREENSHOTS_DIR) / '.explorer'
 THUMB_MAX = 480          # long edge of a still; one tile of a contact sheet
-THUMB_VERSION = 2        # bump to orphan (and prune) every cached entry
+THUMB_VERSION = 3        # bump to orphan (and prune) every cached entry
+# v2 entries were keyed by path; they are adopted into v3 names, not regenerated.
+LEGACY_THUMB_VERSION = 2
 
 # A video preview is a 2x2 contact sheet, not a single frame. Two reasons:
 # a fixed "5 seconds in" lands on a fade-in, a studio card or plain black on
@@ -748,9 +750,104 @@ SHEET_AT = (0.2, 0.4, 0.6, 0.8)  # fractions of the duration
 QUICK_AT = 0.4                   # the first-pass single frame
 
 
+# --- cache names follow the file, not its path -----------------------------
+#
+# A preview is named after the file's *content*: its size plus a hash of its
+# first and last FINGERPRINT_CHUNK bytes. Renaming, moving to another folder
+# or another disk, or copying it keeps that name, so the preview follows the
+# file instead of being regenerated at the new path and orphaned at the old
+# one. (The old path-based key made every move a fresh ffmpeg run on an 8K
+# file.) Replacing a file changes its bytes, so it still invalidates itself.
+#
+# Reading 128 KB per file on every grid poll would be wasteful, so the name is
+# memoised by the file's identity - (device, inode, mtime, size). A rename or
+# same-disk move keeps the inode, so it doesn't even re-read.
+
+FINGERPRINT_CHUNK = 64 * 1024
+_KEY_MEMO_MAX = 50_000
+_key_memo = {}           # (dev, ino, mtime_ns, size) -> cache name; insertion-ordered
+_key_lock = threading.Lock()
+
+
+def _fingerprint(path, size):
+    h = hashlib.sha1(f'v{THUMB_VERSION}:{size}:'.encode())
+    with open(path, 'rb') as f:
+        if size <= 2 * FINGERPRINT_CHUNK:
+            h.update(f.read())
+        else:
+            h.update(f.read(FINGERPRINT_CHUNK))
+            f.seek(size - FINGERPRINT_CHUNK)
+            h.update(f.read(FINGERPRINT_CHUNK))
+    return h.hexdigest() + '.jpg'
+
+
 def _thumb_key(path, st):
-    raw = f'v{THUMB_VERSION}:{path}:{st.st_mtime_ns}:{st.st_size}'.encode()
+    """Cache name for a file: its content fingerprint (memoised by identity).
+
+    Raises OSError if the file can't be read - and then it can't be
+    thumbnailed either.
+    """
+    ident = (st.st_dev, st.st_ino, st.st_mtime_ns, st.st_size)
+    with _key_lock:
+        name = _key_memo.get(ident)
+    if name:
+        return name
+    name = _fingerprint(path, st.st_size)
+    with _key_lock:
+        _key_memo[ident] = name
+        while len(_key_memo) > _KEY_MEMO_MAX:
+            _key_memo.pop(next(iter(_key_memo)))
+    return name
+
+
+def _legacy_key(path, st):
+    """The v2 name (keyed by path), only to find entries made before v3."""
+    raw = f'v{LEGACY_THUMB_VERSION}:{path}:{st.st_mtime_ns}:{st.st_size}'.encode()
     return hashlib.sha1(raw).hexdigest() + '.jpg'
+
+
+# (cache name, path) pairs whose sidecar already names that path - so the
+# sidecar is checked once per file per process, not on every poll.
+_adopted = set()
+
+
+def _adopt(cached, path, st):
+    """Point an existing preview's sidecar at where its file is now.
+
+    The sidecar is what lets the cleanup job tell a live preview from a dead
+    one; after a move it still names the old path. Rewritten only when it
+    disagrees, keeping the preview's layout and stage.
+    """
+    mark = (cached.name, str(path))
+    if mark in _adopted:
+        return
+    meta = _sidecar(cached) or {}
+    if (meta.get('path') != str(path) or meta.get('mtime_ns') != st.st_mtime_ns
+            or meta.get('missing_since') or meta.get('version') != THUMB_VERSION):
+        _write_sidecar(cached, path, st, meta.get('layout', '2x2'), meta.get('stage', 'final'))
+    _adopted.add(mark)
+
+
+def _migrate_legacy(path, st, cached):
+    """Rename a v2 (path-keyed) preview of this file to its v3 name, if one exists."""
+    legacy = THUMB_CACHE / _legacy_key(str(path), st)
+    if not legacy.exists():
+        return False
+    meta = _sidecar(legacy) or {}
+    try:
+        os.replace(legacy, cached)
+        legacy.with_suffix('.json').unlink(missing_ok=True)
+    except OSError:
+        return False
+    _write_sidecar(cached, path, st, meta.get('layout', '2x2'), meta.get('stage', 'final'))
+    return True
+
+
+def _write_meta(sidecar, meta):
+    try:
+        sidecar.write_text(json.dumps(meta))
+    except OSError:
+        pass
 
 
 def _write_sidecar(cached, source, st, layout, stage='final'):
@@ -775,30 +872,83 @@ def _write_sidecar(cached, source, st, layout, stage='final'):
         pass
 
 
+# How long a preview outlives its file going missing from the path its
+# sidecar names. A moved file is adopted (sidecar re-pointed) the next time
+# its new folder is viewed; until then the cleanup can't tell "moved" from
+# "deleted", so it waits rather than throwing away a preview that costs an
+# 8K ffmpeg run to rebuild.
+MISSING_GRACE_SECONDS = 30 * 86400
+
+
+def _source_matches(meta, st):
+    return st.st_mtime_ns == meta.get('mtime_ns') and st.st_size == meta.get('size')
+
+
 def prune_thumb_cache():
     """Delete explorer thumbnails whose source file is gone, changed or stale.
 
     Run by the sync-thumbnails job. Each thumbnail is checked against its
-    sidecar; one that has no sidecar (written before sidecars existed, or a
-    half-finished write) counts as stale and goes too - it costs one ffmpeg
-    run to come back the next time someone looks at that folder. So does one
-    written by an older THUMB_VERSION, which nothing will ever request again.
+    sidecar:
+    - its file still at the sidecar's path, unchanged: kept;
+    - its file gone from there (moved, or deleted - indistinguishable here):
+      stamped `missing_since` and kept for MISSING_GRACE_SECONDS, so a moved
+      file has time to be seen at its new home and adopted; then deleted;
+    - a v2 (path-keyed) entry whose file is still there: renamed to its v3
+      content name (`migrated`) instead of being regenerated;
+    - no sidecar, or any other version: deleted - it costs one ffmpeg run to
+      come back the next time someone looks at that folder.
     """
-    stats = {'checked': 0, 'deleted': 0, 'kept': 0, 'freed': 0}
+    stats = {'checked': 0, 'deleted': 0, 'kept': 0, 'freed': 0, 'migrated': 0}
     if not THUMB_CACHE.is_dir():
         return stats
 
-    for thumb in THUMB_CACHE.glob('*.jpg'):
+    now = time.time()
+    # A list, not the live glob: migration renames entries mid-loop, and a
+    # renamed one must not be visited a second time under its new name.
+    for thumb in list(THUMB_CACHE.glob('*.jpg')):
         stats['checked'] += 1
         sidecar = thumb.with_suffix('.json')
         try:
             meta = json.loads(sidecar.read_text())
-            st = os.stat(meta['path'])
-            stale = (st.st_mtime_ns != meta.get('mtime_ns')
-                     or st.st_size != meta.get('size')
-                     or meta.get('version') != THUMB_VERSION)
-        except (OSError, ValueError, KeyError, TypeError):
-            stale = True
+            version = meta.get('version')
+        except (OSError, ValueError):
+            meta, version = None, None
+        stale = True
+        if isinstance(meta, dict) and version in (THUMB_VERSION, LEGACY_THUMB_VERSION):
+            try:
+                st = os.stat(meta['path'])
+                present = _source_matches(meta, st)
+            except (OSError, KeyError, TypeError):
+                st, present = None, False
+            if version == LEGACY_THUMB_VERSION:
+                if present:
+                    try:
+                        target = THUMB_CACHE / _thumb_key(meta['path'], st)
+                        if target.exists():
+                            stale = True      # a copy of this file already has one
+                        else:
+                            os.replace(thumb, target)
+                            sidecar.unlink(missing_ok=True)
+                            _write_sidecar(target, Path(meta['path']), st,
+                                           meta.get('layout', '2x2'), meta.get('stage', 'final'))
+                            stats['migrated'] += 1
+                            stats['kept'] += 1
+                            continue
+                    except OSError:
+                        stale = True
+            elif present:
+                if meta.get('missing_since'):
+                    meta.pop('missing_since')
+                    _write_meta(sidecar, meta)
+                stale = False
+            else:
+                since = meta.get('missing_since')
+                if not isinstance(since, (int, float)):
+                    meta['missing_since'] = now
+                    _write_meta(sidecar, meta)
+                    stale = False
+                else:
+                    stale = now - since > MISSING_GRACE_SECONDS
         if not stale:
             stats['kept'] += 1
             continue
@@ -915,15 +1065,24 @@ def _thumb_target(raw_path):
     kind = kind_for(path.name)
     if kind not in ('image', 'video'):
         return None
-    return path, THUMB_CACHE / _thumb_key(str(path), st), kind, st
+    try:
+        cached = THUMB_CACHE / _thumb_key(str(path), st)
+    except OSError:
+        return None          # unreadable: no fingerprint, and no ffmpeg either
+    if cached.exists():
+        _adopt(cached, path, st)
+    elif not _still_arriving(st):
+        _migrate_legacy(path, st, cached)
+    return path, cached, kind, st
 
 
 def thumbnail(raw_path, wait=None):
     """Path to a cached JPEG preview for an image or video, or None.
 
     Images are a single scaled frame; videos are a 2x2 contact sheet. Keyed by
-    (path, mtime, size), so replacing a file in place invalidates its preview
-    without anyone having to clear a cache.
+    the file's content (see _thumb_key), so a moved or renamed file keeps its
+    preview and replacing a file in place invalidates it without anyone
+    having to clear a cache.
 
     `wait` bounds how long to block on a preview still being made, returning
     PENDING past it. The HTTP route needs that: a browser runs ~6 requests per
