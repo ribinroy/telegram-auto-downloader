@@ -8,6 +8,12 @@ vi.mock('../../api/files', async (orig) => ({
   warmThumbs: vi.fn(), thumbStatus: vi.fn(),
 }));
 // Locale data is registered by main.tsx; the relative date is not under test.
+// Previews wait for a media token (the grid used to render before one was
+// minted and every preview 401'd); give the tests one up front.
+vi.mock('../../api', async (orig) => ({
+  ...(await orig<typeof import('../../api')>()),
+  getMediaToken: () => 'tok', ensureMediaToken: async () => 'tok',
+}));
 vi.mock('react-time-ago', () => ({ default: ({ date }: { date: Date }) => <time dateTime={date.toISOString()}>ago</time> }));
 
 type Props = Parameters<typeof FileList>[0];

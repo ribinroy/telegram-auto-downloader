@@ -35,6 +35,12 @@ vi.mock('../components/explorer/TransfersModal', () => ({
       <button onClick={() => onOpenDest(transfers[0].dest)}>open-dest</button>
     </div>,
 }));
+// Previews wait for a media token (the grid used to render before one was
+// minted and every preview 401'd); give the tests one up front.
+vi.mock('../api', async (orig) => ({
+  ...(await orig<typeof import('../api')>()),
+  getMediaToken: () => 'tok', ensureMediaToken: async () => 'tok',
+}));
 vi.mock('react-time-ago', () => ({ default: ({ date }: { date: Date }) => <time dateTime={date.toISOString()}>ago</time> }));
 
 // --- fixtures ---------------------------------------------------------------
