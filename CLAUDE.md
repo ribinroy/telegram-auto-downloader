@@ -92,6 +92,7 @@ Main Thread
 |  |- speedtest.py                  # Server -> internet speed test (LibreSpeed servers, own thread)
 |  |- vr.py                         # HereSphere/DeoVR library feed: key, projection guess, the two JSON shapes
 |  |- subtitles.py                  # Subtitle tracks (sidecar + embedded) served as WebVTT
+|  |- media_info.py                 # Full ffprobe details of one file, for the player's info (i) panel
 |  |- browser_downloader.py         # Playwright fallback for yt-dlp
 |  '- metrics/__init__.py           # Prometheus counters
 |
@@ -127,7 +128,8 @@ Main Thread
 |        |- StatsHeader.tsx         # Stats bar
 |        |- VrSettings.tsx          # Settings → VR headset: feed key + the two URLs
 |        |- VideoPlayerModal.tsx    # Modal chrome around VideoPlayer
-|        |- VideoPlayer.tsx         # The player: one <video>, flat/VR switch, subtitle + view pickers
+|        |- VideoPlayer.tsx         # The player: one <video>, flat/VR switch, subtitle + view pickers, (i) button
+|        |- VideoInfoPanel.tsx      # The (i) panel: every stream, the container, chapters - over the player
 |        |- VRVideoPlayer.tsx       # Three.js 180/360 mono/SBS/TB renderer, WebXR, subtitle plane
 |        |- Toast.tsx               # Toast notifications
 |        |- Tooltip.tsx             # Tooltip component
@@ -344,6 +346,7 @@ Live filesystem access - every call reads the disk, nothing is indexed or cached
 - `GET /api/video/check/<id>` - What is on disk for a download: `{exists, kind: 'video'|'dir'|'file', path, parent, size}`. The downloads list's view button uses `kind` to decide - play a video inline, or send a folder pull / non-video file to the file explorer (`/files?path=...`, plus `&select=<path>` for a single file, which `ExplorerPage` highlights and scrolls to, then drops). Keeps `file_deleted` honest for folders too, which the old video-only check always marked as missing.
 - `GET /api/video/stream/<id>` - Range-request video streaming
 - `GET /api/video/subtitles/<id>` - Subtitle tracks of a finished download (see **Video player** below); `GET /api/video/subtitle/<id>?track=` serves one as WebVTT (`@media_token_required` - it is a `<track src>`). The explorer twins are `POST /api/files/subtitles` `{path}` and `GET /api/files/subtitle?path=&track=`
+- `GET /api/video/info/<id>` - Full technical details of a finished download's file for the player's info panel (`backend/media_info.py`, ffprobe run live): `{file: {name, path, size, modified}, container: {format, format_long, duration, bitrate, tags}, streams: [{index, type, codec, profile, language, title, default, forced, bitrate, + video: width/height/aspect/fps/pix_fmt/bit_depth/color_*/hdr/attached_pic, + audio: channels/channel_layout/sample_rate}], chapters: [{start, end, title}]}`. `hdr` is 'HDR10 (PQ)' / 'HLG' / 'Dolby Vision'; MKV's per-stream bitrate comes from its `BPS` tag. 404 missing, 422 not media, 504 probe timeout. The explorer twin is `POST /api/files/info` `{path}` (local only; a `vps:` path is a 400)
 - `GET /api/video/thumbs/<id>` - Thumbnail list
 - `GET /api/video/thumb/<id>/<filename>` - Single thumbnail
 
@@ -721,15 +724,33 @@ a pulled USB drive disappears from the sidebar.
   deadline as well as a result cap, because "search from the root of a 20 TB array"
   is a reasonable thing to ask a web request to do exactly once.
 - **Thumbnails** (`/api/files/thumb`) are cached under `SCREENSHOTS_DIR/.explorer`,
-  keyed by `(THUMB_VERSION, path, mtime, size)` so replacing a file in place
-  invalidates its own thumbnail and a format change orphans every old entry at
-  once. That name is a one-way hash, so each `<sha1>.jpg` gets a `<sha1>.json`
+  **named after the file's content, not its path**: `sha1(THUMB_VERSION, size,
+  first 64 KB, last 64 KB)` (`_thumb_key()`). A rename, a move to another folder
+  or disk, or a copy keeps the name, so the preview follows the file instead of
+  being regenerated at the new path and orphaned at the old one (an 8K sheet is
+  seconds of ffmpeg); replacing a file changes its bytes and invalidates it, and
+  a `THUMB_VERSION` bump orphans every entry at once. The 128 KB read is
+  memoised in memory by `(version, dev, inode, mtime, size)` - capped at 50k -
+  so the grid's 5s polls don't re-read disks and a same-disk rename doesn't
+  even re-read. An unreadable file gets no key and no preview.
+  That name is a one-way hash, so each `<sha1>.jpg` gets a `<sha1>.json`
   sidecar naming its source, version and layout - without it nothing could ever
-  tell a live entry from a dead one. `prune_thumb_cache()`, run by
+  tell a live entry from a dead one. When a file is seen at a path its sidecar
+  doesn't name, the sidecar is re-pointed (`_adopt()`, checked once per
+  `(name, path)` per process). `prune_thumb_cache()`, run by
   `POST /api/jobs/sync-thumbnails` (`explorer_pruned`/`explorer_kept`/
-  `explorer_freed` in its stats), drops every thumbnail whose source is gone,
-  moved or changed or whose version is stale, plus any entry with no sidecar,
-  any sidecar with no thumbnail and any `.tmp` a killed ffmpeg left behind.
+  `explorer_freed`/`explorer_migrated` in its stats), keeps an entry whose file
+  is still at its sidecar's path; one whose file is gone from there - moved or
+  deleted, indistinguishable from the cache - is stamped `missing_since` and
+  kept for `MISSING_GRACE_SECONDS` (30 days) so a moved file can be seen at its
+  new home and adopted, then deleted. Seeing the file again (or finding it
+  back at its path) clears the stamp. Also dropped: entries with no sidecar or
+  a retired version, sidecars with no thumbnail and any `.tmp` a killed ffmpeg
+  left behind. **v2 entries were path-keyed** (`LEGACY_THUMB_VERSION`,
+  `_legacy_key()`): one is renamed to its content name, not regenerated - on
+  the next view of its file (`_migrate_legacy()`) or by the cleanup, which
+  counts it as `migrated` (and drops it if a copy of the file already has a v3
+  entry).
   They are only requested in **grid** view - a 500-file list would otherwise
   start 500 ffmpeg runs.
   - **An image is one scaled frame (Pillow); a video is a 2x2 contact sheet.**
@@ -786,6 +807,19 @@ a pulled USB drive disappears from the sidebar.
     portrait clips included. Hover runs a `steps(1)` keyframe animation through
     all four: a scrub preview with no JS and no second request, off under
     `prefers-reduced-motion` and on coarse pointers.
+  - **A cell never shows a broken image, and never stays stuck on its icon.**
+    The kind icon holds the cell until the `<img>` fires `load` (the img is
+    `invisible` until then): between retries an `<img>` sits in its error
+    state, which browsers draw as a broken image. The grid also waits for a
+    media token before rendering any preview (`useMediaTokenReady()`, which
+    calls `ensureMediaToken()`), since the URL is built at render and a first
+    visit used to send every request with an empty `token=` and 401. And a
+    cell that used up its retries (`THUMB_RETRIES`) is brought back when the
+    status poll reports its preview `ready`/`quick` - read per cell from the
+    latest poll, not only from a state *change*, because a preview that was
+    already done by the first poll never changes again and the poll stops
+    (that cell used to stay an icon until a page reload). Bounded by
+    `THUMB_RESCUES` (2) so a preview the browser can never load doesn't cycle.
 - **Streaming/download by path** reuse `helpers.range_response()` (shared with the
   per-download video route) and sit behind `@media_token_required`, so no API token
   ever lands in a URL.
@@ -847,7 +881,9 @@ reloads or rewinds. The browser's native controls are never shown.
     middle toggles playback. `TapDetector` reads taps from raw pointer
     down/up (any pointer type), since `dblclick` is unreliable on touch
     screens; a drag, a long press or a second finger is never a tap.
-  - *Vertical swipe on the right third* sets the volume: half the picture's
+  - *Vertical swipe on the right third* sets the volume - **switched off**
+    (`VOLUME_SWIPE = false` in `VRVideoPlayer.tsx`; the code is intact, and its
+    tests run again with `it.skipIf` once it is flipped back): half the picture's
     height sweeps the full range, and raising it unmutes. The swipe is taken
     from OrbitControls by setting `controls.enabled = false` for the rest of
     that touch (it checks `enabled` on move, not on up, so it still cleans
@@ -893,6 +929,17 @@ reloads or rewinds. The browser's native controls are never shown.
 - **WebXR**: `renderer.xr.enabled`, `setAnimationLoop` (not rAF), a Glasses
   button shown only when `navigator.xr.isSessionSupported('immersive-vr')`
   resolves true. Drag (OrbitControls) outside a session, head tracking inside.
+- **Details (i)**: a toolbar button (shown when the player has a `subtitles`
+  source - a download id or an explorer path, the same thing the details are
+  probed from) opens `VideoInfoPanel`: the summary line ("4K · HEVC 10-bit
+  HDR10 · 2:04:11 · 23.4 GB"), the file and container, every video/audio/
+  subtitle stream (attachments - MKV fonts - are counted, not listed) and the
+  chapters. Fetched only when opened (`useMediaInfo`, 10 min stale),
+  formatting in `utils/mediaInfo.ts`. It is drawn **inside the player's box**
+  (`absolute inset-0` in the `relative` wrapper), not as a second modal, so it
+  works in fullscreen and the video keeps playing underneath. Escape is caught
+  on `window` in the capture phase and stopped there, so it closes the panel
+  and not the surrounding `VideoPlayerModal`; a new file closes it.
 - **Subtitles**: the backend lists tracks - sidecars next to the file whose
   name starts with its stem (`Movie.en.srt`, `Movie.de.forced.ass`) plus the
   container's text tracks via ffprobe (bitmap PGS/DVD are left out) - and
