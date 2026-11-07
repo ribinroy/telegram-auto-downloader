@@ -106,6 +106,7 @@ def test_sync_thumbnails_summary(db):
     assert jobs._summarize_sync({'generated': 2, 'orphan_deleted': 1, 'db_count_fixed': 3,
                                  'explorer_pruned': 4}) == \
         '2 generated, 1 orphans removed, 3 counts fixed, 4 explorer thumbs pruned'
+    assert jobs._summarize_sync({'explorer_migrated': 5}) == '5 explorer thumbs renamed to content keys'
 
 
 def test_sync_thumbnails_route_runs_the_job_and_records_it(client, db, auth, fake_media):

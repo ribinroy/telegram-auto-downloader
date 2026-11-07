@@ -56,6 +56,139 @@ def test_the_key_is_versioned_so_a_format_change_orphans_the_old_entries(tmp_pat
     assert fs._thumb_key(str(f), st) != before
 
 
+def test_the_key_follows_the_file_across_renames_moves_and_copies(tmp_path):
+    a = tmp_path / 'one' / 'clip.mp4'
+    a.parent.mkdir()
+    a.write_bytes(os.urandom(300_000))         # past two fingerprint chunks
+    key = fs._thumb_key(str(a), a.stat())
+
+    b = tmp_path / 'two' / 'renamed.mp4'
+    b.parent.mkdir()
+    a.rename(b)                                 # same inode
+    assert fs._thumb_key(str(b), b.stat()) == key
+
+    c = tmp_path / 'copy.mp4'
+    c.write_bytes(b.read_bytes())               # a new inode, a new mtime: same content
+    assert fs._thumb_key(str(c), c.stat()) == key
+
+
+def test_the_key_reads_the_head_and_tail(tmp_path):
+    f = tmp_path / 'clip.mp4'
+    body = bytearray(os.urandom(300_000))
+    f.write_bytes(bytes(body))
+    key = fs._thumb_key(str(f), f.stat())
+    body[-1] ^= 0xFF                            # same size, last byte changed
+    f.write_bytes(bytes(body))
+    st = f.stat()                               # a real edit moves the mtime; a test runs inside one tick
+    os.utime(f, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000))
+    assert fs._thumb_key(str(f), f.stat()) != key
+
+
+def test_the_key_is_memoised_by_identity_so_polls_do_not_reread(tmp_path, monkeypatch):
+    f = tmp_path / 'clip.mp4'
+    f.write_bytes(b'x' * 100)
+    calls = []
+    real = fs._fingerprint
+    monkeypatch.setattr(fs, '_fingerprint', lambda p, size: calls.append(p) or real(p, size))
+    st = f.stat()
+    for _ in range(3):
+        fs._thumb_key(str(f), st)
+    moved = tmp_path / 'moved.mp4'
+    f.rename(moved)
+    fs._thumb_key(str(moved), moved.stat())
+    assert len(calls) <= 1                      # an earlier test may have memoised it already
+
+
+def test_the_memo_is_bounded(tmp_path, monkeypatch):
+    monkeypatch.setattr(fs, '_KEY_MEMO_MAX', 2)
+    monkeypatch.setattr(fs, '_key_memo', {})
+    for i in range(4):
+        f = tmp_path / f'{i}.mp4'
+        f.write_bytes(bytes([i]) * 10)
+        fs._thumb_key(str(f), f.stat())
+    assert len(fs._key_memo) == 2
+
+
+def test_an_unreadable_file_gets_no_preview(cache, png, monkeypatch):
+    def deny(p, size):
+        raise PermissionError(13, 'Permission denied')
+    monkeypatch.setattr(fs, '_key_memo', {})
+    monkeypatch.setattr(fs, '_fingerprint', deny)
+    assert fs.thumbnail(str(png)) is None
+
+
+# --- following a moved file -------------------------------------------------
+
+def test_a_moved_file_keeps_its_preview_and_the_sidecar_follows(cache, png, tmp_path):
+    first = fs.thumbnail(str(png))
+    moved = tmp_path / 'elsewhere' / 'renamed.png'
+    moved.parent.mkdir()
+    png.rename(moved)
+    fs._adopted.clear()
+
+    assert fs.thumbnail(str(moved)) == first    # no regeneration
+    assert json.loads(first.with_suffix('.json').read_text())['path'] == str(moved)
+
+
+def test_seeing_a_file_again_clears_its_missing_stamp(cache, png):
+    thumb = fs.thumbnail(str(png))
+    meta = json.loads(thumb.with_suffix('.json').read_text())
+    meta['missing_since'] = 1.0
+    thumb.with_suffix('.json').write_text(json.dumps(meta))
+    fs._adopted.clear()
+    fs.thumbnail(str(png))
+    assert 'missing_since' not in json.loads(thumb.with_suffix('.json').read_text())
+
+    # The cleanup clears it too, when the file turns out to be back at its path
+    meta['missing_since'] = 1.0
+    thumb.with_suffix('.json').write_text(json.dumps(meta))
+    assert fs.prune_thumb_cache()['kept'] == 1
+    assert 'missing_since' not in json.loads(thumb.with_suffix('.json').read_text())
+
+
+def _legacy_entry(path, layout='1x1', stage='final'):
+    st = path.stat()
+    legacy = fs.THUMB_CACHE / fs._legacy_key(str(path), st)
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_bytes(b'old jpeg')
+    legacy.with_suffix('.json').write_text(json.dumps({
+        'path': str(path), 'mtime_ns': st.st_mtime_ns, 'size': st.st_size,
+        'version': fs.LEGACY_THUMB_VERSION, 'layout': layout, 'stage': stage,
+    }))
+    return legacy
+
+
+def test_a_path_keyed_preview_is_adopted_on_view_not_regenerated(cache, png, monkeypatch):
+    legacy = _legacy_entry(png, stage='quick')
+    monkeypatch.setattr(fs, '_generate', lambda *a: pytest.fail('regenerated'))
+    thumb = fs.thumbnail(str(png))
+    assert thumb.read_bytes() == b'old jpeg' and not legacy.exists()
+    meta = json.loads(thumb.with_suffix('.json').read_text())
+    assert meta['version'] == fs.THUMB_VERSION and meta['stage'] == 'quick'
+
+
+def test_the_cleanup_migrates_path_keyed_previews(cache, png, tmp_path):
+    legacy = _legacy_entry(png)
+    gone = tmp_path / 'gone.png'
+    gone.write_bytes(b'x')
+    orphan = _legacy_entry(gone)
+    gone.unlink()
+
+    stats = fs.prune_thumb_cache()
+    assert stats['migrated'] == 1 and stats['kept'] == 1 and stats['deleted'] == 1
+    assert not legacy.exists() and not orphan.exists()
+    target = cache / fs._thumb_key(str(png), png.stat())
+    assert target.read_bytes() == b'old jpeg'
+
+
+def test_a_path_keyed_duplicate_of_an_adopted_preview_is_dropped(cache, png):
+    current = fs.thumbnail(str(png))
+    legacy = _legacy_entry(png)
+    stats = fs.prune_thumb_cache()
+    assert stats['migrated'] == 0 and stats['deleted'] == 1
+    assert current.exists() and not legacy.exists()
+
+
 # --- images ---------------------------------------------------------------
 
 def test_an_image_is_scaled_once_and_then_served_from_cache(cache, png):

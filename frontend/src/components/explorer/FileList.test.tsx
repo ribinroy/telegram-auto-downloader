@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, act, within } from '@testing-library/react';
 import * as files from '../../api/files';
+import * as api from '../../api';
 import { FileList } from './FileList';
 
 vi.mock('../../api/files', async (orig) => ({
@@ -12,7 +13,7 @@ vi.mock('../../api/files', async (orig) => ({
 // minted and every preview 401'd); give the tests one up front.
 vi.mock('../../api', async (orig) => ({
   ...(await orig<typeof import('../../api')>()),
-  getMediaToken: () => 'tok', ensureMediaToken: async () => 'tok',
+  getMediaToken: vi.fn(), ensureMediaToken: vi.fn(),
 }));
 vi.mock('react-time-ago', () => ({ default: ({ date }: { date: Date }) => <time dateTime={date.toISOString()}>ago</time> }));
 
@@ -46,6 +47,8 @@ beforeEach(() => {
   vi.resetAllMocks();
   vi.mocked(files.warmThumbs).mockResolvedValue({ queued: 0, cached: 0, skipped: 0 });
   vi.mocked(files.thumbStatus).mockResolvedValue({ states: {} });
+  vi.mocked(api.getMediaToken).mockReturnValue('tok');
+  vi.mocked(api.ensureMediaToken).mockResolvedValue('tok');
 });
 
 describe('FileList - list view', () => {
@@ -239,6 +242,40 @@ describe('FileList - grid view', () => {
     expect(files.thumbStatus).not.toHaveBeenCalled();
   });
 
+  it('holds the cell with its icon until the preview has loaded, never a broken image', () => {
+    renderList({ view: 'grid', entries: [entry('clip.mp4')] });
+    const img = row('clip.mp4').querySelector('img')!;
+    expect(img).toHaveClass('invisible');
+    expect(row('clip.mp4').querySelector('svg')).toBeInTheDocument();
+    fireEvent.load(img);
+    expect(img).not.toHaveClass('invisible');
+    expect(row('clip.mp4').querySelector('.thumb-cell svg')).toBeNull();
+    // An error after a load (a reload that failed) hides it again
+    fireEvent.error(img);
+    expect(img).toHaveClass('invisible');
+  });
+
+  it('waits for a media token before asking for any preview', async () => {
+    vi.mocked(api.getMediaToken).mockReturnValue(null);
+    let mint!: (t: string) => void;
+    vi.mocked(api.ensureMediaToken).mockReturnValue(new Promise(r => { mint = r; }));
+    renderList({ view: 'grid', entries: [entry('clip.mp4')] });
+    expect(row('clip.mp4').querySelector('img')).toBeNull();     // no `token=` request to 401
+    expect(row('clip.mp4').querySelector('svg')).toBeInTheDocument();
+    expect(api.ensureMediaToken).toHaveBeenCalled();
+    await act(async () => { mint('tok'); });
+    expect(row('clip.mp4').querySelector('img')).toBeInTheDocument();
+  });
+
+  it('keeps showing icons if no token can be had', async () => {
+    vi.mocked(api.getMediaToken).mockReturnValue(null);
+    vi.mocked(api.ensureMediaToken).mockResolvedValue(null);
+    const { unmount } = renderList({ view: 'grid', entries: [entry('clip.mp4')] });
+    await act(async () => {});
+    expect(row('clip.mp4').querySelector('img')).toBeNull();
+    unmount();
+  });
+
   it('renames in the grid too', () => {
     const { props } = renderList({ view: 'grid', renaming: '/d/photo.jpg' });
     const input = within(row('photo.jpg')).getByDisplayValue('photo.jpg');
@@ -323,6 +360,53 @@ describe('FileList - preview polling', () => {
     await tick(20000);
     expect(img()).toBeNull();
     expect(row('clip.mp4').querySelector('svg')).toHaveClass('text-purple-400');
+  });
+
+  const retryOf = () => Number(/retry=(\d+)/.exec(src('clip.mp4'))?.[1] ?? 0);
+
+  it('a cell out of retries tries again when the poll says its preview is ready - even the first poll, which reloads nothing', async () => {
+    // Ready by the first poll: no state change ever follows for the reload
+    // logic to see, and the poll stops at once - this cell used to stay an icon.
+    vi.mocked(files.thumbStatus).mockResolvedValue({ states: { '/d/clip.mp4': 'ready' } });
+    renderList({ view: 'grid', entries: [entry('clip.mp4')] });
+    await tick();
+    expect(files.thumbStatus).toHaveBeenCalledTimes(1);
+    const img = () => row('clip.mp4').querySelector('img');
+    for (let i = 0; i < 7; i++) {          // the first try + THUMB_RETRIES
+      fireEvent.error(img()!);
+      await tick(20000);
+    }
+    expect(img()).toBeInTheDocument();     // not the icon
+    expect(retryOf()).toBe(7);
+    expect(src('clip.mp4')).not.toContain('v=');
+    fireEvent.load(img()!);
+    expect(img()).not.toHaveClass('invisible');
+  });
+
+  it('without a ready poll the cell still gives way to its icon', async () => {
+    vi.mocked(files.thumbStatus).mockResolvedValue({ states: { '/d/clip.mp4': 'waiting' } });
+    renderList({ view: 'grid', entries: [entry('clip.mp4')] });
+    const img = () => row('clip.mp4').querySelector('img');
+    for (let i = 0; i < 7; i++) {
+      fireEvent.error(img()!);
+      await tick(20000);
+    }
+    expect(img()).toBeNull();
+  });
+
+  it('the rescue is bounded, so a preview the browser can never load does not loop', async () => {
+    vi.mocked(files.thumbStatus).mockResolvedValue({ states: { '/d/clip.mp4': 'ready' } });
+    renderList({ view: 'grid', entries: [entry('clip.mp4')] });
+    await tick();
+    const img = () => row('clip.mp4').querySelector('img');
+    let highest = 0;
+    for (let i = 0; i < 30 && img(); i++) {
+      highest = Math.max(highest, retryOf());
+      fireEvent.error(img()!);
+      await tick(20000);
+    }
+    expect(img()).toBeNull();
+    expect(highest).toBe(8);               // THUMB_RETRIES + THUMB_RESCUES
   });
 
   it('a retry and a reload are both carried in the URL', async () => {
