@@ -213,7 +213,7 @@ def test_warming_queues_the_work_without_waiting_for_it(cache, png, tmp_path):
 
 # --- pruning --------------------------------------------------------------
 
-def test_pruning_keeps_a_live_entry_and_drops_a_dead_one(cache, png):
+def test_pruning_keeps_a_live_entry_and_drops_a_dead_one_after_a_grace_period(cache, png, monkeypatch):
     live = fs.thumbnail(str(png))
     dead = cache / 'deadbeef.jpg'
     dead.write_bytes(b'jpeg')
@@ -222,6 +222,17 @@ def test_pruning_keeps_a_live_entry_and_drops_a_dead_one(cache, png):
         'version': fs.THUMB_VERSION, 'layout': '1x1',
     }))
 
+    # Gone from its path could be moved, not deleted: the first sweep only
+    # notes when it went missing.
+    stats = fs.prune_thumb_cache()
+    assert stats['kept'] == 2 and stats['deleted'] == 0
+    assert 'missing_since' in json.loads(dead.with_suffix('.json').read_text())
+    # Still inside the grace period: kept again, and the stamp isn't moved on.
+    stamp = json.loads(dead.with_suffix('.json').read_text())['missing_since']
+    assert fs.prune_thumb_cache()['deleted'] == 0
+    assert json.loads(dead.with_suffix('.json').read_text())['missing_since'] == stamp
+
+    monkeypatch.setattr(fs, 'MISSING_GRACE_SECONDS', -1)
     stats = fs.prune_thumb_cache()
     assert stats['kept'] == 1 and stats['deleted'] == 1
     assert live.exists() and not dead.exists() and not dead.with_suffix('.json').exists()
@@ -230,7 +241,7 @@ def test_pruning_keeps_a_live_entry_and_drops_a_dead_one(cache, png):
 def test_pruning_drops_entries_an_older_format_left_behind(cache, png):
     old = fs.thumbnail(str(png))
     meta = json.loads(old.with_suffix('.json').read_text())
-    meta['version'] = fs.THUMB_VERSION - 1      # a single-frame entry
+    meta['version'] = 1                         # a retired format (single frame)
     old.with_suffix('.json').write_text(json.dumps(meta))
 
     assert fs.prune_thumb_cache()['deleted'] == 1

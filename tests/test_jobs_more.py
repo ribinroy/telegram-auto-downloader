@@ -70,6 +70,7 @@ def test_sync_thumbnails_handles_every_case_in_one_sweep(db, fake_media):
         'generated': 2, 'skipped': 1, 'orphan_deleted': 1, 'db_count_fixed': 1,
         'meta_extracted': 1, 'no_duration': 0, 'not_video': 1, 'failed': 0,
         'explorer_pruned': 2, 'explorer_kept': 5, 'explorer_freed': 1024,
+        'explorer_migrated': 0,
     }
     assert not (SCREENSHOTS_DIR / str(orphan['id'])).exists()
     assert db.get_download_by_id(orphan['id'])['thumb_count'] == 0

@@ -352,7 +352,7 @@ def test_a_sidecar_that_cannot_be_written_is_not_fatal(tmp_path):
 
 
 def test_pruning_an_absent_cache_is_a_no_op(cache):
-    assert fs.prune_thumb_cache() == {'checked': 0, 'deleted': 0, 'kept': 0, 'freed': 0}
+    assert fs.prune_thumb_cache() == {'checked': 0, 'deleted': 0, 'kept': 0, 'freed': 0, 'migrated': 0}
 
 
 @not_root

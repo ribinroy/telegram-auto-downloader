@@ -765,7 +765,7 @@ QUICK_AT = 0.4                   # the first-pass single frame
 
 FINGERPRINT_CHUNK = 64 * 1024
 _KEY_MEMO_MAX = 50_000
-_key_memo = {}           # (dev, ino, mtime_ns, size) -> cache name; insertion-ordered
+_key_memo = {}           # (version, dev, ino, mtime_ns, size) -> cache name; insertion-ordered
 _key_lock = threading.Lock()
 
 
@@ -787,7 +787,9 @@ def _thumb_key(path, st):
     Raises OSError if the file can't be read - and then it can't be
     thumbnailed either.
     """
-    ident = (st.st_dev, st.st_ino, st.st_mtime_ns, st.st_size)
+    # The version is part of the memo key as well as the hash, so a format
+    # change can never be answered with a name memoised under the old one.
+    ident = (THUMB_VERSION, st.st_dev, st.st_ino, st.st_mtime_ns, st.st_size)
     with _key_lock:
         name = _key_memo.get(ident)
     if name:
