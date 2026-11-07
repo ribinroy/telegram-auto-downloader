@@ -30,6 +30,7 @@ TRANSFER_INLINE_WAIT = 1.0
 from backend.web_app.base import token_required, media_token_required
 from backend.web_app.helpers import range_response, subtitle_response
 from backend import subtitles
+from backend import media_info
 
 
 def _configured_roots(seen, include_hidden=False):
@@ -373,6 +374,21 @@ class FilesRoutesMixin:
             except fs.FsError as e:
                 return _fs_error(e)
             except subtitles.SubtitleError as e:
+                return jsonify({"error": str(e)}), e.status
+
+        @self.app.route("/api/files/info", methods=["POST"])
+        @token_required
+        def files_info():
+            """Body: {path} - full ffprobe details of a local media file."""
+            data = request.json or {}
+            if rfs.is_remote(data.get("path")):
+                return jsonify({"error": "Details are only available for local files"}), 400
+            try:
+                path = fs.resolve_path(data.get("path"))
+                return jsonify(media_info.media_info(path))
+            except fs.FsError as e:
+                return _fs_error(e)
+            except media_info.MediaInfoError as e:
                 return jsonify({"error": str(e)}), e.status
 
         @self.app.route("/api/files/subtitle", methods=["GET"])

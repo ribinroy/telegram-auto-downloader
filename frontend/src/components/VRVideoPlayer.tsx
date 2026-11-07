@@ -30,6 +30,13 @@ const setVolume = (v: HTMLVideoElement, vol: number) => { v.volume = vol; };
 const setMuted = (v: HTMLVideoElement, muted: boolean) => { v.muted = muted; };
 const setRate = (v: HTMLVideoElement, rate: number) => { v.playbackRate = rate; };
 
+/**
+ * Swipe up/down on the right third to set the volume. Switched off for now:
+ * a vertical drag there turned the sphere-look into a volume change too
+ * easily. Flip back to true to bring it back - the gesture code is intact.
+ */
+export const VOLUME_SWIPE = false;
+
 const LEFT = 1;
 const RIGHT = 2;
 const RADIUS = 500;
@@ -401,7 +408,7 @@ export function VRVideoPlayer({ video, projection, subtitle, fullscreen = false,
       return;
     }
     if (pointers.current.size > 2) return;
-    swipe.current = { id: e.pointerId, x, y, volume: video.volume, mode: 'pending', inZone: inVolumeZone(x, w) };
+    swipe.current = { id: e.pointerId, x, y, volume: video.volume, mode: 'pending', inZone: VOLUME_SWIPE && inVolumeZone(x, w) };
   };
 
   const onPointerMove = (e: React.PointerEvent) => {

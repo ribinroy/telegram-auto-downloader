@@ -70,6 +70,7 @@ def test_sync_thumbnails_handles_every_case_in_one_sweep(db, fake_media):
         'generated': 2, 'skipped': 1, 'orphan_deleted': 1, 'db_count_fixed': 1,
         'meta_extracted': 1, 'no_duration': 0, 'not_video': 1, 'failed': 0,
         'explorer_pruned': 2, 'explorer_kept': 5, 'explorer_freed': 1024,
+        'explorer_migrated': 0,
     }
     assert not (SCREENSHOTS_DIR / str(orphan['id'])).exists()
     assert db.get_download_by_id(orphan['id'])['thumb_count'] == 0
@@ -105,6 +106,7 @@ def test_sync_thumbnails_summary(db):
     assert jobs._summarize_sync({'generated': 2, 'orphan_deleted': 1, 'db_count_fixed': 3,
                                  'explorer_pruned': 4}) == \
         '2 generated, 1 orphans removed, 3 counts fixed, 4 explorer thumbs pruned'
+    assert jobs._summarize_sync({'explorer_migrated': 5}) == '5 explorer thumbs renamed to content keys'
 
 
 def test_sync_thumbnails_route_runs_the_job_and_records_it(client, db, auth, fake_media):

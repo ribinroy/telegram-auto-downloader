@@ -21,6 +21,7 @@ from backend.web_app.vps import load_vps_credentials, annotate_vps_folders, open
 from backend.web_app.helpers import candidate_file_paths, range_response, subtitle_response
 from backend.jobs import JOBS, read_schedules, save_schedule, next_run, run_job
 from backend import subtitles
+from backend import media_info
 
 
 class MediaRoutesMixin:
@@ -122,6 +123,18 @@ class MediaRoutesMixin:
             try:
                 return jsonify({"tracks": subtitles.list_tracks(path)})
             except subtitles.SubtitleError as e:
+                return jsonify({"error": str(e)}), e.status
+
+        @self.app.route("/api/video/info/<int:download_id>", methods=["GET"])
+        @token_required
+        def video_info(download_id):
+            """Full ffprobe details of a finished download (the player's info modal)."""
+            path = _finished_file(download_id)
+            if not path:
+                return jsonify({"error": "Video not available"}), 404
+            try:
+                return jsonify(media_info.media_info(path))
+            except media_info.MediaInfoError as e:
                 return jsonify({"error": str(e)}), e.status
 
         @self.app.route("/api/video/subtitle/<int:download_id>", methods=["GET"])

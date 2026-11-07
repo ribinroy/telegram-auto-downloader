@@ -1403,10 +1403,12 @@ export interface SyncThumbnailsResult {
   no_duration: number;
   not_video: number;
   failed: number;
-  /** File-explorer thumbnail cache sweep (sources deleted, moved or replaced). */
+  /** File-explorer thumbnail cache sweep (sources deleted or replaced; moved ones follow their file). */
   explorer_pruned: number;
   explorer_kept: number;
   explorer_freed: number;
+  /** Old path-keyed previews renamed to their content key (kept, not rebuilt). */
+  explorer_migrated?: number;
 }
 
 export interface CheckFilesResult {

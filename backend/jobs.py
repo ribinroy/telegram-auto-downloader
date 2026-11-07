@@ -60,6 +60,7 @@ def run_sync_thumbnails():
         'explorer_pruned': 0,
         'explorer_kept': 0,
         'explorer_freed': 0,
+        'explorer_migrated': 0,
     }
 
     loop = _asyncio.new_event_loop()
@@ -124,11 +125,13 @@ def run_sync_thumbnails():
 
     # The explorer's own thumbnail cache is keyed by path, not by download id,
     # so it needs its own sweep: drop anything whose source file has since been
-    # deleted, moved or replaced.
+    # deleted or replaced (a moved one is kept for a grace period - see
+    # prune_thumb_cache).
     explorer = prune_thumb_cache()
     stats['explorer_pruned'] = explorer['deleted']
     stats['explorer_kept'] = explorer['kept']
     stats['explorer_freed'] = explorer['freed']
+    stats['explorer_migrated'] = explorer.get('migrated', 0)
     return stats
 
 
@@ -207,7 +210,8 @@ def _summarize_check_files(stats):
 def _summarize_sync(stats):
     parts = []
     for key, label in (('generated', 'generated'), ('orphan_deleted', 'orphans removed'),
-                       ('db_count_fixed', 'counts fixed'), ('explorer_pruned', 'explorer thumbs pruned')):
+                       ('db_count_fixed', 'counts fixed'), ('explorer_pruned', 'explorer thumbs pruned'),
+                       ('explorer_migrated', 'explorer thumbs renamed to content keys')):
         if stats.get(key):
             parts.append(f"{stats[key]} {label}")
     return ', '.join(parts) or 'nothing to do'

@@ -6,6 +6,7 @@ import {
 import ReactTimeAgo from 'react-time-ago';
 import { formatBytes } from '../../utils/format';
 import { getFileThumbUrl, thumbStatus, warmThumbs, type FileEntry, type FileKind, type ThumbState } from '../../api/files';
+import { ensureMediaToken, getMediaToken } from '../../api';
 import { thumbsToReload } from './thumbReload';
 
 export type SortKey = 'name' | 'size' | 'modified' | 'kind';
@@ -293,6 +294,8 @@ function useThumbRevisions(entries: FileEntry[]) {
   const paths = entries.filter(thumbable).slice(0, 300).map(e => e.path);
   const key = paths.join('\n');
   const [revs, setRevs] = useState<Record<string, number>>({});
+  // The latest poll, so a cell that gave up can tell its preview now exists.
+  const [states, setStates] = useState<Record<string, ThumbState>>({});
   useEffect(() => {
     if (!paths.length) return;
     let prev: Record<string, ThumbState> | null = null;
@@ -313,6 +316,7 @@ function useThumbRevisions(entries: FileEntry[]) {
             });
           }
           prev = states;
+          setStates(states);
           if (!Object.values(states).some(st => UNSETTLED.has(st))) return;
         } catch {
           // A failed poll just waits for the next one.
@@ -324,7 +328,22 @@ function useThumbRevisions(entries: FileEntry[]) {
     return () => { stopped = true; clearTimeout(timer); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
-  return revs;
+  return { revs, states };
+}
+
+/** Whether a media token is in hand. Every preview URL carries one, and the
+ *  URL is built at render: on a first visit the grid could render before the
+ *  token keeper had minted it, so every cell went out as `token=` and 401'd.
+ *  Cells wait for this instead (showing their icon). */
+function useMediaTokenReady() {
+  const [ready, setReady] = useState(() => !!getMediaToken());
+  useEffect(() => {
+    if (ready) return;
+    let live = true;
+    void ensureMediaToken().then(t => { if (live && t) setReady(true); });
+    return () => { live = false; };
+  }, [ready]);
+  return ready;
 }
 
 /** Tries after the first before a preview gives up: 3+6+12+20+20+20s covers
@@ -337,7 +356,12 @@ const THUMB_RETRIES = 6;
  *  shows the first tile, and CSS scrubs through the other three on hover (see
  *  .thumb-sheet in index.css). A preview that 404s - no ffmpeg, an unreadable
  *  container - falls back to the kind icon rather than a broken image. */
-function FilePreview({ entry, rev = 0 }: { entry: FileEntry; rev?: number }) {
+/** Times a cell that gave up is brought back by the status poll saying its
+ *  preview is ready - bounded, so a preview the browser can't load (a bad
+ *  token, a corrupt JPEG) doesn't cycle through retry budgets forever. */
+const THUMB_RESCUES = 2;
+
+function FilePreview({ entry, rev = 0, state }: { entry: FileEntry; rev?: number; state?: ThumbState }) {
   // The server answers 503 rather than hold a connection while ffmpeg runs
   // (holding six of them starved every other request in the tab), and an
   // <img> can't read the status - so any error is retried a few times with
@@ -345,23 +369,44 @@ function FilePreview({ entry, rev = 0 }: { entry: FileEntry; rev?: number }) {
   // server-side and answers instantly, so the retries cost nothing.
   const [attempt, setAttempt] = useState(0);
   const [failed, setFailed] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [rescues, setRescues] = useState(0);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(timer.current), []);
-  if (failed) return <EntryIcon entry={entry} className="w-10 h-10" />;
+  // Gave up, but the server now says the preview exists (it finished after
+  // the last retry, or between polls without a state change the poll would
+  // notice): try again. Adjusted during render, React's pattern for state
+  // that follows a prop.
+  if (failed && (state === 'ready' || state === 'quick') && rescues < THUMB_RESCUES) {
+    setFailed(false);
+    setRescues(n => n + 1);
+    setAttempt(n => n + 1);
+  }
+  const icon = <EntryIcon entry={entry} className="w-10 h-10" />;
+  if (failed) return icon;
   const url = getFileThumbUrl(entry.path);
   const bust = [rev && `v=${rev}`, attempt && `retry=${attempt}`].filter(Boolean).join('&');
+  const shape = entry.kind === 'video' ? 'thumb-sheet' : 'absolute inset-0 w-full h-full object-cover';
   return (
-    <img
-      src={bust ? `${url}&${bust}` : url}
-      alt=""
-      loading="lazy"
-      draggable={false}
-      className={entry.kind === 'video' ? 'thumb-sheet' : 'w-full h-full object-cover'}
-      onError={() => {
-        if (attempt >= THUMB_RETRIES) return setFailed(true);
-        timer.current = setTimeout(() => setAttempt(n => n + 1), Math.min(3000 * 2 ** attempt, 20000));
-      }}
-    />
+    <>
+      {/* The kind icon holds the cell until a preview has actually loaded: an
+          <img> waiting out a retry is in its error state, which browsers draw
+          as a broken image. */}
+      {!loaded && icon}
+      <img
+        src={bust ? `${url}&${bust}` : url}
+        alt=""
+        loading="lazy"
+        draggable={false}
+        className={`${shape} ${loaded ? '' : 'invisible'}`}
+        onLoad={() => setLoaded(true)}
+        onError={() => {
+          setLoaded(false);
+          if (attempt >= THUMB_RETRIES + rescues) return setFailed(true);
+          timer.current = setTimeout(() => setAttempt(n => n + 1), Math.min(3000 * 2 ** attempt, 20000));
+        }}
+      />
+    </>
   );
 }
 
@@ -370,7 +415,8 @@ function GridView({
 }: FileListProps) {
   const press = useRowPress(onActivate, onLongPress);
   useWarmThumbs(entries);
-  const revs = useThumbRevisions(entries);
+  const { revs, states } = useThumbRevisions(entries);
+  const tokenReady = useMediaTokenReady();
   return (
     <div data-scroller className="h-full overflow-y-auto overscroll-contain group-data-[bar]/list:pb-[calc(var(--bar-h)+1.5rem)] transition-[padding] duration-200 ease-out motion-reduce:transition-none">
     <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
@@ -397,11 +443,11 @@ function GridView({
             }`}
           >
             <div className="thumb-cell relative aspect-square rounded-lg bg-slate-900/60 flex items-center justify-center overflow-hidden mb-2">
-              {preview ? (
+              {preview && tokenReady ? (
                 // Keyed on the revision: a new one (the sheet replaced the first
                 // pass, or a preview the cell gave up on now exists) remounts
                 // it with a fresh retry budget.
-                <FilePreview key={revs[entry.path] ?? 0} entry={entry} rev={revs[entry.path]} />
+                <FilePreview key={revs[entry.path] ?? 0} entry={entry} rev={revs[entry.path]} state={states[entry.path]} />
               ) : (
                 <EntryIcon entry={entry} className="w-10 h-10" />
               )}

@@ -22,6 +22,13 @@ vi.mock('../api/subtitles', async (orig) => ({
   listSubtitleTracks: vi.fn(),
   getSubtitleUrl: (_s: unknown, id: string) => `/sub/${id}`,
 }));
+vi.mock('./VideoInfoPanel', () => ({
+  VideoInfoPanel: ({ source, name, onClose }: { source: unknown; name: string; onClose: () => void }) => (
+    <div data-testid="info-panel" data-source={JSON.stringify(source)} data-name={name}>
+      <button onClick={onClose}>close info</button>
+    </div>
+  ),
+}));
 vi.mock('../api/vr', () => ({ fetchDownloadProjection: vi.fn(), saveDownloadProjection: vi.fn() }));
 
 // jsdom's textTracks list is always empty, so stand in a TextTrack per
@@ -255,5 +262,30 @@ describe('VideoPlayer - misc', () => {
     Object.defineProperty(video, 'videoHeight', { value: 4096 });
     fireEvent.loadedMetadata(video);
     await waitFor(() => expect(projectionSelect().value).toBe('180-tb'));
+  });
+});
+
+describe('VideoPlayer - details (i)', () => {
+  it('offers the details for a file it knows the source of, over the player', async () => {
+    const { rerender } = renderWithClient(<VideoPlayer src="/v.mp4" name="a.mkv" subtitles={{ downloadId: 9 }} />);
+    expect(screen.queryByTestId('info-panel')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Video details' }));
+    const panel = screen.getByTestId('info-panel');
+    expect(panel).toHaveAttribute('data-source', '{"downloadId":9}');
+    expect(panel).toHaveAttribute('data-name', 'a.mkv');
+    // Drawn inside the player's own box, so fullscreen keeps it
+    expect(panel.parentElement).toHaveClass('relative');
+    fireEvent.click(screen.getByText('close info'));
+    expect(screen.queryByTestId('info-panel')).toBeNull();
+
+    // A new file closes it
+    fireEvent.click(screen.getByRole('button', { name: 'Video details' }));
+    rerender(<VideoPlayer src="/w.mp4" name="b.mkv" subtitles={{ path: '/b.mkv' }} />);
+    expect(screen.queryByTestId('info-panel')).toBeNull();
+  });
+
+  it('has no details button without a source to probe', () => {
+    renderWithClient(<VideoPlayer src="/v.mp4" name="a.mkv" />);
+    expect(screen.queryByRole('button', { name: 'Video details' })).toBeNull();
   });
 });

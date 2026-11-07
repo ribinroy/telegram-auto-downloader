@@ -4,6 +4,7 @@ import * as api from '../api';
 import * as subtitles from '../api/subtitles';
 import * as speed from '../api/internetSpeed';
 import * as vr from '../api/vr';
+import * as mediaInfo from '../api/mediaInfo';
 import { qk } from '../api/queryKeys';
 import { renderHookWithClient } from '../test/queryWrapper';
 import { deferred } from '../test/fixtures';
@@ -11,6 +12,7 @@ import {
   useLogin, useUpdatePassword, useCheckUrl, useAnalytics, useSubtitleTracks,
   useInternetSpeed, useStartInternetSpeed, useCancelInternetSpeed, useSpeedResults, useRecordBrowserResult, useDeleteSpeedResult,
   useVrSettings, useRegenerateVrKey, useDisableVrKey, useSetVrIncludeSecured, useDownloadProjection, useSaveDownloadProjection,
+  useMediaInfo,
 } from './useMisc';
 
 vi.mock('../api', () => ({ login: vi.fn(), updatePassword: vi.fn(), checkUrl: vi.fn(), fetchAnalytics: vi.fn() }));
@@ -18,6 +20,7 @@ vi.mock('../api/subtitles', async (orig) => ({
   ...(await orig<typeof subtitles>()),
   listSubtitleTracks: vi.fn(),
 }));
+vi.mock('../api/mediaInfo', () => ({ fetchMediaInfo: vi.fn() }));
 vi.mock('../api/internetSpeed', async (orig) => ({
   ...(await orig<typeof speed>()),
   fetchInternetSpeed: vi.fn(), startInternetSpeed: vi.fn(), cancelInternetSpeed: vi.fn(),
@@ -78,6 +81,22 @@ describe('useSubtitleTracks', () => {
     await waitFor(() => expect(result.current.data).toEqual([]));
     expect(subtitles.listSubtitleTracks).toHaveBeenCalledWith({ downloadId: 3 });
     expect(client.getQueryData(qk.subtitles('d:3'))).toEqual([]);
+  });
+});
+
+describe('useMediaInfo', () => {
+  it('waits for a source (the panel being opened), and keys a download apart from a path', async () => {
+    const info = { file: { name: 'a' } } as unknown as Awaited<ReturnType<typeof mediaInfo.fetchMediaInfo>>;
+    vi.mocked(mediaInfo.fetchMediaInfo).mockResolvedValue(info);
+    const off = renderHookWithClient(() => useMediaInfo(null));
+    await new Promise(r => setTimeout(r, 20));
+    expect(mediaInfo.fetchMediaInfo).not.toHaveBeenCalled();
+    off.unmount();
+
+    const { result, client } = renderHookWithClient(() => useMediaInfo({ path: '/a.mkv' }));
+    await waitFor(() => expect(result.current.data).toBe(info));
+    expect(mediaInfo.fetchMediaInfo).toHaveBeenCalledWith({ path: '/a.mkv' });
+    expect(client.getQueryData(qk.mediaInfo('p:/a.mkv'))).toBe(info);
   });
 });
 
