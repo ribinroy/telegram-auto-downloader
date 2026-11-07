@@ -3,6 +3,9 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { Play, Pause, Glasses, Maximize, Minimize, Volume2, Volume1, VolumeX } from 'lucide-react';
 import { splitProjection, wrapSubtitle, fitFlatPlane, type Projection } from '../utils/vr';
+import {
+  SEEK_STEP, TapDetector, tapZone, inVolumeZone, swipeDirection, swipeVolume, wheelFov, pinchFov, zoomFactor,
+} from '../utils/playerGestures';
 
 interface VRVideoPlayerProps {
   /** The player's own <video>, kept playing across projection switches. */
@@ -37,7 +40,7 @@ const FOV = 75;
 // camera, drawn on top regardless).
 const FLAT_DISTANCE = 30;
 
-export const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 2];
+const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 2];
 
 function eyeGeometry(layout: '180' | '360', stereo: 'mono' | 'sbs' | 'tb', eye: 'left' | 'right') {
   const phiLength = layout === '180' ? Math.PI : Math.PI * 2;
@@ -244,6 +247,9 @@ export function VRVideoPlayer({ video, projection, subtitle, fullscreen = false,
       flatRef.current = plane;
       s.controls.reset();
       s.controls.enabled = false;
+      // A zoom left on the sphere must not crop the plane.
+      s.camera.fov = FOV;
+      s.camera.updateProjectionMatrix();
       s.fitFlat();
     } else {
       s.controls.enabled = true;
@@ -347,6 +353,128 @@ export function VRVideoPlayer({ video, projection, subtitle, fullscreen = false,
     sceneRef.current?.renderer.xr.getSession()?.end().catch(() => {});
   }, []);
 
+  // ---- Gestures on the picture (see utils/playerGestures.ts) ----
+  // A transient label where the gesture happened: "+5 s" on the right,
+  // "Volume 60%" while swiping, "Zoom 1.5×" in the middle.
+  const [hud, setHud] = useState<{ text: string; zone: 'left' | 'center' | 'right'; n: number } | null>(null);
+  const hudTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hudCount = useRef(0);
+  const flash = useCallback((text: string, zone: 'left' | 'center' | 'right', hold = 700) => {
+    hudCount.current += 1;
+    setHud({ text, zone, n: hudCount.current });
+    if (hudTimer.current) clearTimeout(hudTimer.current);
+    hudTimer.current = setTimeout(() => setHud(null), hold);
+  }, []);
+  useEffect(() => () => { if (hudTimer.current) clearTimeout(hudTimer.current); }, []);
+
+  const taps = useRef(new TapDetector());
+  const pointers = useRef(new Map<number, { x: number; y: number }>());
+  const swipe = useRef<{ id: number; x: number; y: number; volume: number; mode: 'pending' | 'volume' | 'other'; inZone: boolean } | null>(null);
+  const pinch = useRef<{ dist: number; fov: number } | null>(null);
+
+  const local = (e: React.PointerEvent) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    return { x: e.clientX - r.left, y: e.clientY - r.top, w: r.width, h: r.height };
+  };
+  const fingerDistance = () => {
+    const [a, b] = Array.from(pointers.current.values());
+    return a && b ? Math.hypot(a.x - b.x, a.y - b.y) : 0;
+  };
+  const setFov = useCallback((fov: number) => {
+    const s = sceneRef.current;
+    if (!s || s.camera.fov === fov) return;
+    s.camera.fov = fov;
+    s.camera.updateProjectionMatrix();
+    flash(`Zoom ${zoomFactor(fov, FOV).toFixed(1)}×`, 'center');
+  }, [flash]);
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    const { x, y, w } = local(e);
+    pointers.current.set(e.pointerId, { x, y });
+    taps.current.start(e.pointerId, x, y, e.timeStamp);
+    if (pointers.current.size === 2) {
+      // Two fingers: a pinch (VR only - the plane has nothing to zoom into),
+      // and whatever the first finger was doing is over.
+      if (swipe.current?.mode === 'volume' && !flat) { const s = sceneRef.current; if (s) s.controls.enabled = true; }
+      swipe.current = null;
+      pinch.current = !flat && sceneRef.current ? { dist: fingerDistance(), fov: sceneRef.current.camera.fov } : null;
+      return;
+    }
+    if (pointers.current.size > 2) return;
+    swipe.current = { id: e.pointerId, x, y, volume: video.volume, mode: 'pending', inZone: inVolumeZone(x, w) };
+  };
+
+  const onPointerMove = (e: React.PointerEvent) => {
+    if (!pointers.current.has(e.pointerId)) return;
+    const { x, y, h } = local(e);
+    pointers.current.set(e.pointerId, { x, y });
+    taps.current.move(e.pointerId, x, y);
+    const p = pinch.current;
+    if (p && pointers.current.size === 2) {
+      setFov(pinchFov(p.fov, p.dist, fingerDistance()));
+      return;
+    }
+    const sw = swipe.current;
+    if (!sw || sw.id !== e.pointerId) return;
+    if (sw.mode === 'pending') {
+      const dir = swipeDirection(x - sw.x, y - sw.y);
+      if (!dir) return;
+      if (dir === 'vertical' && sw.inZone) {
+        sw.mode = 'volume';
+        // Taken from the drag controls for the rest of this touch; OrbitControls
+        // stops rotating at once but still cleans up on the pointer's up.
+        const s = sceneRef.current;
+        if (s) s.controls.enabled = false;
+      } else {
+        sw.mode = 'other';
+      }
+    }
+    if (sw.mode === 'volume') {
+      const v = swipeVolume(sw.volume, y - sw.y, h / 2);
+      setVolume(video, v);
+      if (v > 0 && video.muted) setMuted(video, false);
+      flash(`Volume ${Math.round(v * 100)}%`, 'right');
+    }
+  };
+
+  const onPointerEnd = (e: React.PointerEvent) => {
+    if (!pointers.current.has(e.pointerId)) return;
+    const { x, y, w } = local(e);
+    pointers.current.delete(e.pointerId);
+    if (pointers.current.size < 2) pinch.current = null;
+    const sw = swipe.current;
+    if (sw && sw.id === e.pointerId) {
+      if (sw.mode === 'volume' && !flat) { const s = sceneRef.current; if (s) s.controls.enabled = true; }
+      swipe.current = null;
+    }
+    const tap = e.type === 'pointerup' ? taps.current.end(e.pointerId, x, y, e.timeStamp) : (taps.current.cancel(), null);
+    if (tap !== 'double') return;
+    const zone = tapZone(x, w);
+    if (zone === 'back') {
+      seekTo(video, Math.max(0, video.currentTime - SEEK_STEP));
+      flash(`−${SEEK_STEP} s`, 'left');
+    } else if (zone === 'forward') {
+      seekTo(video, Math.min(video.duration || 0, video.currentTime + SEEK_STEP));
+      flash(`+${SEEK_STEP} s`, 'right');
+    } else {
+      togglePlayPause();
+    }
+  };
+
+  // The wheel zooms a VR video. React's wheel listener is passive, so this is
+  // a native one that can keep the page from scrolling under the player.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || flat) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const s = sceneRef.current;
+      if (s) setFov(wheelFov(s.camera.fov, e.deltaY));
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [flat, setFov]);
+
   // Space, arrows and M - the flat view's native controls do this themselves.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -384,9 +512,27 @@ export function VRVideoPlayer({ video, projection, subtitle, fullscreen = false,
     <div className="relative w-full h-full bg-black">
       <div
         ref={containerRef}
-        className={`w-full h-full ${flat ? '' : 'cursor-grab active:cursor-grabbing'}`}
-        onDoubleClick={togglePlayPause}
+        className={`w-full h-full touch-none select-none ${flat ? '' : 'cursor-grab active:cursor-grabbing'}`}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerEnd}
+        onPointerCancel={onPointerEnd}
+        data-testid="picture"
       />
+
+      {hud && (
+        <div
+          key={hud.n}
+          role="status"
+          className={`absolute inset-y-0 w-1/3 flex items-center justify-center pointer-events-none ${
+            hud.zone === 'left' ? 'left-0' : hud.zone === 'right' ? 'right-0' : 'left-1/3'
+          }`}
+        >
+          <span className="px-3 py-1.5 rounded-full bg-black/60 text-white text-sm font-medium tabular-nums animate-[hud-fade_0.7s_ease-in_forwards]">
+            {hud.text}
+          </span>
+        </div>
+      )}
 
       {/* Overlay controls */}
       <div className="absolute bottom-0 left-0 right-0 p-3 sm:p-4 bg-gradient-to-t from-black/80 to-transparent">

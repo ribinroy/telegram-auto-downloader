@@ -841,6 +841,29 @@ reloads or rewinds. The browser's native controls are never shown.
   space/K play, ←/→ ±5s, M mute, F fullscreen. The chosen subtitle track is
   always `hidden` (firing `cuechange`, never painted) and drawn on the
   renderer's subtitle plane.
+- **Gestures on the picture** (`utils/playerGestures.ts` holds the decisions,
+  pure and tested; the renderer only wires pointer events to them):
+  - *Double tap* - left third seeks back 5 s, right third forward 5 s, the
+    middle toggles playback. `TapDetector` reads taps from raw pointer
+    down/up (any pointer type), since `dblclick` is unreliable on touch
+    screens; a drag, a long press or a second finger is never a tap.
+  - *Vertical swipe on the right third* sets the volume: half the picture's
+    height sweeps the full range, and raising it unmutes. The swipe is taken
+    from OrbitControls by setting `controls.enabled = false` for the rest of
+    that touch (it checks `enabled` on move, not on up, so it still cleans
+    up its pointer capture), re-enabled on the pointer's up unless flat. A
+    horizontal drag there still rotates the sphere; the direction is settled
+    once by the first 10 px of movement.
+  - *Wheel or two-finger pinch zooms a VR video* by changing the camera's
+    `fov` (30..110°; the camera sits at the sphere's centre, so OrbitControls'
+    dolly - moving it - would be wrong, and `enableZoom` stays off). The
+    wheel listener is native and non-passive (React's is passive) so the
+    page doesn't scroll under the player. A flat plane resets the fov to
+    `FOV` and ignores both.
+  - Each gesture flashes a label in its zone (`role="status"`: "+5 s",
+    "Volume 60%", "Zoom 1.5×") that fades on its own (`hud-fade` in
+    `index.css`). The picture is `touch-none` so the browser never scrolls
+    or double-tap-zooms instead.
 
 - **Projection** (`utils/vr.ts`): `flat`, or `180|360` × `mono|sbs|tb`.
   `detectProjection(name, aspect)` guesses from the filename tags VR files

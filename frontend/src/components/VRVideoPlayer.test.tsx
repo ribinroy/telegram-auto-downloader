@@ -130,6 +130,21 @@ afterEach(() => {
   delete (navigator as { xr?: unknown }).xr;
 });
 
+// The picture is 300 x 200 at the origin: thirds at 100 and 200, the volume
+// swipe's range (half the height) 100 px. jsdom lays nothing out, so the box
+// is stubbed.
+const sizedPicture = () => {
+  const picture = screen.getByTestId('picture');
+  vi.spyOn(picture, 'getBoundingClientRect').mockReturnValue({
+    left: 0, top: 0, right: 300, bottom: 200, width: 300, height: 200, x: 0, y: 0, toJSON: () => ({}),
+  });
+  return picture;
+};
+const tap = (el: Element, x: number, y: number) => {
+  fireEvent.pointerDown(el, { pointerId: 1, clientX: x, clientY: y });
+  fireEvent.pointerUp(el, { pointerId: 1, clientX: x, clientY: y });
+};
+
 const stubXr = (supported: boolean) => {
   const listeners: Record<string, () => void> = {};
   const session = { addEventListener: (t: string, f: () => void) => { listeners[t] = f; }, end: vi.fn().mockResolvedValue(undefined) };
@@ -353,9 +368,12 @@ describe('VRVideoPlayer - overlay controls', () => {
     expect(screen.getByText('0:00 / 1:40')).toBeInTheDocument();
   });
 
-  it('double-clicking the picture toggles playback', () => {
-    const { video, container } = renderPlayer();
-    fireEvent.doubleClick(container.querySelector('.cursor-grab')!);
+  it('a double tap in the middle of the picture toggles playback', () => {
+    const { video } = renderPlayer();
+    const picture = sizedPicture();
+    tap(picture, 150, 100);
+    expect(video.play).not.toHaveBeenCalled();   // one tap is nothing
+    tap(picture, 150, 100);
     expect(video.play).toHaveBeenCalledTimes(1);
   });
 
@@ -429,6 +447,144 @@ describe('VRVideoPlayer - overlay controls', () => {
     expect(onToggleFullscreen).toHaveBeenCalledTimes(1);
     rerender(<VRVideoPlayer {...props} onToggleFullscreen={onToggleFullscreen} fullscreen />);
     expect(screen.getByTitle('Exit fullscreen (F)')).toBeInTheDocument();
+  });
+});
+
+describe('VRVideoPlayer - gestures on the picture', () => {
+  it('a double tap on the right third seeks forward, on the left third back, and says so where it happened', () => {
+    const { video } = renderPlayer();
+    video.currentTime = 50;
+    const picture = sizedPicture();
+    tap(picture, 280, 100); tap(picture, 282, 101);
+    expect(video.currentTime).toBe(55);
+    expect(screen.getByRole('status')).toHaveTextContent('+5 s');
+    expect(screen.getByRole('status')).toHaveClass('right-0');
+    tap(picture, 20, 100); tap(picture, 20, 100);
+    expect(video.currentTime).toBe(50);
+    expect(screen.getByRole('status')).toHaveTextContent('−5 s');
+    expect(screen.getByRole('status')).toHaveClass('left-0');
+    // Never past the ends
+    video.currentTime = 123;
+    tap(picture, 280, 100); tap(picture, 280, 100);
+    expect(video.currentTime).toBe(125);
+    video.currentTime = 2;
+    tap(picture, 20, 100); tap(picture, 20, 100);
+    expect(video.currentTime).toBe(0);
+    expect(video.play).not.toHaveBeenCalled();
+  });
+
+  it('the label goes away on its own', () => {
+    vi.useFakeTimers();
+    try {
+      renderPlayer();
+      const picture = sizedPicture();
+      tap(picture, 280, 100); tap(picture, 280, 100);
+      expect(screen.getByRole('status')).toBeInTheDocument();
+      act(() => { vi.advanceTimersByTime(800); });
+      expect(screen.queryByRole('status')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a vertical swipe on the right side sets the volume, taking the touch from the drag controls until it ends', () => {
+    const { video } = renderPlayer();
+    video.volume = 0.5;
+    video.muted = true;
+    const picture = sizedPicture();
+    fireEvent.pointerDown(picture, { pointerId: 1, clientX: 280, clientY: 150 });
+    fireEvent.pointerMove(picture, { pointerId: 1, clientX: 280, clientY: 145 });
+    expect(controls().enabled).toBe(true);        // not far enough to be a swipe yet
+    expect(video.volume).toBe(0.5);
+    fireEvent.pointerMove(picture, { pointerId: 1, clientX: 281, clientY: 100 });
+    expect(controls().enabled).toBe(false);
+    expect(video.volume).toBeCloseTo(1);           // 50 px up over a 100 px range (half of 200)
+    expect(video.muted).toBe(false);               // raising the volume is a wish to hear it
+    expect(screen.getByRole('status')).toHaveTextContent('Volume 100%');
+    fireEvent.pointerMove(picture, { pointerId: 1, clientX: 281, clientY: 175 });
+    expect(video.volume).toBeCloseTo(0.25);
+    fireEvent.pointerUp(picture, { pointerId: 1, clientX: 281, clientY: 175 });
+    expect(controls().enabled).toBe(true);
+    // The swipe was not a tap
+    tap(picture, 281, 175);
+    expect(video.play).not.toHaveBeenCalled();
+  });
+
+  it('a horizontal drag on the right side, or a vertical one elsewhere, is left to the drag controls', () => {
+    const { video } = renderPlayer();
+    video.volume = 0.5;
+    const picture = sizedPicture();
+    fireEvent.pointerDown(picture, { pointerId: 1, clientX: 280, clientY: 150 });
+    fireEvent.pointerMove(picture, { pointerId: 1, clientX: 200, clientY: 155 });
+    fireEvent.pointerMove(picture, { pointerId: 1, clientX: 200, clientY: 50 });   // turning vertical later changes nothing
+    fireEvent.pointerUp(picture, { pointerId: 1, clientX: 200, clientY: 50 });
+    fireEvent.pointerDown(picture, { pointerId: 1, clientX: 150, clientY: 150 });
+    fireEvent.pointerMove(picture, { pointerId: 1, clientX: 150, clientY: 50 });
+    fireEvent.pointerUp(picture, { pointerId: 1, clientX: 150, clientY: 50 });
+    expect(controls().enabled).toBe(true);
+    expect(video.volume).toBe(0.5);
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('on a flat video the volume swipe works the same and the drag controls stay off', () => {
+    const { video } = renderPlayer({ projection: 'flat' });
+    video.volume = 0.5;
+    const picture = sizedPicture();
+    fireEvent.pointerDown(picture, { pointerId: 1, clientX: 280, clientY: 150 });
+    fireEvent.pointerMove(picture, { pointerId: 1, clientX: 280, clientY: 100 });
+    fireEvent.pointerUp(picture, { pointerId: 1, clientX: 280, clientY: 100 });
+    expect(video.volume).toBeCloseTo(1);
+    expect(controls().enabled).toBe(false);
+  });
+
+  it('the wheel zooms a VR video by narrowing the view, within limits, and does nothing on a flat one', () => {
+    const { rerender, props } = renderPlayer();
+    const picture = sizedPicture();
+    const cam = camera() as unknown as { fov: number; updateProjectionMatrix: ReturnType<typeof vi.fn> };
+    expect(cam.fov).toBe(75);
+    fireEvent.wheel(picture, { deltaY: -100 });
+    expect(cam.fov).toBe(70);
+    expect(cam.updateProjectionMatrix).toHaveBeenCalled();
+    expect(screen.getByRole('status')).toHaveTextContent('Zoom 1.1×');
+    for (let i = 0; i < 20; i++) fireEvent.wheel(picture, { deltaY: -100 });
+    expect(cam.fov).toBe(30);
+    for (let i = 0; i < 40; i++) fireEvent.wheel(picture, { deltaY: 100 });
+    expect(cam.fov).toBe(110);
+    // Flat resets the view and ignores the wheel
+    rerender(<VRVideoPlayer {...props} projection="flat" />);
+    expect(cam.fov).toBe(75);
+    fireEvent.wheel(picture, { deltaY: -100 });
+    expect(cam.fov).toBe(75);
+  });
+
+  it('a pinch zooms too: fingers apart narrows the view, together widens it; a third finger is ignored', () => {
+    const { video } = renderPlayer();
+    const picture = sizedPicture();
+    const cam = camera() as unknown as { fov: number };
+    fireEvent.pointerDown(picture, { pointerId: 1, clientX: 100, clientY: 100 });
+    fireEvent.pointerDown(picture, { pointerId: 2, clientX: 200, clientY: 100 });
+    fireEvent.pointerMove(picture, { pointerId: 2, clientX: 300, clientY: 100 });
+    expect(cam.fov).toBe(37.5);
+    fireEvent.pointerMove(picture, { pointerId: 2, clientX: 150, clientY: 100 });
+    expect(cam.fov).toBe(110);
+    fireEvent.pointerDown(picture, { pointerId: 3, clientX: 150, clientY: 150 });
+    fireEvent.pointerMove(picture, { pointerId: 3, clientX: 150, clientY: 10 });
+    expect(cam.fov).toBe(110);
+    fireEvent.pointerUp(picture, { pointerId: 3, clientX: 150, clientY: 10 });
+    fireEvent.pointerUp(picture, { pointerId: 2, clientX: 150, clientY: 100 });
+    fireEvent.pointerUp(picture, { pointerId: 1, clientX: 100, clientY: 100 });
+    // None of that was a tap, and the volume was never touched
+    expect(video.play).not.toHaveBeenCalled();
+    expect(video.volume).toBe(1);
+  });
+
+  it('a cancelled pointer ends the gesture without a tap', () => {
+    const { video } = renderPlayer();
+    const picture = sizedPicture();
+    fireEvent.pointerDown(picture, { pointerId: 1, clientX: 150, clientY: 100 });
+    fireEvent.pointerCancel(picture, { pointerId: 1, clientX: 150, clientY: 100 });
+    tap(picture, 150, 100);
+    expect(video.play).not.toHaveBeenCalled();
   });
 });
 
